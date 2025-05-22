@@ -30,28 +30,34 @@ def linear_schedule(initial_value, final_value=0.0):
 
 def make_env(game, state, seed=0):
     def _init():
+        # If state file is in current directory, get absolute path
+        if state and os.path.exists(state):
+            state_path = os.path.abspath(state)
+        else:
+            state_path = state
+
         env = retro.make(
             game=game,
-            state=state,
+            state=state_path,
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
         )
         env = StreetFighterCustomWrapper(env)
         env = Monitor(env)
-        env.reset(seed=seed)  # Updated for gymnasium compatibility
+        env.reset(seed=seed)
         return env
 
     return _init
 
 
 def main():
-    # Set up the environment and model
     game = "StreetFighterIISpecialChampionEdition-Genesis"
+
+    # Use absolute path to your state file
+    state_file = os.path.abspath("ken_bison_12.state")
+
     env = SubprocVecEnv(
-        [
-            make_env(game, state="Champion.Level12.RyuVsBison", seed=i)
-            for i in range(NUM_ENV)
-        ]
+        [make_env(game, state=state_file, seed=i) for i in range(NUM_ENV)]
     )
 
     # Set linear schedule for learning rate
@@ -74,10 +80,13 @@ def main():
         device="cuda",
         verbose=1,
         n_steps=512,
+        # batch size
         batch_size=512,
         n_epochs=4,
         gamma=0.94,
+        # learning rate
         learning_rate=lr_schedule,
+        # clip range
         clip_range=clip_range_schedule,
         tensorboard_log="logs",
     )
@@ -112,9 +121,15 @@ def main():
     with open(log_file_path, "w") as log_file:
         sys.stdout = log_file
 
+        # model.learn(
+        #     total_timesteps=int(
+        #         100000000
+        #     ),  # total_timesteps = stage_interval * num_envs * num_stages (1120 rounds)
+        #     callback=[checkpoint_callback],  # , stage_increase_callback]
+        # )
         model.learn(
             total_timesteps=int(
-                100000000
+                1000
             ),  # total_timesteps = stage_interval * num_envs * num_stages (1120 rounds)
             callback=[checkpoint_callback],  # , stage_increase_callback]
         )
