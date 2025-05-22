@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import argparse
 
 import retro
 from stable_baselines3 import PPO
@@ -14,9 +16,24 @@ LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 
+def save_progress(total_timesteps, save_dir):
+    """Save current total timesteps"""
+    progress_file = os.path.join(save_dir, "progress.json")
+    with open(progress_file, "w") as f:
+        json.dump({"total_timesteps": total_timesteps}, f)
+
+
+def load_progress(save_dir):
+    """Load previous total timesteps"""
+    progress_file = os.path.join(save_dir, "progress.json")
+    if os.path.exists(progress_file):
+        with open(progress_file, "r") as f:
+            return json.load(f).get("total_timesteps", 0)
+    return 0
+
+
 # Linear scheduler
 def linear_schedule(initial_value, final_value=0.0):
-
     if isinstance(initial_value, str):
         initial_value = float(initial_value)
         final_value = float(final_value)
@@ -30,7 +47,6 @@ def linear_schedule(initial_value, final_value=0.0):
 
 def make_env(game, state, seed=0):
     def _init():
-        # If state file is in current directory, get absolute path
         if state and os.path.exists(state):
             state_path = os.path.abspath(state)
         else:
@@ -51,95 +67,104 @@ def make_env(game, state, seed=0):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Train Street Fighter II Agent")
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume training from saved model"
+    )
+    parser.add_argument(
+        "--total-timesteps", type=int, default=1000000, help="Total timesteps to train"
+    )
+
+    args = parser.parse_args()
+
     game = "StreetFighterIISpecialChampionEdition-Genesis"
-
-    # Use absolute path to your state file
     state_file = os.path.abspath("ken_bison_12.state")
+    save_dir = "trained_models"
+    os.makedirs(save_dir, exist_ok=True)
 
+    # Main model path (always the same)
+    model_path = os.path.join(save_dir, "ppo_sf2_model.zip")
+
+    # Create environments
     env = SubprocVecEnv(
         [make_env(game, state=state_file, seed=i) for i in range(NUM_ENV)]
     )
 
-    # Set linear schedule for learning rate
-    # Start
+    # Learning rate and clip range schedules
     lr_schedule = linear_schedule(2.5e-4, 2.5e-6)
-
-    # fine-tune
-    # lr_schedule = linear_schedule(5.0e-5, 2.5e-6)
-
-    # Set linear scheduler for clip range
-    # Start
     clip_range_schedule = linear_schedule(0.15, 0.025)
 
-    # fine-tune
-    # clip_range_schedule = linear_schedule(0.075, 0.025)
+    # Load previous progress
+    completed_timesteps = 0
+    if args.resume and os.path.exists(model_path):
+        completed_timesteps = load_progress(save_dir)
+        print(f"Resuming from {completed_timesteps:,} timesteps")
+    else:
+        print("Starting new training")
 
-    model = PPO(
-        "CnnPolicy",
-        env,
-        device="cuda",
-        verbose=1,
-        n_steps=512,
-        # batch size
-        batch_size=512,
-        n_epochs=4,
-        gamma=0.94,
-        # learning rate
-        learning_rate=lr_schedule,
-        # clip range
-        clip_range=clip_range_schedule,
-        tensorboard_log="logs",
-    )
+    # Calculate remaining timesteps
+    remaining_timesteps = max(0, args.total_timesteps - completed_timesteps)
 
-    # Set the save directory
-    save_dir = "trained_models"
-    os.makedirs(save_dir, exist_ok=True)
+    if remaining_timesteps == 0:
+        print(f"Training completed! Total: {completed_timesteps:,} timesteps")
+        return
 
-    # Load the model from file
-    # model_path = "trained_models/ppo_ryu_7000000_steps.zip"
+    print(f"Will train for {remaining_timesteps:,} more timesteps")
 
-    # Load model and modify the learning rate and entropy coefficient
-    # custom_objects = {
-    #     "learning_rate": lr_schedule,
-    #     "clip_range": clip_range_schedule,
-    #     "n_steps": 512
-    # }
-    # model = PPO.load(model_path, env=env, device="cuda", custom_objects=custom_objects)
+    # Create or load model
+    if args.resume and os.path.exists(model_path):
+        custom_objects = {
+            "learning_rate": lr_schedule,
+            "clip_range": clip_range_schedule,
+            "n_steps": 512,
+        }
+        model = PPO.load(
+            model_path, env=env, device="cuda", custom_objects=custom_objects
+        )
+    else:
+        model = PPO(
+            "CnnPolicy",
+            env,
+            device="cuda",
+            verbose=1,
+            n_steps=512,
+            batch_size=512,
+            n_epochs=4,
+            gamma=0.94,
+            learning_rate=lr_schedule,
+            clip_range=clip_range_schedule,
+            tensorboard_log="logs",
+        )
 
-    # Set up callbacks
-    # Note that 1 timesetp = 6 frame
-    checkpoint_interval = (
-        31250  # checkpoint_interval * num_envs = total_steps_per_checkpoint
-    )
+    # Checkpoint callback (separate from main model)
     checkpoint_callback = CheckpointCallback(
-        save_freq=checkpoint_interval, save_path=save_dir, name_prefix="ppo_ryu"
+        save_freq=31250,  # checkpoint_interval * num_envs = total_steps_per_checkpoint
+        save_path=save_dir,
+        name_prefix="ppo_ryu",
     )
 
-    # Writing the training logs from stdout to a file
+    # Train
     original_stdout = sys.stdout
     log_file_path = os.path.join(save_dir, "training_log.txt")
-    with open(log_file_path, "w") as log_file:
+    with open(log_file_path, "a" if args.resume else "w") as log_file:
         sys.stdout = log_file
 
-        # model.learn(
-        #     total_timesteps=int(
-        #         100000000
-        #     ),  # total_timesteps = stage_interval * num_envs * num_stages (1120 rounds)
-        #     callback=[checkpoint_callback],  # , stage_increase_callback]
-        # )
         model.learn(
-            total_timesteps=int(
-                1000
-            ),  # total_timesteps = stage_interval * num_envs * num_stages (1120 rounds)
-            callback=[checkpoint_callback],  # , stage_increase_callback]
+            total_timesteps=remaining_timesteps,
+            callback=[checkpoint_callback],
+            reset_num_timesteps=False,  # Keep timestep counter
         )
+
         env.close()
 
-    # Restore stdout
     sys.stdout = original_stdout
 
-    # Save the final model
-    model.save(os.path.join(save_dir, "ppo_sf2_ryu_final.zip"))
+    # Save main model and progress
+    model.save(model_path)
+    save_progress(completed_timesteps + remaining_timesteps, save_dir)
+
+    print(f"Training completed! Model saved to: {model_path}")
+    print(f"Total timesteps: {completed_timesteps + remaining_timesteps:,}")
 
 
 if __name__ == "__main__":
