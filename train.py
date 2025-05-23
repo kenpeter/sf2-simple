@@ -7,7 +7,7 @@ import retro
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecTransposeImage
 
 from wrapper import StreetFighterCustomWrapper
 
@@ -45,6 +45,34 @@ def linear_schedule(initial_value, final_value=0.0):
     return scheduler
 
 
+class FilteredActionWrapper:
+    """Wrapper to filter out START and MODE buttons to prevent cheating"""
+
+    def __init__(self, env):
+        self.env = env
+        # Street Fighter II MultiBinary actions:
+        # [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
+        # We want to disable START (index 3) and SELECT (index 2)
+        # SELECT is often used as MODE button in some versions
+        self.disabled_buttons = [2, 3]  # SELECT and START
+
+    def __getattr__(self, name):
+        return getattr(self.env, name)
+
+    def step(self, action):
+        # Filter out disabled buttons by setting them to 0
+        if hasattr(action, "__len__") and len(action) >= 4:
+            filtered_action = action.copy() if hasattr(action, "copy") else list(action)
+            for button_idx in self.disabled_buttons:
+                if button_idx < len(filtered_action):
+                    filtered_action[button_idx] = 0
+            return self.env.step(filtered_action)
+        return self.env.step(action)
+
+    def reset(self, **kwargs):
+        return self.env.reset(**kwargs)
+
+
 def make_env(game, state, seed=0):
     def _init():
         if state and os.path.exists(state):
@@ -58,7 +86,12 @@ def make_env(game, state, seed=0):
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
         )
-        env = StreetFighterCustomWrapper(env)
+
+        # Add action filtering to prevent cheating
+        env = FilteredActionWrapper(env)
+
+        # Add custom wrapper (reset_round=True to ensure proper game flow)
+        env = StreetFighterCustomWrapper(env, reset_round=True, rendering=False)
         env = Monitor(env)
         env.reset(seed=seed)
         return env
@@ -85,10 +118,11 @@ def main():
     # Main model path (always the same)
     model_path = os.path.join(save_dir, "ppo_sf2_model.zip")
 
-    # Create environments
+    # Create environments with VecTransposeImage for proper image handling
     env = SubprocVecEnv(
         [make_env(game, state=state_file, seed=i) for i in range(NUM_ENV)]
     )
+    env = VecTransposeImage(env)  # Add this for proper image preprocessing
 
     # Learning rate and clip range schedules
     lr_schedule = linear_schedule(2.5e-4, 2.5e-6)
@@ -110,6 +144,9 @@ def main():
         return
 
     print(f"Will train for {remaining_timesteps:,} more timesteps")
+    print(
+        "Action filtering enabled - START and SELECT buttons disabled to prevent cheating"
+    )
 
     # Create or load model
     if args.resume and os.path.exists(model_path):

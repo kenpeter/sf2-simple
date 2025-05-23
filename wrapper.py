@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 
 
-# Custom environment wrapper - fixed for stable-retro
+# Custom environment wrapper - optimized with HP address caching
 class StreetFighterCustomWrapper(gym.Wrapper):
     def __init__(self, env, reset_round=True, rendering=False):
         super(StreetFighterCustomWrapper, self).__init__(env)
@@ -33,38 +33,72 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.reset_round = reset_round
         self.rendering = rendering
 
+        # HP address caching - OPTIMIZATION
+        self.hp_addresses_found = False
+        self.agent_hp_addr = None
+        self.enemy_hp_addr = None
+        self.hp_search_attempts = 0
+        self.max_hp_search_attempts = 10  # Stop searching after 10 attempts
+
         # Disable auto-start for now
         self.auto_start = False
 
         # Track if we're using info dict for HP (fallback)
         self.use_info_hp = True
 
-        # These memory addresses might not work for your ROM version
-        # We'll rely on the info dict instead
-        self.game_info = {
-            "enemy_character": {"address": 16745563, "type": "|u1"},
-            "agent_hp": {"address": 16744514, "type": ">i2"},
-            "agent_x": {"address": 16744454, "type": ">u2"},
-            "agent_y": {"address": 16744458, "type": ">u2"},
-            "enemy_hp": {"address": 16745154, "type": ">i2"},
-            "enemy_x": {"address": 16745094, "type": ">u2"},
-            "enemy_y": {"address": 16745098, "type": ">u2"},
-            "score": {"address": 16744936, "type": ">d4"},
-            "agent_victories": {"address": 16744922, "type": "|u1"},
-            "enemy_victories": {"address": 16745559, "type": ">u4"},
-            "round_countdown": {"address": 16750378, "type": ">u2"},
-            "reset_countdown": {"address": 16744917, "type": "|u1"},
-            "agent_status": {"address": 16744450, "type": ">u2"},
-            "enemy_status": {"address": 16745090, "type": ">u2"},
-        }
+    def _find_hp_addresses(self):
+        """Find HP addresses once and cache them - OPTIMIZED"""
+        if (
+            self.hp_addresses_found
+            or self.hp_search_attempts >= self.max_hp_search_attempts
+        ):
+            return
 
-    def _stack_observation(self):
-        return np.stack(
-            [self.frame_stack[i * 3 + 2][:, :, i] for i in range(3)], axis=-1
-        )
+        self.hp_search_attempts += 1
+
+        try:
+            ram = self.env.get_ram()
+            if len(ram) < 1000:
+                return
+
+            # Try a few different potential HP addresses
+            potential_hp_addresses = [
+                (0x1000, 0x1100),  # Common area 1
+                (0x0400, 0x0500),  # Common area 2
+                (0x2000, 0x2100),  # Common area 3
+            ]
+
+            for start_addr, end_addr in potential_hp_addresses:
+                for addr in range(start_addr, min(end_addr, len(ram) - 1), 2):
+                    try:
+                        hp_val = int.from_bytes(
+                            ram[addr : addr + 2], byteorder="big", signed=True
+                        )
+                        if 0 <= hp_val <= 200:  # Reasonable HP range
+                            # Look for enemy HP nearby
+                            for offset in [100, 200, 300, 640]:  # Common offsets
+                                if addr + offset < len(ram) - 1:
+                                    enemy_hp = int.from_bytes(
+                                        ram[addr + offset : addr + offset + 2],
+                                        byteorder="big",
+                                        signed=True,
+                                    )
+                                    if 0 <= enemy_hp <= 200:
+                                        # Found valid HP addresses!
+                                        self.agent_hp_addr = addr
+                                        self.enemy_hp_addr = addr + offset
+                                        self.hp_addresses_found = True
+                                        print(
+                                            f"HP addresses found: Agent={hex(addr)}, Enemy={hex(addr + offset)}"
+                                        )
+                                        return
+                    except:
+                        continue
+        except:
+            pass
 
     def _get_game_info(self):
-        """Extract game information - use info dict as primary source"""
+        """Extract game information - OPTIMIZED with caching"""
         game_state = {
             "agent_hp": self.full_hp,
             "enemy_hp": self.full_hp,
@@ -82,42 +116,42 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             "enemy_character": 0,
         }
 
-        # Try to get RAM data, but don't rely on it
-        try:
-            ram = self.env.get_ram()
-            if len(ram) > 1000:  # Basic sanity check
-                # Try a few different potential HP addresses
-                potential_hp_addresses = [
-                    (0x1000, 0x1100),  # Common area 1
-                    (0x0400, 0x0500),  # Common area 2
-                    (0xFF0000, 0xFF1000),  # Your original addresses
-                ]
+        # If we haven't found HP addresses yet, try to find them
+        if not self.hp_addresses_found:
+            self._find_hp_addresses()
 
-                for start_addr, end_addr in potential_hp_addresses:
-                    for addr in range(start_addr, min(end_addr, len(ram) - 1), 2):
-                        try:
-                            hp_val = int.from_bytes(
-                                ram[addr : addr + 2], byteorder="big", signed=True
-                            )
-                            if 0 <= hp_val <= 200:  # Reasonable HP range
-                                game_state["agent_hp"] = hp_val
-                                # Look for enemy HP nearby
-                                for offset in [100, 200, 300, 640]:  # Common offsets
-                                    if addr + offset < len(ram) - 1:
-                                        enemy_hp = int.from_bytes(
-                                            ram[addr + offset : addr + offset + 2],
-                                            byteorder="big",
-                                            signed=True,
-                                        )
-                                        if 0 <= enemy_hp <= 200:
-                                            game_state["enemy_hp"] = enemy_hp
-                                            return game_state
-                        except:
-                            continue
-        except:
-            pass
+        # Use cached addresses if available
+        if self.hp_addresses_found:
+            try:
+                ram = self.env.get_ram()
+                if len(ram) > max(self.agent_hp_addr + 1, self.enemy_hp_addr + 1):
+                    # Read agent HP
+                    agent_hp = int.from_bytes(
+                        ram[self.agent_hp_addr : self.agent_hp_addr + 2],
+                        byteorder="big",
+                        signed=True,
+                    )
+                    if 0 <= agent_hp <= 200:
+                        game_state["agent_hp"] = agent_hp
+
+                    # Read enemy HP
+                    enemy_hp = int.from_bytes(
+                        ram[self.enemy_hp_addr : self.enemy_hp_addr + 2],
+                        byteorder="big",
+                        signed=True,
+                    )
+                    if 0 <= enemy_hp <= 200:
+                        game_state["enemy_hp"] = enemy_hp
+            except:
+                # If cached addresses fail, mark as not found to retry
+                self.hp_addresses_found = False
 
         return game_state
+
+    def _stack_observation(self):
+        return np.stack(
+            [self.frame_stack[i * 3 + 2][:, :, i] for i in range(3)], axis=-1
+        )
 
     def reset(self, **kwargs):
         # Updated for gymnasium compatibility - reset returns (obs, info)
@@ -164,6 +198,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             print(
                 f"Game state HP: agent={game_state.get('agent_hp')}, enemy={game_state.get('enemy_hp')}"
             )
+            print(f"HP addresses cached: {self.hp_addresses_found}")
             self._debug_printed = True
 
         stacked_obs = np.stack(
@@ -220,7 +255,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
                 self.env.render()
                 time.sleep(0.01)
 
-        # Get game state info and update info dict
+        # Get game state info - NOW OPTIMIZED with caching
         game_state = self._get_game_info()
 
         # Try to extract HP from info dict first
