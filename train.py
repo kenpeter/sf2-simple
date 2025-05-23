@@ -4,6 +4,7 @@ import json
 import argparse
 
 import retro
+import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -45,19 +46,16 @@ def linear_schedule(initial_value, final_value=0.0):
     return scheduler
 
 
-class FilteredActionWrapper:
+class FilteredActionWrapper(gym.Wrapper):
     """Wrapper to filter out START and MODE buttons to prevent cheating"""
 
     def __init__(self, env):
-        self.env = env
+        super(FilteredActionWrapper, self).__init__(env)
         # Street Fighter II MultiBinary actions:
         # [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
         # We want to disable START (index 3) and SELECT (index 2)
         # SELECT is often used as MODE button in some versions
         self.disabled_buttons = [2, 3]  # SELECT and START
-
-    def __getattr__(self, name):
-        return getattr(self.env, name)
 
     def step(self, action):
         # Filter out disabled buttons by setting them to 0
