@@ -23,9 +23,16 @@ def evaluate_agent(model, env, episodes=10, render=True):
 
         print(f"Episode {episode + 1}/{episodes}")
 
+        # Press different button at start for randomization
+        random_start_action = np.random.randint(0, 12)  # Random action from 0-11
+        obs, _, _, _ = env.step([random_start_action])
+
         while not done:
-            # Get action from model
+            # Get action from model - use stochastic for more variety
             action, _states = model.predict(obs, deterministic=True)
+
+            # Log the action for debugging
+            print(f"Step {episode_length}: Action = {action}")
 
             # Step environment - handle both 4 and 5 return values
             step_result = env.step(action)
@@ -115,7 +122,8 @@ def make_eval_env(game, state=None):
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
         )
-        env = StreetFighterCustomWrapper(env, rendering=True)
+        # Remove rendering=True to match training environment
+        env = StreetFighterCustomWrapper(env, rendering=True, reset_round=True)
         return env
 
     return _init
@@ -126,7 +134,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="trained_models/ppo_sf2_ryu_final.zip",
+        default="trained_models/ppo_ryu_4500000_steps.zip",
         help="Path to trained model",
     )
     parser.add_argument(
