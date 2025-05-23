@@ -126,7 +126,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="trained_models/ppo_ryu_2500000_steps.zip",
+        default="trained_models/ppo_sf2_ryu_final.zip",
         help="Path to trained model",
     )
     parser.add_argument(
