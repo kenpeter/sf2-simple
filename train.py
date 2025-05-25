@@ -78,27 +78,20 @@ def make_env(game, state, seed=0):
         else:
             state_path = state
 
+        # Create retro environment - FIXED: removed invalid parameters
         env = retro.make(
             game=game,
             state=state_path,
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
-            inttype=retro.data.Integrations.STABLE,  # Add this
-            info=retro.data.Integrations.info,  # Add this
         )
 
         # Add action filtering to prevent cheating
         env = FilteredActionWrapper(env)
 
         # Add custom wrapper with aligned reward system
-        # Using reset_round=True for proper episode termination
-        # reward_coeff=3.0 for consistent reward scaling
         env = StreetFighterCustomWrapper(
-            env,
-            reset_round=True,
-            rendering=False,
-            reward_coeff=3.0,  # Explicit reward coefficient
-            full_hp=176,  # Explicit full HP value
+            env, reset_round=True, rendering=False, reward_coeff=3.0, full_hp=176
         )
         env = Monitor(env)
         env.reset(seed=seed)
@@ -131,6 +124,12 @@ def main():
     state_file = os.path.abspath("ken_bison_12.state")
     save_dir = "trained_models"
     os.makedirs(save_dir, exist_ok=True)
+
+    # Add custom data integration path if data.json exists
+    data_json_path = "/home/kenpeter/anaconda3/envs/sf2-simple/lib/python3.10/site-packages/retro/data/stable/StreetFighterIISpecialChampionEdition-Genesis/data.json"
+    if not os.path.exists(data_json_path):
+        print(f"Note: data.json not found at {data_json_path}")
+        print("HP info may not be available - using default values")
 
     # Main model path (always the same)
     model_path = os.path.join(save_dir, "ppo_sf2_model.zip")
