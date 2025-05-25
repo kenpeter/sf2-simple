@@ -83,13 +83,23 @@ def make_env(game, state, seed=0):
             state=state_path,
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
+            inttype=retro.data.Integrations.STABLE,  # Add this
+            info=retro.data.Integrations.info,  # Add this
         )
 
         # Add action filtering to prevent cheating
         env = FilteredActionWrapper(env)
 
-        # Add custom wrapper (reset_round=True to ensure proper game flow)
-        env = StreetFighterCustomWrapper(env, reset_round=True, rendering=False)
+        # Add custom wrapper with aligned reward system
+        # Using reset_round=True for proper episode termination
+        # reward_coeff=3.0 for consistent reward scaling
+        env = StreetFighterCustomWrapper(
+            env,
+            reset_round=True,
+            rendering=False,
+            reward_coeff=3.0,  # Explicit reward coefficient
+            full_hp=176,  # Explicit full HP value
+        )
         env = Monitor(env)
         env.reset(seed=seed)
         return env
@@ -105,6 +115,15 @@ def main():
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total timesteps to train"
     )
+    parser.add_argument(
+        "--reward-coeff",
+        type=float,
+        default=3.0,
+        help="Reward coefficient for damage dealing",
+    )
+    parser.add_argument(
+        "--full-hp", type=int, default=176, help="Full HP value for reward calculation"
+    )
 
     args = parser.parse_args()
 
@@ -116,13 +135,13 @@ def main():
     # Main model path (always the same)
     model_path = os.path.join(save_dir, "ppo_sf2_model.zip")
 
-    # Create environments with VecTransposeImage for proper image handling
+    # Create environments with aligned reward parameters
     env = SubprocVecEnv(
         [make_env(game, state=state_file, seed=i) for i in range(NUM_ENV)]
     )
     env = VecTransposeImage(env)  # Add this for proper image preprocessing
 
-    # Learning rate and clip range schedules
+    # Learning rate and clip range schedules - aligned with reward structure
     lr_schedule = linear_schedule(2.5e-4, 2.5e-6)
     clip_range_schedule = linear_schedule(0.15, 0.025)
 
@@ -142,11 +161,12 @@ def main():
         return
 
     print(f"Will train for {remaining_timesteps:,} more timesteps")
+    print(f"Reward configuration: coeff={args.reward_coeff}, full_hp={args.full_hp}")
     print(
         "Action filtering enabled - START and SELECT buttons disabled to prevent cheating"
     )
 
-    # Create or load model
+    # Create or load model with aligned hyperparameters
     if args.resume and os.path.exists(model_path):
         custom_objects = {
             "learning_rate": lr_schedule,
@@ -157,30 +177,43 @@ def main():
             model_path, env=env, device="cuda", custom_objects=custom_objects
         )
     else:
+        # PPO hyperparameters aligned with reward structure
         model = PPO(
             "CnnPolicy",
             env,
             device="cuda",
             verbose=1,
-            n_steps=512,
-            batch_size=512,
-            n_epochs=4,
-            gamma=0.94,
+            n_steps=512,  # Steps per environment per update
+            batch_size=512,  # Batch size for training
+            n_epochs=4,  # Number of epochs per update
+            gamma=0.94,  # Discount factor - slightly lower for fighting games
             learning_rate=lr_schedule,
             clip_range=clip_range_schedule,
+            ent_coef=0.01,  # Entropy coefficient for exploration
+            vf_coef=0.5,  # Value function coefficient
+            max_grad_norm=0.5,  # Gradient clipping
             tensorboard_log="logs",
         )
 
-    # Checkpoint callback (separate from main model)
+    # Checkpoint callback with consistent naming
     checkpoint_callback = CheckpointCallback(
         save_freq=31250,  # checkpoint_interval * num_envs = total_steps_per_checkpoint
         save_path=save_dir,
-        name_prefix="ppo_ryu",
+        name_prefix="ppo_sf2",  # Consistent with model name
     )
 
-    # Train
+    # Train with proper logging
     original_stdout = sys.stdout
     log_file_path = os.path.join(save_dir, "training_log.txt")
+
+    print(f"Starting training with reward system:")
+    print(f"- Reward coefficient: {args.reward_coeff}")
+    print(f"- Full HP: {args.full_hp}")
+    print(f"- Normalization factor: 0.001")
+    print(
+        f"- Max theoretical reward per step: {args.reward_coeff * args.full_hp * 0.001:.3f}"
+    )
+
     with open(log_file_path, "a" if args.resume else "w") as log_file:
         sys.stdout = log_file
 
@@ -200,6 +233,9 @@ def main():
 
     print(f"Training completed! Model saved to: {model_path}")
     print(f"Total timesteps: {completed_timesteps + remaining_timesteps:,}")
+    print(
+        f"Final reward configuration: coeff={args.reward_coeff}, full_hp={args.full_hp}"
+    )
 
 
 if __name__ == "__main__":

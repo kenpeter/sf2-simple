@@ -44,7 +44,8 @@ env = VecTransposeImage(env)
 
 # Load model correctly
 model = PPO.load(
-    "/home/kenpeter/work/sf2-simple/trained_models/ppo_ryu_4000000_steps.zip", env=env
+    "/home/kenpeter/work/sf2-simple/trained_models/ppo_ryu_7000000_steps_updated.zip",
+    env=env,
 )
 
 mean_reward, std_reward = evaluate_policy(
