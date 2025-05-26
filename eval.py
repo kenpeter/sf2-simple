@@ -258,7 +258,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="trained_models/ppo_sf2_original_9000000_steps.zip",  # Updated default
+        default="trained_models/ppo_sf2_original_4500000_steps.zip",  # Updated default
         help="Path to trained model",
     )
     parser.add_argument(

@@ -48,25 +48,25 @@ class StreetFighterCustomWrapper(gym.Wrapper):
 
     def _calculate_reward(self, curr_player_health, curr_oppont_health):
         """
-        Simplified reward calculation - only win/lose rewards
+        Simple damage-based reward: +1 for damage dealt, -1 for damage taken
         """
         custom_reward = 0.0
         custom_done = False
 
-        # Player loses
-        if curr_player_health <= 0:
-            custom_reward = -1.0
+        # Check if game is over
+        if curr_player_health <= 0 or curr_oppont_health <= 0:
             custom_done = True
 
-        # Player wins
-        elif curr_oppont_health <= 0:
-            custom_reward = 1.0
-            custom_done = True
+        # Calculate damage-based rewards
+        damage_dealt = self.prev_oppont_health - curr_oppont_health
+        damage_received = self.prev_player_health - curr_player_health
 
-        # Game still ongoing - no reward
-        else:
-            custom_reward = 0.0
-            custom_done = False
+        # +1 for each point of damage dealt, -1 for each point of damage received
+        custom_reward = damage_dealt - damage_received
+
+        # Update health tracking for next step
+        self.prev_player_health = curr_player_health
+        self.prev_oppont_health = curr_oppont_health
 
         # When reset_round flag is set to False, never reset episodes
         if not self.reset_round:
