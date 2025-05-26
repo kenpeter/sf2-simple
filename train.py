@@ -8,8 +8,9 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecTransposeImage
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
+# Import the FIXED wrapper
 from wrapper import StreetFighterCustomWrapper
 
 NUM_ENV = 16
@@ -54,7 +55,6 @@ class FilteredActionWrapper(gym.Wrapper):
         # Street Fighter II MultiBinary actions:
         # [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
         # We want to disable START (index 3) and SELECT (index 2)
-        # SELECT is often used as MODE button in some versions
         self.disabled_buttons = [2, 3]  # SELECT and START
 
     def step(self, action):
@@ -73,15 +73,10 @@ class FilteredActionWrapper(gym.Wrapper):
 
 def make_env(game, state, seed=0):
     def _init():
-        if state and os.path.exists(state):
-            state_path = os.path.abspath(state)
-        else:
-            state_path = state
-
-        # Create retro environment - FIXED: removed invalid parameters
+        # Create retro environment
         env = retro.make(
             game=game,
-            state=state_path,
+            state=state,
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
         )
@@ -89,10 +84,8 @@ def make_env(game, state, seed=0):
         # Add action filtering to prevent cheating
         env = FilteredActionWrapper(env)
 
-        # Add custom wrapper with aligned reward system
-        env = StreetFighterCustomWrapper(
-            env, reset_round=True, rendering=False, reward_coeff=3.0, full_hp=176
-        )
+        # Add ORIGINAL custom wrapper (no extra parameters!)
+        env = StreetFighterCustomWrapper(env, reset_round=True, rendering=False)
         env = Monitor(env)
         env.reset(seed=seed)
         return env
@@ -101,47 +94,49 @@ def make_env(game, state, seed=0):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Street Fighter II Agent")
+    parser = argparse.ArgumentParser(
+        description="Train Street Fighter II Agent (ORIGINAL)"
+    )
     parser.add_argument(
         "--resume", action="store_true", help="Resume training from saved model"
     )
     parser.add_argument(
-        "--total-timesteps", type=int, default=1000000, help="Total timesteps to train"
+        "--total-timesteps", type=int, default=10000000, help="Total timesteps to train"
     )
     parser.add_argument(
-        "--reward-coeff",
-        type=float,
-        default=3.0,
-        help="Reward coefficient for damage dealing",
-    )
-    parser.add_argument(
-        "--full-hp", type=int, default=176, help="Full HP value for reward calculation"
+        "--use-original-state",
+        action="store_true",
+        help="Use the ORIGINAL state file Champion.Level12.RyuVsBison instead of ken_bison_12.state",
     )
 
     args = parser.parse_args()
 
     game = "StreetFighterIISpecialChampionEdition-Genesis"
-    state_file = os.path.abspath("ken_bison_12.state")
+
+    # CRITICAL: Use the ORIGINAL state file for better performance
+    if args.use_original_state:
+        state_file = "Champion.Level12.RyuVsBison"  # ORIGINAL state
+        print("Using ORIGINAL state file: Champion.Level12.RyuVsBison")
+    else:
+        state_file = os.path.abspath("ken_bison_12.state")
+        print(f"Using custom state file: {state_file}")
+
     save_dir = "trained_models"
     os.makedirs(save_dir, exist_ok=True)
 
-    # Add custom data integration path if data.json exists
-    data_json_path = "/home/kenpeter/anaconda3/envs/sf2-simple/lib/python3.10/site-packages/retro/data/stable/StreetFighterIISpecialChampionEdition-Genesis/data.json"
-    if not os.path.exists(data_json_path):
-        print(f"Note: data.json not found at {data_json_path}")
-        print("HP info may not be available - using default values")
+    # Main model path
+    model_path = os.path.join(save_dir, "ppo_sf2_model_original.zip")
 
-    # Main model path (always the same)
-    model_path = os.path.join(save_dir, "ppo_sf2_model.zip")
-
-    # Create environments with aligned reward parameters
+    # Create environments with ORIGINAL settings
     env = SubprocVecEnv(
         [make_env(game, state=state_file, seed=i) for i in range(NUM_ENV)]
     )
-    env = VecTransposeImage(env)  # Add this for proper image preprocessing
+    # IMPORTANT: Remove VecTransposeImage if it's causing issues
+    # The original doesn't seem to emphasize this
+    # env = VecTransposeImage(env)
 
-    # Learning rate and clip range schedules - aligned with reward structure
-    lr_schedule = linear_schedule(2.5e-4, 2.5e-6)
+    # ORIGINAL Learning rate and clip range schedules
+    lr_schedule = linear_schedule(2.5e-4, 2.5e-6)  # Same as original
     clip_range_schedule = linear_schedule(0.15, 0.025)
 
     # Load previous progress
@@ -150,7 +145,7 @@ def main():
         completed_timesteps = load_progress(save_dir)
         print(f"Resuming from {completed_timesteps:,} timesteps")
     else:
-        print("Starting new training")
+        print("Starting new training with ORIGINAL parameters")
 
     # Calculate remaining timesteps
     remaining_timesteps = max(0, args.total_timesteps - completed_timesteps)
@@ -160,12 +155,10 @@ def main():
         return
 
     print(f"Will train for {remaining_timesteps:,} more timesteps")
-    print(f"Reward configuration: coeff={args.reward_coeff}, full_hp={args.full_hp}")
-    print(
-        "Action filtering enabled - START and SELECT buttons disabled to prevent cheating"
-    )
+    print("Using ORIGINAL reward system (no normalization)")
+    print("Action filtering enabled - START and SELECT buttons disabled")
 
-    # Create or load model with aligned hyperparameters
+    # Create or load model with ORIGINAL hyperparameters
     if args.resume and os.path.exists(model_path):
         custom_objects = {
             "learning_rate": lr_schedule,
@@ -176,42 +169,40 @@ def main():
             model_path, env=env, device="cuda", custom_objects=custom_objects
         )
     else:
-        # PPO hyperparameters aligned with reward structure
+        # ORIGINAL PPO hyperparameters
         model = PPO(
             "CnnPolicy",
             env,
             device="cuda",
             verbose=1,
-            n_steps=512,  # Steps per environment per update
-            batch_size=512,  # Batch size for training
-            n_epochs=4,  # Number of epochs per update
-            gamma=0.94,  # Discount factor - slightly lower for fighting games
+            n_steps=512,  # Same as original
+            batch_size=512,
+            n_epochs=4,
+            gamma=0.94,
             learning_rate=lr_schedule,
             clip_range=clip_range_schedule,
-            ent_coef=0.01,  # Entropy coefficient for exploration
-            vf_coef=0.5,  # Value function coefficient
-            max_grad_norm=0.5,  # Gradient clipping
+            ent_coef=0.01,
+            vf_coef=0.5,
+            max_grad_norm=0.5,
             tensorboard_log="logs",
         )
 
-    # Checkpoint callback with consistent naming
+    # Checkpoint callback
     checkpoint_callback = CheckpointCallback(
-        save_freq=31250,  # checkpoint_interval * num_envs = total_steps_per_checkpoint
+        save_freq=31250,  # Same as original: checkpoint_interval * num_envs
         save_path=save_dir,
-        name_prefix="ppo_sf2",  # Consistent with model name
+        name_prefix="ppo_sf2_original",
     )
 
     # Train with proper logging
     original_stdout = sys.stdout
-    log_file_path = os.path.join(save_dir, "training_log.txt")
+    log_file_path = os.path.join(save_dir, "training_log_original.txt")
 
-    print(f"Starting training with reward system:")
-    print(f"- Reward coefficient: {args.reward_coeff}")
-    print(f"- Full HP: {args.full_hp}")
-    print(f"- Normalization factor: 0.001")
-    print(
-        f"- Max theoretical reward per step: {args.reward_coeff * args.full_hp * 0.001:.3f}"
-    )
+    print(f"Starting training with ORIGINAL reward system:")
+    print(f"- Reward coefficient: 3 (integer)")
+    print(f"- Full HP: 176")
+    print(f"- NO normalization factor")
+    print(f"- Health conditions: < 0 (not <= 0)")
 
     with open(log_file_path, "a" if args.resume else "w") as log_file:
         sys.stdout = log_file
@@ -219,7 +210,7 @@ def main():
         model.learn(
             total_timesteps=remaining_timesteps,
             callback=[checkpoint_callback],
-            reset_num_timesteps=False,  # Keep timestep counter
+            reset_num_timesteps=False,
         )
 
         env.close()
@@ -232,9 +223,7 @@ def main():
 
     print(f"Training completed! Model saved to: {model_path}")
     print(f"Total timesteps: {completed_timesteps + remaining_timesteps:,}")
-    print(
-        f"Final reward configuration: coeff={args.reward_coeff}, full_hp={args.full_hp}"
-    )
+    print("Used ORIGINAL implementation parameters")
 
 
 if __name__ == "__main__":
