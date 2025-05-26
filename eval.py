@@ -4,98 +4,76 @@ import numpy as np
 import retro
 import gymnasium as gym
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
+from stable_baselines3.common.vec_env import (
+    DummyVecEnv,
+    SubprocVecEnv,
+    VecTransposeImage,
+)
+from stable_baselines3.common.monitor import Monitor
 
 from wrapper import StreetFighterCustomWrapper
 
 
-class VariedActionWrapper:
-    """Wrapper to add controlled randomness to actions"""
+class FilteredActionWrapper(gym.Wrapper):
+    """Wrapper to filter out START and MODE buttons to prevent cheating"""
 
-    def __init__(self, model, exploration_rate=0.15, action_noise=0.1):
-        self.model = model
-        self.exploration_rate = exploration_rate  # Chance to take random action
-        self.action_noise = action_noise  # Chance to modify predicted action
+    def __init__(self, env):
+        super(FilteredActionWrapper, self).__init__(env)
+        # Street Fighter II MultiBinary actions:
+        # [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
+        # We want to disable START (index 3) and SELECT (index 2)
+        self.disabled_buttons = [2, 3]  # SELECT and START
 
-    def predict(self, obs, deterministic=False):
-        # Get model's predicted action
-        action, states = self.model.predict(obs, deterministic=deterministic)
+    def step(self, action):
+        # Filter out disabled buttons by setting them to 0
+        if hasattr(action, "__len__") and len(action) >= 4:
+            filtered_action = action.copy() if hasattr(action, "copy") else list(action)
+            for button_idx in self.disabled_buttons:
+                if button_idx < len(filtered_action):
+                    filtered_action[button_idx] = 0
+            return self.env.step(filtered_action)
+        return self.env.step(action)
 
-        # Add some randomness based on exploration_rate
-        if np.random.random() < self.exploration_rate:
-            # Take a completely random action occasionally
-            # For MultiBinary action space (12 buttons)
-            random_action = np.random.randint(0, 2, size=12).astype(int)
-            return random_action, states
-
-        # Add noise to the predicted action
-        if not deterministic and np.random.random() < self.action_noise:
-            # For MultiBinary actions, flip some bits randomly
-            noisy_action = action.copy()
-            # Ensure it's a proper numpy array
-            if hasattr(noisy_action, "flatten"):
-                noisy_action = noisy_action.flatten()
-
-            for i in range(len(noisy_action)):
-                if np.random.random() < 0.2:  # 20% chance to flip each bit
-                    noisy_action[i] = 1 - noisy_action[i]
-            return noisy_action.astype(int), states
-
-        return action, states
+    def reset(self, **kwargs):
+        return self.env.reset(**kwargs)
 
 
-def random_starting_sequence(env, num_actions=None):
-    """Execute a random sequence of actions at the start"""
-    if num_actions is None:
-        num_actions = np.random.randint(5, 20)  # Random between 5-20 actions
+def make_env(game, state, seed=0):
+    """EXACT copy of training environment function"""
 
-    print(f"Executing {num_actions} random starting actions...")
-
-    for i in range(num_actions):
-        # Create random MultiBinary action (12 buttons)
-        if np.random.random() < 0.7:  # 70% chance for action
-            # Create a random button combination
-            action = np.random.randint(0, 2, size=12).astype(int)
-
-            # Sometimes just press single buttons for more realistic actions
-            if np.random.random() < 0.5:
-                action = np.zeros(12, dtype=int)
-                # Press 1-3 random buttons
-                num_buttons = np.random.randint(1, 4)
-                buttons_to_press = np.random.choice(12, size=num_buttons, replace=False)
-                action[buttons_to_press] = 1
+    def _init():
+        # Handle state file path properly
+        if state and os.path.exists(state):
+            state_path = os.path.abspath(state)
         else:
-            # No-op action (all zeros)
-            action = np.zeros(12, dtype=int)
+            state_path = state
 
-        # Step the environment
-        step_result = env.step(action)
-        if len(step_result) == 5:
-            obs, reward, terminated, truncated, info = step_result
-            done = terminated or truncated
-        else:
-            obs, reward, done, info = step_result
+        # Create retro environment
+        env = retro.make(
+            game=game,
+            state=state_path,
+            use_restricted_actions=retro.Actions.FILTERED,
+            obs_type=retro.Observations.IMAGE,
+        )
 
-        if done:
-            print("Game ended during random sequence, resetting...")
-            obs = env.reset()
-            break
+        # Add action filtering to prevent cheating
+        env = FilteredActionWrapper(env)
 
-    return obs
+        # Add ORIGINAL custom wrapper (no extra parameters!)
+        env = StreetFighterCustomWrapper(env, reset_round=True, rendering=False)
+        env = Monitor(env)
+        env.reset(seed=seed)
+        return env
+
+    return _init
 
 
-def evaluate_agent(model, env, episodes=10, render=True, varied_gameplay=True):
-    """Evaluate the trained agent with optional gameplay variation"""
+def evaluate_agent(model, env, episodes=10, render=False):
+    """Evaluate the agent"""
     episode_rewards = []
-    episode_lengths = []
     wins = 0
     losses = 0
-
-    # Create varied action wrapper if requested
-    if varied_gameplay:
-        # Different exploration rates for different episodes
-        exploration_rates = [0.1, 0.15, 0.2, 0.25, 0.3]
-        action_noise_rates = [0.05, 0.1, 0.15, 0.2]
+    draws = 0
 
     for episode in range(episodes):
         obs = env.reset()
@@ -105,52 +83,14 @@ def evaluate_agent(model, env, episodes=10, render=True, varied_gameplay=True):
 
         print(f"Episode {episode + 1}/{episodes}")
 
-        # Create episode-specific varied wrapper
-        if varied_gameplay:
-            exploration_rate = np.random.choice(exploration_rates)
-            action_noise = np.random.choice(action_noise_rates)
-            varied_model = VariedActionWrapper(model, exploration_rate, action_noise)
-            print(
-                f"Using exploration_rate: {exploration_rate:.2f}, action_noise: {action_noise:.2f}"
-            )
-        else:
-            varied_model = model
-
-        # Random starting sequence to create different game states
-        if varied_gameplay:
-            obs = random_starting_sequence(env.envs[0], np.random.randint(3, 15))
-
-        # Vary deterministic behavior throughout episode
-        deterministic_phases = [True, False] if varied_gameplay else [True]
-        phase_length = np.random.randint(50, 150) if varied_gameplay else float("inf")
-        current_phase = 0
-        steps_in_phase = 0
-
         while not done:
-            # Switch between deterministic and stochastic phases
-            if varied_gameplay and steps_in_phase >= phase_length:
-                current_phase = (current_phase + 1) % len(deterministic_phases)
-                steps_in_phase = 0
-                phase_length = np.random.randint(30, 100)
-                print(
-                    f"Switching to {'deterministic' if deterministic_phases[current_phase] else 'stochastic'} phase"
-                )
-
-            use_deterministic = (
-                deterministic_phases[current_phase] if varied_gameplay else True
-            )
-
-            # Get action from model (with or without variation)
-            action, _states = varied_model.predict(obs, deterministic=use_deterministic)
+            # Use deterministic evaluation
+            action, _states = model.predict(obs, deterministic=True)
 
             # Ensure action is properly formatted for MultiBinary
             if hasattr(action, "flatten"):
                 action = action.flatten()
             action = action.astype(int)
-
-            # Occasionally log actions for debugging
-            if episode_length % 50 == 0:
-                print(f"Step {episode_length}: Action = {action}")
 
             # Step environment
             step_result = env.step(action)
@@ -167,7 +107,6 @@ def evaluate_agent(model, env, episodes=10, render=True, varied_gameplay=True):
             else:
                 episode_reward += reward
             episode_length += 1
-            steps_in_phase += 1
 
             if render:
                 env.render()
@@ -189,10 +128,10 @@ def evaluate_agent(model, env, episodes=10, render=True, varied_gameplay=True):
                         losses += 1
                         print("Result: LOSS!")
                     else:
+                        draws += 1
                         print("Result: DRAW!")
 
         episode_rewards.append(episode_reward)
-        episode_lengths.append(episode_length)
 
         print(f"Episode reward: {episode_reward:.2f}")
         print(f"Episode length: {episode_length}")
@@ -201,136 +140,228 @@ def evaluate_agent(model, env, episodes=10, render=True, varied_gameplay=True):
     # Calculate statistics
     mean_reward = np.mean(episode_rewards)
     std_reward = np.std(episode_rewards)
-    mean_length = np.mean(episode_lengths)
+    mean_length = np.mean([len(ep) for ep in [episode_rewards]])
 
     print(f"\n{'='*60}")
     print("EVALUATION RESULTS")
     print(f"{'='*60}")
     print(f"Episodes: {episodes}")
     print(f"Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
-    print(f"Mean episode length: {mean_length:.1f}")
     print(f"Wins: {wins}")
     print(f"Losses: {losses}")
+    print(f"Draws: {draws}")
     print(f"Win rate: {wins/episodes*100:.1f}%")
+    print(f"Loss rate: {losses/episodes*100:.1f}%")
 
     return {
         "mean_reward": mean_reward,
         "std_reward": std_reward,
-        "mean_length": mean_length,
         "wins": wins,
         "losses": losses,
+        "draws": draws,
         "win_rate": wins / episodes,
     }
 
 
-def make_eval_env(game, state=None, add_randomness=True):
-    """Create evaluation environment with FIXED wrapper parameters"""
+def create_training_matched_env(game, state):
+    """Create environment that exactly matches training setup"""
+    # Use DummyVecEnv for single-environment evaluation (faster than SubprocVecEnv)
+    env = DummyVecEnv([make_env(game, state=state, seed=0)])
 
-    def _init():
-        if state and os.path.exists(state):
-            state_path = os.path.abspath(state)
-        else:
-            state_path = state
+    # CRITICAL: Add VecTransposeImage to match training
+    # Training shows "Wrapping the env in a VecTransposeImage" so we must do the same
+    env = VecTransposeImage(env)
 
-        env = retro.make(
-            game=game,
-            state=state_path,
-            use_restricted_actions=retro.Actions.FILTERED,
-            obs_type=retro.Observations.IMAGE,
+    return env
+
+
+def debug_environment_setup(model_path, game, state):
+    """Debug environment setup to verify it matches training"""
+    print(f"\n{'='*60}")
+    print("DEBUGGING ENVIRONMENT SETUP")
+    print(f"{'='*60}")
+
+    # Create environment exactly like training
+    env = create_training_matched_env(game, state)
+
+    # Load model
+    model = PPO.load(model_path, env=env)
+
+    # Check environment properties
+    obs = env.reset()
+    print(f"Environment observation shape: {obs.shape}")
+    print(f"Environment observation space: {env.observation_space}")
+    print(f"Model observation space: {model.observation_space}")
+    print(f"Action space: {env.action_space}")
+
+    # Test prediction
+    action, _ = model.predict(obs, deterministic=True)
+    print(f"Action shape: {action.shape}")
+    print(f"Sample action: {action.flatten()}")
+
+    # Test one step
+    obs, reward, done, info = env.step(action)
+    print(f"Step successful - reward: {reward}, done: {done}")
+
+    env.close()
+
+    print("✓ Environment setup matches training expectations")
+
+
+def compare_models(model_paths, game, state, episodes=5):
+    """Compare performance of different models"""
+    print(f"\n{'='*60}")
+    print("COMPARING MODEL PERFORMANCE")
+    print(f"{'='*60}")
+
+    results = {}
+
+    for model_path in model_paths:
+        if not os.path.exists(model_path):
+            print(f"Model not found: {model_path}")
+            continue
+
+        print(f"\nTesting model: {os.path.basename(model_path)}")
+        print("-" * 40)
+
+        try:
+            env = create_training_matched_env(game, state)
+            model = PPO.load(model_path, env=env)
+            result = evaluate_agent(model, env, episodes=episodes)
+            results[os.path.basename(model_path)] = result
+            env.close()
+        except Exception as e:
+            print(f"Error testing {model_path}: {e}")
+
+    # Summary
+    print(f"\n{'='*60}")
+    print("MODEL COMPARISON SUMMARY")
+    print(f"{'='*60}")
+    for model_name, result in results.items():
+        print(
+            f"{model_name}: {result['win_rate']*100:.1f}% win rate ({result['wins']}/{episodes} wins)"
         )
-
-        # Use wrapper parameters that match your current wrapper.py
-        env = StreetFighterCustomWrapper(
-            env,
-            rendering=True,
-            reset_round=True,
-            # Note: reward_coeff and full_hp are handled internally in your wrapper
-        )
-        return env
-
-    return _init
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate Street Fighter II Agent (FIXED)"
+        description="Street Fighter II Agent Evaluation (FIXED - Matches Training)"
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="trained_models/ppo_sf2_original_4500000_steps.zip",  # Updated default
+        default="trained_models/ppo_sf2_original_7000000_steps.zip",
         help="Path to trained model",
     )
     parser.add_argument(
-        "--episodes", type=int, default=4, help="Number of episodes to evaluate"
+        "--episodes", type=int, default=10, help="Number of episodes to evaluate"
     )
     parser.add_argument("--no-render", action="store_true", help="Disable rendering")
     parser.add_argument(
         "--state", type=str, default="ken_bison_12.state", help="Game state file"
     )
+    parser.add_argument("--debug", action="store_true", help="Debug environment setup")
     parser.add_argument(
-        "--no-variation",
-        action="store_true",
-        help="Disable gameplay variation (use deterministic evaluation)",
+        "--compare", action="store_true", help="Compare all available models"
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducible varied gameplay",
+        "--latest", action="store_true", help="Use the latest model automatically"
     )
 
     args = parser.parse_args()
 
-    # Set random seed if provided
-    if args.seed is not None:
-        np.random.seed(args.seed)
-        print(f"Using random seed: {args.seed}")
-
     game = "StreetFighterIISpecialChampionEdition-Genesis"
-    varied_gameplay = not args.no_variation
 
-    print("Street Fighter II Agent Evaluation (FIXED WRAPPER)")
+    print("Street Fighter II Agent Evaluation (FIXED VERSION)")
     print("=" * 60)
+    print("This evaluation EXACTLY matches the training setup:")
+    print("- DummyVecEnv (single environment for evaluation)")
+    print("- VecTransposeImage (channels-first observations)")
+    print("- FilteredActionWrapper (START/SELECT disabled)")
+    print("- Monitor wrapper")
+    print("- Same reward system")
+    print("=" * 60)
+
+    # Auto-select latest model if requested
+    if args.latest:
+        model_dir = "trained_models"
+        if os.path.exists(model_dir):
+            models = [
+                f
+                for f in os.listdir(model_dir)
+                if f.endswith(".zip") and "ppo_sf2" in f
+            ]
+            if models:
+                # Sort by modification time and get latest
+                models.sort(key=lambda x: os.path.getmtime(os.path.join(model_dir, x)))
+                args.model = os.path.join(model_dir, models[-1])
+                print(f"Auto-selected latest model: {args.model}")
+
     print(f"Model: {args.model}")
-    print(f"Game: {game}")
     print(f"State: {args.state}")
     print(f"Episodes: {args.episodes}")
     print(f"Render: {not args.no_render}")
-    print(f"Varied Gameplay: {varied_gameplay}")
-    print("Using FIXED reward system (no normalization, reward_coeff=3)")
+
+    # Check if state file exists
+    if not os.path.exists(args.state):
+        print(f"Error: State file not found: {args.state}")
+        print("Available state files:")
+        for f in os.listdir("."):
+            if f.endswith(".state"):
+                print(f"  {f}")
+        return
+
+    if args.debug:
+        debug_environment_setup(args.model, game, args.state)
+        return
+
+    if args.compare:
+        # Find all available models
+        model_dir = "trained_models"
+        if os.path.exists(model_dir):
+            models = [
+                os.path.join(model_dir, f)
+                for f in os.listdir(model_dir)
+                if f.endswith(".zip") and "ppo_sf2" in f
+            ]
+            models.sort(key=lambda x: os.path.getmtime(x))  # Sort by creation time
+
+            if models:
+                compare_models(
+                    models[-5:], game, args.state, episodes=args.episodes
+                )  # Test last 5 models
+            else:
+                print("No models found for comparison")
+        return
 
     # Check if model exists
     if not os.path.exists(args.model):
         print(f"Error: Model file not found: {args.model}")
+        print("Available models:")
+        model_dir = "trained_models"
+        if os.path.exists(model_dir):
+            for f in os.listdir(model_dir):
+                if f.endswith(".zip"):
+                    print(f"  {f}")
         return
 
-    # Create environment with FIXED wrapper
-    env = DummyVecEnv([make_eval_env(game, args.state, add_randomness=varied_gameplay)])
-    env = VecTransposeImage(env)
+    # Create environment that exactly matches training
+    print(f"Creating environment with state: {os.path.abspath(args.state)}")
+    env = create_training_matched_env(game, args.state)
 
     # Load model
     print(f"Loading model from: {args.model}")
     try:
         model = PPO.load(args.model, env=env)
-        print("Model loaded successfully!")
+        print("✓ Model loaded successfully!")
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"✗ Error loading model: {e}")
+        env.close()
         return
 
     # Evaluate
-    if varied_gameplay:
-        print(f"\nStarting VARIED evaluation for {args.episodes} episodes...")
-        print("Each episode will have different:")
-        print("- Random starting sequence")
-        print("- Different exploration rates")
-        print("- Mixed deterministic/stochastic phases")
-        print("- Action noise variations")
-        print("- Using FIXED reward system")
-    else:
-        print(f"\nStarting STANDARD evaluation for {args.episodes} episodes...")
-        print("- Using FIXED reward system")
-
+    print(f"\nStarting evaluation for {args.episodes} episodes...")
+    print("Using EXACT training environment setup")
     print("=" * 60)
 
     results = evaluate_agent(
@@ -338,10 +369,21 @@ def main():
         env=env,
         episodes=args.episodes,
         render=not args.no_render,
-        varied_gameplay=varied_gameplay,
     )
 
     env.close()
+
+    # Final summary
+    print(f"\nFINAL SUMMARY:")
+    print(f"Model performance: {results['win_rate']*100:.1f}% win rate")
+    if results["win_rate"] > 0.5:
+        print("🎉 Great performance! Agent is winning more than 50% of fights.")
+    elif results["win_rate"] > 0.2:
+        print("👍 Decent performance! Agent is learning to fight.")
+    elif results["win_rate"] > 0.05:
+        print("📈 Some progress! Agent occasionally wins fights.")
+    else:
+        print("⚠️  Poor performance. Agent may need more training or debugging.")
 
 
 if __name__ == "__main__":

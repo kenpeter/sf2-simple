@@ -106,7 +106,7 @@ def main():
     parser.add_argument(
         "--use-original-state",
         action="store_true",
-        help="Use the ORIGINAL state file Champion.Level12.RyuVsBison instead of ken_bison_12.state",
+        help="Use the ORIGINAL state file ken_bison_12.state instead of ken_bison_12.state",
     )
 
     args = parser.parse_args()
@@ -115,8 +115,8 @@ def main():
 
     # CRITICAL: Use the ORIGINAL state file for better performance
     if args.use_original_state:
-        state_file = "Champion.Level12.RyuVsBison"  # ORIGINAL state
-        print("Using ORIGINAL state file: Champion.Level12.RyuVsBison")
+        state_file = "ken_bison_12.state"  # ORIGINAL state
+        print("Using ORIGINAL state file: ken_bison_12.state")
     else:
         state_file = os.path.abspath("ken_bison_12.state")
         print(f"Using custom state file: {state_file}")
