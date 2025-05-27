@@ -5,9 +5,9 @@ import gymnasium as gym
 import numpy as np
 
 
-# Custom environment wrapper - with victory screen detection and auto-reset
+# Custom environment wrapper - SIMPLE episode length limiting to avoid victory screens
 class StreetFighterCustomWrapper(gym.Wrapper):
-    def __init__(self, env, reset_round=True, rendering=False):
+    def __init__(self, env, reset_round=True, rendering=False, max_episode_steps=2000):
         super(StreetFighterCustomWrapper, self).__init__(env)
         self.env = env
 
@@ -37,15 +37,9 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.total_rounds = 0
         self.current_round_active = True
 
-        # Victory screen detection
-        self.steps_since_last_reward = 0
-        self.max_steps_without_reward = (
-            300  # Reset if no rewards for 300 steps (5 seconds at 60fps)
-        )
-        self.steps_since_round_end = 0
-        self.max_steps_after_round = 180  # Reset 3 seconds after round ends
-        self.combat_started = False  # Track if combat has actually started
-        self.steps_since_reset = 0  # Grace period after reset
+        # Simple episode length limiting to avoid victory screens
+        self.max_episode_steps = max_episode_steps  # Reset after this many steps
+        self.episode_steps = 0
 
         # Win rate trending - Simple approach
         self.win_rate_history = []
@@ -64,11 +58,9 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         print(f"StreetFighterCustomWrapper initialized:")
         print(f"- Reward coefficient: {self.reward_coeff}")
         print(f"- Full HP: {self.full_hp}")
-        print(f"- Victory screen detection enabled")
         print(
-            f"- Auto-reset after {self.max_steps_without_reward} steps without rewards"
+            f"- Max episode steps: {self.max_episode_steps} (prevents victory screen stuck)"
         )
-        print(f"- Auto-reset {self.max_steps_after_round} steps after round ends")
         print(f"- Win rate tracking enabled")
         print(
             f"- Win rate trending enabled (window: {self.trend_window_size}, update every {self.rounds_per_trend_update} rounds)"
@@ -154,37 +146,6 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             "trend_history": self.win_rate_history[-10:],  # Last 10 data points
         }
 
-    def _is_victory_or_end_screen(self, curr_player_health, curr_oppont_health):
-        """
-        Detect if we're on a victory screen, congratulations screen, or other non-combat state
-        """
-        # Don't trigger victory detection too soon after reset (grace period)
-        if self.steps_since_reset < 60:  # 1 second grace period
-            return False
-
-        # Only check for victory screens if combat has actually started
-        if not self.combat_started:
-            return False
-
-        # Check if both characters have full health AFTER combat started (likely victory screen)
-        if curr_player_health == self.full_hp and curr_oppont_health == self.full_hp:
-            print(
-                f"Both players have full HP after combat started - likely victory screen"
-            )
-            return True
-
-        # Check if we haven't seen any meaningful reward for too long
-        if self.steps_since_last_reward > self.max_steps_without_reward:
-            print(f"No rewards for {self.steps_since_last_reward} steps - likely stuck")
-            return True
-
-        # Check if it's been too long since a round ended
-        if self.steps_since_round_end > self.max_steps_after_round:
-            print(f"Too long since round ended ({self.steps_since_round_end} steps)")
-            return True
-
-        return False
-
     def _calculate_reward(self, curr_player_health, curr_oppont_health):
         """
         Simple damage-based reward: +1 for damage dealt, -1 for damage taken
@@ -193,23 +154,10 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         custom_reward = 0.0
         custom_done = False
 
-        # Track if combat has started (any damage dealt or received)
-        if not self.combat_started:
-            if curr_player_health < self.full_hp or curr_oppont_health < self.full_hp:
-                self.combat_started = True
-                print(
-                    f"Combat started! Player HP: {curr_player_health}, Enemy HP: {curr_oppont_health}"
-                )
-
-        # Check for victory/end screens first
-        if self._is_victory_or_end_screen(curr_player_health, curr_oppont_health):
-            print(f"Victory/End screen detected! Resetting environment...")
-            print(f"  - Steps since last reward: {self.steps_since_last_reward}")
-            print(f"  - Steps since round end: {self.steps_since_round_end}")
-            print(f"  - Steps since reset: {self.steps_since_reset}")
-            print(f"  - Combat started: {self.combat_started}")
+        # Simple episode length limit to avoid victory screens
+        if self.episode_steps >= self.max_episode_steps:
             print(
-                f"  - Player HP: {curr_player_health}, Enemy HP: {curr_oppont_health}"
+                f"Episode length limit reached ({self.max_episode_steps} steps). Resetting to avoid victory screens."
             )
             custom_done = True
             return custom_reward, custom_done
@@ -233,14 +181,16 @@ class StreetFighterCustomWrapper(gym.Wrapper):
                     )
 
                 self.current_round_active = False
-                self.steps_since_round_end = 0  # Reset counter
                 round_over = True
 
                 # Update trend tracking
                 self._update_win_rate_trend()
 
-            # Don't auto-reset immediately, give some time for victory animations
-            # custom_done = True  # Commented out to allow victory screen detection
+            # Reset after a short delay to allow some victory animation
+            if (
+                self.episode_steps > self.max_episode_steps - 100
+            ):  # Reset near end anyway
+                custom_done = True
 
         # Calculate damage-based rewards
         damage_dealt = self.prev_oppont_health - curr_oppont_health
@@ -249,12 +199,6 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         # +1 for each point of damage dealt, -1 for each point of damage received
         damage_reward = damage_dealt - damage_received
         custom_reward += damage_reward
-
-        # Track reward activity
-        if abs(damage_reward) > 0 or abs(custom_reward) > 0:
-            self.steps_since_last_reward = 0
-        else:
-            self.steps_since_last_reward += 1
 
         # Update health tracking for next step
         self.prev_player_health = curr_player_health
@@ -279,6 +223,8 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             "losses": self.losses,
             "total_rounds": self.total_rounds,
             "win_rate": self.get_win_rate(),
+            "episode_steps": self.episode_steps,
+            "max_episode_steps": self.max_episode_steps,
         }
 
         # Add trending information
@@ -298,6 +244,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         if stats["trend_points"] > 0:
             print(f"Recent Avg: {stats['recent_avg']:.1%}")
             print(f"Peak: {stats['peak_win_rate']:.1%}")
+        print(f"Episode: {stats['episode_steps']}/{stats['max_episode_steps']} steps")
         print(f"========================")
 
     def reset(self, **kwargs):
@@ -320,11 +267,8 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.total_timesteps = 0
         self.current_round_active = True
 
-        # Reset victory screen detection counters
-        self.steps_since_last_reward = 0
-        self.steps_since_round_end = 0
-        self.steps_since_reset = 0  # Reset the grace period counter
-        self.combat_started = False  # Reset combat tracking
+        # Reset episode step counter
+        self.episode_steps = 0
 
         # Clear and initialize frame stack
         self.frame_stack.clear()
@@ -339,7 +283,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         return stacked_obs, info
 
     def step(self, action):
-        """Step function with ORIGINAL reward calculation + win tracking + trending + victory detection"""
+        """Step function with ORIGINAL reward calculation + win tracking + trending + simple episode limiting"""
         # Handle MultiBinary action space
         if isinstance(self.env.action_space, gym.spaces.MultiBinary):
             if isinstance(action, np.ndarray):
@@ -382,8 +326,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         stacked_obs = self._stack_observation()
 
         # Update counters
-        self.steps_since_round_end += 1
-        self.steps_since_reset += 1
+        self.episode_steps += 1
 
         # Update info with win stats (including trending)
         info.update(self.get_win_stats())
