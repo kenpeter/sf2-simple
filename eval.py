@@ -36,10 +36,24 @@ class FilteredActionWrapper(gym.Wrapper):
 
 def create_eval_env(game, state):
     """Create evaluation environment with rendering enabled"""
+    # Handle state file path properly - same logic as train.py
+    if os.path.isfile(state):
+        # If it's a file that exists, use absolute path
+        state_file = os.path.abspath(state)
+        print(f"Using custom state file: {state_file}")
+    else:
+        # Try removing .state extension for built-in states
+        if state.endswith(".state"):
+            state_file = state[:-6]  # Remove .state extension
+            print(f"Using built-in state: {state_file}")
+        else:
+            state_file = state
+            print(f"Using state: {state_file}")
+
     # Create retro environment
     env = retro.make(
         game=game,
-        state=state,
+        state=state_file,
         use_restricted_actions=retro.Actions.FILTERED,
         obs_type=retro.Observations.IMAGE,
         render_mode="human",  # Enable human-visible rendering
@@ -61,7 +75,7 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_model_original.zip",
+        default="trained_models/ppo_sf2_original_3200000_steps.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
@@ -73,8 +87,13 @@ def main():
     parser.add_argument(
         "--episodes",
         type=int,
-        default=5,
+        default=3,
         help="Number of episodes to run",
+    )
+    parser.add_argument(
+        "--use-built-in-state",
+        action="store_true",
+        help="Use built-in state (removes .state extension)",
     )
 
     args = parser.parse_args()
@@ -86,15 +105,33 @@ def main():
 
     game = "StreetFighterIISpecialChampionEdition-Genesis"
 
+    # Handle state file properly
+    if args.use_built_in_state:
+        # Use built-in state (remove .state extension if present)
+        state_file = (
+            args.state_file[:-6]
+            if args.state_file.endswith(".state")
+            else args.state_file
+        )
+    else:
+        # Use custom state file
+        state_file = args.state_file
+
     print(f"Loading model from: {args.model_path}")
-    print(f"Using state file: {args.state_file}")
+    print(f"Using state file: {state_file}")
     print(f"Will run {args.episodes} episodes")
     print("Running at 60 FPS for smooth gameplay")
     print("\nPress Ctrl+C to quit at any time")
     print("=" * 50)
 
     # Create evaluation environment
-    env = create_eval_env(game, args.state_file)
+    try:
+        env = create_eval_env(game, state_file)
+        print("Environment created successfully!")
+    except Exception as e:
+        print(f"Error creating environment: {e}")
+        print("\nTry using --use-built-in-state flag if you're using a built-in state")
+        return
 
     # Load the trained model
     try:
