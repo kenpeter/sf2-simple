@@ -35,39 +35,35 @@ class FilteredActionWrapper(gym.Wrapper):
 
 
 def create_eval_env(game, state):
-    """Create evaluation environment with rendering enabled"""
-    # Handle state file path properly - same logic as train.py
+    """Create evaluation environment aligned with training setup"""
+    # Handle state file path consistently with train.py
     if os.path.isfile(state):
-        # If it's a file that exists, use absolute path
         state_file = os.path.abspath(state)
         print(f"Using custom state file: {state_file}")
     else:
-        # Try removing .state extension for built-in states
         if state.endswith(".state"):
-            state_file = state[:-6]  # Remove .state extension
+            state_file = state[:-6]  # Remove .state extension for built-in states
             print(f"Using built-in state: {state_file}")
         else:
             state_file = state
             print(f"Using state: {state_file}")
 
-    # Create retro environment
+    # Create retro environment with rendering enabled
     env = retro.make(
         game=game,
         state=state_file,
         use_restricted_actions=retro.Actions.FILTERED,
         obs_type=retro.Observations.IMAGE,
-        render_mode="human",  # Enable human-visible rendering
+        render_mode="human",  # Enable rendering for human observation
     )
 
-    # Add action filtering to prevent cheating
-    env = FilteredActionWrapper(env)
-
-    # Add custom wrapper with rendering enabled and reset_round=False for full matches
-    env = StreetFighterCustomWrapper(env, reset_round=False, rendering=True)
+    # Apply custom wrapper with reset_round=True to match training
+    env = StreetFighterCustomWrapper(env, reset_round=True, rendering=True)
 
     return env
 
 
+# main has model path, state file, ep
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate trained Street Fighter II Agent"
@@ -75,7 +71,7 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_original_3200000_steps.zip",
+        default="trained_models/ppo_sf2_trending_9600000_steps.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
@@ -153,7 +149,7 @@ def main():
 
             while True:
                 # Get action from the trained model
-                action, _states = model.predict(obs, deterministic=True)
+                action, _states = model.predict(obs, deterministic=False)
 
                 # Take step in environment
                 obs, reward, terminated, truncated, info = env.step(action)

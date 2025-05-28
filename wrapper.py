@@ -1,11 +1,9 @@
 import time
 import collections
-
 import gymnasium as gym
 import numpy as np
 
 
-# Custom environment wrapper - SIMPLE episode length limiting to avoid victory screens
 class StreetFighterCustomWrapper(gym.Wrapper):
     def __init__(self, env, reset_round=True, rendering=False, max_episode_steps=2000):
         super(StreetFighterCustomWrapper, self).__init__(env)
@@ -55,6 +53,14 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.reset_round = reset_round
         self.rendering = rendering
 
+        # Counter-attack tracking variables
+        self.defense_window = 5  # Frames to confirm a defense
+        self.counter_window = 10  # Frames after defense to allow counter-attack
+        self.defense_timer = 0  # Tracks frames without damage
+        self.counter_timer = 0  # Tracks frames after defense
+        self.in_defense = False  # Is AI currently defending?
+        self.in_counter_opportunity = False  # Can AI counter-attack now?
+
         print(f"StreetFighterCustomWrapper initialized:")
         print(f"- Reward coefficient: {self.reward_coeff}")
         print(f"- Full HP: {self.full_hp}")
@@ -66,6 +72,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             f"- Win rate trending enabled (window: {self.trend_window_size}, update every {self.rounds_per_trend_update} rounds)"
         )
         print(f"- Action filtering enabled (SELECT and START buttons disabled)")
+        print(f"- Counter-attack reward system enabled")
 
     def _stack_observation(self):
         """Stack frames for observation"""
@@ -149,7 +156,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
     def _calculate_reward(self, curr_player_health, curr_oppont_health):
         """
         Simple damage-based reward: +1 for damage dealt, -1 for damage taken
-        Now also tracks wins/losses and updates trending
+        Now also tracks wins/losses, updates trending, and rewards counter-attacks
         """
         custom_reward = 0.0
         custom_done = False
@@ -199,6 +206,31 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         # +1 for each point of damage dealt, -1 for each point of damage received
         damage_reward = damage_dealt - damage_received
         custom_reward += damage_reward
+
+        # Counter-attack logic
+        # Step 1: Detect defense (no damage taken for a few frames)
+        if damage_received == 0:
+            self.defense_timer += 1
+            if self.defense_timer >= self.defense_window:
+                self.in_defense = True
+                self.in_counter_opportunity = True
+                self.counter_timer = 0  # Start counter-attack window
+        else:
+            self.in_defense = False
+            self.defense_timer = 0
+            self.in_counter_opportunity = False
+
+        # Step 2: Track counter-attack opportunity
+        if self.in_counter_opportunity:
+            self.counter_timer += 1
+            if self.counter_timer > self.counter_window:
+                self.in_counter_opportunity = False  # Window expired
+
+        # Step 3: Reward counter-attack
+        if self.in_counter_opportunity and damage_dealt > 0:
+            custom_reward += 10  # Bonus reward for counter-attack
+            print("Counter-attack bonus awarded!")
+            self.in_counter_opportunity = False  # Reset after reward
 
         # Update health tracking for next step
         self.prev_player_health = curr_player_health
@@ -279,6 +311,12 @@ class StreetFighterCustomWrapper(gym.Wrapper):
 
         # Add win rate info to the info dict
         info.update(self.get_win_stats())
+
+        # Reset counter-attack tracking
+        self.defense_timer = 0
+        self.counter_timer = 0
+        self.in_defense = False
+        self.in_counter_opportunity = False
 
         return stacked_obs, info
 
