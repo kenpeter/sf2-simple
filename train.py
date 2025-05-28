@@ -55,7 +55,7 @@ def main():
         "--total-timesteps", type=int, default=10000000, help="Total timesteps to train"
     )
     parser.add_argument(
-        "--num-envs", type=int, default=84, help="Number of parallel environments"
+        "--num-envs", type=int, default=74, help="Number of parallel environments"
     )
     parser.add_argument(
         "--learning-rate", type=float, default=1e-4, help="Learning rate"
@@ -169,7 +169,7 @@ def main():
 
     # Checkpoint callback
     checkpoint_callback = CheckpointCallback(
-        save_freq=100000 // args.num_envs,
+        save_freq=1000000 // args.num_envs,
         save_path=save_dir,
         name_prefix="ppo_sf2",
     )

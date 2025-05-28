@@ -29,4 +29,8 @@
 
 
 
-python train.py --resume trained_models/ppo_sf2_final.zip --total-timesteps 10000000 --learning-rate 2.95e-06 --render
+python train.py --resume trained_models/ppo_sf2_22601232_steps.zip --total-timesteps 10000000 --learning-rate 3e-4 --render
+
+
+
+python train.py --total-timesteps 5000000 --learning-rate 3e-4 --render
