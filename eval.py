@@ -71,7 +71,7 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_final.zip",
+        default="trained_models/ppo_sf2_28601004_steps.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
