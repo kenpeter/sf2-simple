@@ -30,8 +30,14 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.total_rounds = 0
 
         # Observation space: 4 frames * 3 channels = 12 channels
+        # self.observation_space = gym.spaces.Box(
+        #     low=0, high=255, shape=(100, 128, 12), dtype=np.uint8
+        # )
+
+        # The declared observation space (100,128,12) doesn't match the actual stacked frames shape (112,160,12).
+        # This causes dimension mismatch errors.
         self.observation_space = gym.spaces.Box(
-            low=0, high=255, shape=(100, 128, 12), dtype=np.uint8
+            low=0, high=255, shape=(112, 160, 12), dtype=np.uint8
         )
 
         print(f"🚀 StreetFighter Wrapper initialized:")
