@@ -40,11 +40,14 @@ def make_env(game, state, seed=0, rendering=False):
     return _init
 
 
-def linear_schedule(initial_value, final_value=0.0):
-    """Linear scheduler for learning rate"""
+def linear_schedule(initial_value, final_value=None):
+    """Linear scheduler for learning rate - FIXED VERSION"""
+    if final_value is None:
+        final_value = initial_value * 0.1  # Decay to 10% of initial
 
     def scheduler(progress):
-        return final_value + progress * (initial_value - final_value)
+        # Progress goes from 0 to 1 during training
+        return initial_value + progress * (final_value - initial_value)
 
     return scheduler
 
