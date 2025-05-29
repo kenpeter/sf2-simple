@@ -11,8 +11,11 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.env = env
 
         # Frame stacking
-        self.num_frames = 4
+        self.num_frames = 9
         self.frame_stack = collections.deque(maxlen=self.num_frames)
+
+        # Pre-allocate stacked observation array to avoid repeated allocations
+        self.stacked_obs = np.zeros((100, 128, 27), dtype=np.uint8)
 
         # Health tracking
         self.full_hp = 176
@@ -29,9 +32,9 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.losses = 0
         self.total_rounds = 0
 
-        # Observation space: 4 frames * 3 channels = 12 channels
+        # Observation space: 9 frames * 3 channels = 27 channels
         self.observation_space = gym.spaces.Box(
-            low=0, high=255, shape=(100, 128, 12), dtype=np.uint8
+            low=0, high=255, shape=(100, 128, 27), dtype=np.uint8
         )
 
         print(f"🚀 StreetFighter Wrapper initialized:")
@@ -40,17 +43,19 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         print(f"   Frame stacking: {self.num_frames} frames")
 
     def _stack_observation(self):
-        """Stack recent frames"""
-        # Fill stack if not enough frames
+        """Stack recent frames - reuse pre-allocated array"""
+        # Fill stack if not enough frames (avoid unnecessary copies)
         while len(self.frame_stack) < self.num_frames:
             if len(self.frame_stack) > 0:
-                self.frame_stack.append(self.frame_stack[-1].copy())
+                self.frame_stack.append(self.frame_stack[-1])  # Remove .copy()
             else:
                 self.frame_stack.append(np.zeros((100, 128, 3), dtype=np.uint8))
 
-        # Concatenate frames along channel dimension
-        stacked = np.concatenate(list(self.frame_stack), axis=-1)
-        return stacked
+        # Reuse pre-allocated array instead of creating new one each time
+        for i, frame in enumerate(self.frame_stack):
+            self.stacked_obs[:, :, i * 3 : (i + 1) * 3] = frame
+
+        return self.stacked_obs
 
     def _extract_health(self, info):
         """Extract health from info"""
@@ -109,12 +114,13 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
 
-        # Initialize frame stack
+        # Clear frame stack properly
         self.frame_stack.clear()
         downsampled = observation[::2, ::2, :]  # Downsample to (100, 128, 3)
 
+        # Remove unnecessary .copy() calls
         for _ in range(self.num_frames):
-            self.frame_stack.append(downsampled.copy())
+            self.frame_stack.append(downsampled)
 
         stacked_obs = self._stack_observation()
         return stacked_obs, info
@@ -141,7 +147,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         if custom_done:
             done = custom_done
 
-        # Update frame stack
+        # Update frame stack (deque automatically handles memory with maxlen)
         downsampled = observation[::2, ::2, :]
         self.frame_stack.append(downsampled)
         stacked_obs = self._stack_observation()
@@ -149,3 +155,8 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.episode_steps += 1
 
         return stacked_obs, custom_reward, done, truncated, info
+
+    def close(self):
+        """Proper cleanup"""
+        self.frame_stack.clear()
+        super().close()

@@ -2,6 +2,8 @@ import os
 import sys
 import argparse
 import time
+import gc  # Add garbage collection
+import psutil  # Add memory monitoring
 
 import retro
 import gymnasium as gym
@@ -12,6 +14,13 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 
 # Import the wrapper
 from wrapper import StreetFighterCustomWrapper
+
+
+def get_memory_usage():
+    """Get current memory usage in GB"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    return memory_info.rss / (1024**3)  # Convert to GB
 
 
 def make_env(game, state, seed=0, rendering=False):
@@ -40,15 +49,11 @@ def make_env(game, state, seed=0, rendering=False):
     return _init
 
 
-def linear_schedule(initial_value, final_value=None):
-    """Linear scheduler for learning rate - PROPERLY FIXED for SB3"""
-    if final_value is None:
-        final_value = initial_value * 0.1  # Decay to 10% of initial
+def linear_schedule(initial_value, final_value=0.0):
+    """Linear scheduler for learning rate"""
 
-    def scheduler(progress_remaining):
-        # SB3 passes progress_remaining: 1.0 → 0.0 during training
-        # We want: initial_value → final_value
-        return final_value + progress_remaining * (initial_value - final_value)
+    def scheduler(progress):
+        return final_value + progress * (initial_value - final_value)
 
     return scheduler
 
@@ -59,7 +64,7 @@ def main():
         "--total-timesteps", type=int, default=10000000, help="Total timesteps to train"
     )
     parser.add_argument(
-        "--num-envs", type=int, default=64, help="Number of parallel environments"
+        "--num-envs", type=int, default=16, help="Number of parallel environments"
     )
     parser.add_argument(
         "--learning-rate", type=float, default=1e-4, help="Learning rate"
@@ -126,6 +131,8 @@ def main():
 
     # Create environments
     print(f"🔧 Creating {args.num_envs} parallel environments...")
+    print(f"💾 Initial memory usage: {get_memory_usage():.1f} GB")
+    env = None
     try:
         env = SubprocVecEnv(
             [
@@ -134,55 +141,59 @@ def main():
             ]
         )
         print("✅ Environments created successfully")
+        print(f"💾 Memory after env creation: {get_memory_usage():.1f} GB")
     except Exception as e:
         print(f"❌ Failed to create environments: {e}")
         print("💡 Try using --use-original-state flag or check state file path")
         return
 
-    # Create or load model
-    if args.resume and os.path.exists(args.resume):
-        print(f"📂 Loading model from: {args.resume}")
-        model = PPO.load(args.resume, env=env, device="cuda")
+    model = None
+    try:
+        # Create or load model
+        if args.resume and os.path.exists(args.resume):
+            print(f"📂 Loading model from: {args.resume}")
+            model = PPO.load(args.resume, env=env, device="cuda")
 
-        # Update learning rate for resumed training
-        lr_schedule = linear_schedule(args.learning_rate)  # Will decay to 10%
-        model.learning_rate = lr_schedule
-        print("✅ Model loaded, resuming training")
+            # Update learning rate for resumed training
+            lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
+            model.learning_rate = lr_schedule
+            print("✅ Model loaded, resuming training")
+            print(f"💾 Memory after model load: {get_memory_usage():.1f} GB")
 
-    else:
-        print("🧠 Creating new PPO model")
-        lr_schedule = linear_schedule(args.learning_rate)  # Will decay to 10%
+        else:
+            print("🧠 Creating new PPO model")
+            lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
 
-        model = PPO(
-            "CnnPolicy",
-            env,
-            device="cuda",
-            verbose=1,
-            n_steps=1024,
-            batch_size=256,
-            n_epochs=8,
-            gamma=0.995,
-            learning_rate=lr_schedule,
-            clip_range=linear_schedule(0.2, 0.05),
-            ent_coef=0.01,
-            vf_coef=0.8,
-            max_grad_norm=0.5,
-            gae_lambda=0.95,
-            tensorboard_log="logs",
+            model = PPO(
+                "CnnPolicy",
+                env,
+                device="cuda",
+                verbose=1,
+                n_steps=1024,  # Back to original
+                batch_size=256,  # Back to original
+                n_epochs=8,  # Back to original
+                gamma=0.995,
+                learning_rate=lr_schedule,
+                clip_range=linear_schedule(0.2, 0.05),
+                ent_coef=0.01,
+                vf_coef=0.8,
+                max_grad_norm=0.5,
+                gae_lambda=0.95,
+                tensorboard_log="logs",
+            )
+            print(f"💾 Memory after model creation: {get_memory_usage():.1f} GB")
+
+        # Checkpoint callback
+        checkpoint_callback = CheckpointCallback(
+            save_freq=100000 // args.num_envs,  # Back to original
+            save_path=save_dir,
+            name_prefix="ppo_sf2",
         )
 
-    # Checkpoint callback
-    checkpoint_callback = CheckpointCallback(
-        save_freq=1000000 // args.num_envs,
-        save_path=save_dir,
-        name_prefix="ppo_sf2",
-    )
+        # Training
+        start_time = time.time()
+        print(f"🏋️ Starting training for {args.total_timesteps:,} timesteps")
 
-    # Training
-    start_time = time.time()
-    print(f"🏋️ Starting training for {args.total_timesteps:,} timesteps")
-
-    try:
         model.learn(
             total_timesteps=args.total_timesteps,
             callback=[checkpoint_callback],
@@ -202,18 +213,23 @@ def main():
         return
 
     finally:
-        env.close()
+        # Proper cleanup
+        if env is not None:
+            env.close()
+        # Force garbage collection
+        gc.collect()
 
-    # Always save final model
-    final_model_path = os.path.join(save_dir, "ppo_sf2_final.zip")
-    model.save(final_model_path)
-    print(f"💾 Final model saved to: {final_model_path}")
+    # Always save final model if it exists
+    if model is not None:
+        final_model_path = os.path.join(save_dir, "ppo_sf2_final.zip")
+        model.save(final_model_path)
+        print(f"💾 Final model saved to: {final_model_path}")
 
-    print("✅ Training complete!")
-    print(f"🎮 Test with: python eval.py --model-path {final_model_path}")
-    print(
-        f"🔄 Resume with: python train.py --resume {final_model_path} --learning-rate {args.learning_rate}"
-    )
+        print("✅ Training complete!")
+        print(f"🎮 Test with: python eval.py --model-path {final_model_path}")
+        print(
+            f"🔄 Resume with: python train.py --resume {final_model_path} --learning-rate {args.learning_rate}"
+        )
 
 
 if __name__ == "__main__":
