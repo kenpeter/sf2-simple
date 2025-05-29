@@ -41,13 +41,12 @@ def make_env(game, state, seed=0, rendering=False):
 
 
 def linear_schedule(initial_value, final_value=None):
-    """Linear scheduler for learning rate - FIXED VERSION"""
     if final_value is None:
-        final_value = initial_value * 0.1  # Decay to 10% of initial
+        final_value = initial_value * 0.1
 
-    def scheduler(progress):
-        # Progress goes from 0 to 1 during training
-        return initial_value + progress * (final_value - initial_value)
+    def scheduler(progress_remaining):
+        # SB3 passes progress_remaining: 1.0 → 0.0
+        return final_value + progress_remaining * (initial_value - final_value)
 
     return scheduler
 
