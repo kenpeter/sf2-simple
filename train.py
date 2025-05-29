@@ -41,11 +41,13 @@ def make_env(game, state, seed=0, rendering=False):
 
 
 def linear_schedule(initial_value, final_value=None):
+    """Linear scheduler for learning rate - PROPERLY FIXED for SB3"""
     if final_value is None:
-        final_value = initial_value * 0.1
+        final_value = initial_value * 0.1  # Decay to 10% of initial
 
     def scheduler(progress_remaining):
-        # SB3 passes progress_remaining: 1.0 → 0.0
+        # SB3 passes progress_remaining: 1.0 → 0.0 during training
+        # We want: initial_value → final_value
         return final_value + progress_remaining * (initial_value - final_value)
 
     return scheduler
@@ -143,13 +145,13 @@ def main():
         model = PPO.load(args.resume, env=env, device="cuda")
 
         # Update learning rate for resumed training
-        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
+        lr_schedule = linear_schedule(args.learning_rate)  # Will decay to 10%
         model.learning_rate = lr_schedule
         print("✅ Model loaded, resuming training")
 
     else:
         print("🧠 Creating new PPO model")
-        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
+        lr_schedule = linear_schedule(args.learning_rate)  # Will decay to 10%
 
         model = PPO(
             "CnnPolicy",
