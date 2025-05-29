@@ -29,13 +29,8 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.losses = 0
         self.total_rounds = 0
 
-        # Observation space: 4 frames * 3 channels = 12 channels
-        # self.observation_space = gym.spaces.Box(
-        #     low=0, high=255, shape=(100, 128, 12), dtype=np.uint8
-        # )
-
-        # The declared observation space (100,128,12) doesn't match the actual stacked frames shape (112,160,12).
-        # This causes dimension mismatch errors.
+        # FIXED observation space - matches actual downsampled dimensions
+        # Retro env downsamples to (112, 160, 3), stacked = (112, 160, 12)
         self.observation_space = gym.spaces.Box(
             low=0, high=255, shape=(112, 160, 12), dtype=np.uint8
         )
@@ -52,7 +47,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             if len(self.frame_stack) > 0:
                 self.frame_stack.append(self.frame_stack[-1].copy())
             else:
-                self.frame_stack.append(np.zeros((100, 128, 3), dtype=np.uint8))
+                self.frame_stack.append(np.zeros((112, 160, 3), dtype=np.uint8))
 
         # Concatenate frames along channel dimension
         stacked = np.concatenate(list(self.frame_stack), axis=-1)
@@ -65,7 +60,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _calculate_reward(self, curr_player_health, curr_opponent_health):
-        """Calculate reward based on damage dealt/received"""
+        """Enhanced reward calculation"""
         reward = 0.0
         done = False
 
@@ -115,9 +110,9 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
 
-        # Initialize frame stack
+        # Initialize frame stack with downsampled observation
         self.frame_stack.clear()
-        downsampled = observation[::2, ::2, :]  # Downsample to (100, 128, 3)
+        downsampled = observation[::2, ::2, :]  # Simple downsample to (112, 160, 3)
 
         for _ in range(self.num_frames):
             self.frame_stack.append(downsampled.copy())
@@ -148,7 +143,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             done = custom_done
 
         # Update frame stack
-        downsampled = observation[::2, ::2, :]
+        downsampled = observation[::2, ::2, :]  # Simple downsample to (112, 160, 3)
         self.frame_stack.append(downsampled)
         stacked_obs = self._stack_observation()
 
