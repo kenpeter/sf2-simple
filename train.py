@@ -56,10 +56,10 @@ def main():
         "--total-timesteps", type=int, default=10000000, help="Total timesteps to train"
     )
     parser.add_argument(
-        "--num-envs", type=int, default=40, help="Number of parallel environments"
+        "--num-envs", type=int, default=16, help="Number of parallel environments"
     )
     parser.add_argument(
-        "--learning-rate", type=float, default=2e-3, help="Learning rate"
+        "--learning-rate", type=float, default=5e-4, help="Learning rate"
     )
     parser.add_argument(
         "--resume", type=str, default=None, help="Resume from saved model path"
