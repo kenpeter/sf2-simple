@@ -11,7 +11,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.env = env
 
         # Frame stacking - Updated to 6 frames
-        self.num_frames = 6
+        self.num_frames = 18
         self.frame_stack = collections.deque(maxlen=self.num_frames)
 
         # Health tracking
@@ -31,7 +31,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
 
         # Observation space: 6 frames * 3 channels = 18 channels
         self.observation_space = gym.spaces.Box(
-            low=0, high=255, shape=(100, 128, 18), dtype=np.uint8
+            low=0, high=255, shape=(100, 128, 54), dtype=np.uint8
         )
 
         print(f"🚀 StreetFighter Wrapper initialized:")
