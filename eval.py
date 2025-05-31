@@ -57,13 +57,21 @@ def create_eval_env(game, state):
         render_mode="human",  # Enable rendering for human observation
     )
 
-    # Apply custom wrapper with reset_round=True to match training
-    env = StreetFighterCustomWrapper(env, reset_round=True, rendering=True)
+    # Apply custom wrapper with same settings as training
+    # IMPORTANT: Must match training wrapper configuration exactly!
+    env = StreetFighterCustomWrapper(
+        env,
+        reset_round=True,
+        rendering=True,
+        max_episode_steps=5000,  # ADDED: Match training configuration
+    )
+
+    # Print observation space for debugging
+    print(f"🔍 Evaluation environment observation space: {env.observation_space.shape}")
 
     return env
 
 
-# main has model path, state file, ep
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate trained Street Fighter II Agent"
@@ -71,7 +79,7 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_10000000_steps.zip",
+        default="trained_models/ppo_sf2_9000000_steps.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
@@ -96,7 +104,12 @@ def main():
 
     # Check if model exists
     if not os.path.exists(args.model_path):
-        print(f"Error: Model file not found at {args.model_path}")
+        print(f"❌ Error: Model file not found at {args.model_path}")
+        print("Available models in trained_models/:")
+        if os.path.exists("trained_models"):
+            for f in os.listdir("trained_models"):
+                if f.endswith(".zip"):
+                    print(f"   - {f}")
         return
 
     game = "StreetFighterIISpecialChampionEdition-Genesis"
@@ -113,39 +126,60 @@ def main():
         # Use custom state file
         state_file = args.state_file
 
-    print(f"Loading model from: {args.model_path}")
-    print(f"Using state file: {state_file}")
-    print(f"Will run {args.episodes} episodes")
-    print("Running at 60 FPS for smooth gameplay")
+    print(f"🤖 Loading model from: {args.model_path}")
+    print(f"🎮 Using state file: {state_file}")
+    print(f"🔄 Will run {args.episodes} episodes")
+    print("⚡ Running at 60 FPS for smooth gameplay")
+    print("\n⚠️  IMPORTANT: Make sure the model was trained with the same wrapper!")
+    print(
+        "   If you get tensor errors, the model was trained with different observation space."
+    )
     print("\nPress Ctrl+C to quit at any time")
-    print("=" * 50)
+    print("=" * 60)
 
     # Create evaluation environment
     try:
         env = create_eval_env(game, state_file)
-        print("Environment created successfully!")
+        print("✅ Environment created successfully!")
     except Exception as e:
-        print(f"Error creating environment: {e}")
-        print("\nTry using --use-built-in-state flag if you're using a built-in state")
+        print(f"❌ Error creating environment: {e}")
+        print(
+            "\n💡 Try using --use-built-in-state flag if you're using a built-in state"
+        )
         return
 
     # Load the trained model
     try:
+        print("🧠 Loading model...")
         model = PPO.load(args.model_path, device="cuda")
-        print("Model loaded successfully!")
+        print("✅ Model loaded successfully!")
+
+        # Check observation space compatibility
+        print(f"🔍 Model expects observation shape: {model.observation_space.shape}")
+        print(f"🔍 Environment provides shape: {env.observation_space.shape}")
+
+        if model.observation_space.shape != env.observation_space.shape:
+            print("⚠️  WARNING: Observation space mismatch!")
+            print("   This model was trained with different wrapper settings.")
+            print("   You may need to use the same wrapper configuration as training.")
+            print("   Or retrain the model with the current wrapper.")
+
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"❌ Error loading model: {e}")
         return
 
     try:
+        total_wins = 0
+        total_episodes = 0
+
         for episode in range(args.episodes):
-            print(f"\n--- Episode {episode + 1}/{args.episodes} ---")
+            print(f"\n🥊 --- Episode {episode + 1}/{args.episodes} ---")
 
             obs, info = env.reset()
             episode_reward = 0
             step_count = 0
 
-            print("Starting new match... Watch the game window!")
+            print("🎬 Starting new match... Watch the game window!")
 
             while True:
                 # Get action from the trained model
@@ -169,38 +203,48 @@ def main():
                     player_hp = info.get("agent_hp", "?")
                     enemy_hp = info.get("enemy_hp", "?")
                     print(
-                        f"Step {step_count}: Player HP: {player_hp}, Enemy HP: {enemy_hp}"
+                        f"   Step {step_count}: Player HP: {player_hp}, Enemy HP: {enemy_hp}"
                     )
 
-            print(f"Episode {episode + 1} finished!")
-            print(f"Total reward: {episode_reward:.1f}")
-            print(f"Steps taken: {step_count}")
+            total_episodes += 1
+            print(f"🏁 Episode {episode + 1} finished!")
+            print(f"   Total reward: {episode_reward:.1f}")
+            print(f"   Steps taken: {step_count}")
 
             # Get final health values
             player_hp = info.get("agent_hp", "?")
             enemy_hp = info.get("enemy_hp", "?")
-            print(f"Final - Player HP: {player_hp}, Enemy HP: {enemy_hp}")
+            print(f"   Final - Player HP: {player_hp}, Enemy HP: {enemy_hp}")
 
             # Determine winner
             if player_hp <= 0:
-                print("🔴 AI Lost this round")
+                print("   🔴 AI Lost this round")
             elif enemy_hp <= 0:
-                print("🟢 AI Won this round")
+                print("   🟢 AI Won this round")
+                total_wins += 1
             else:
-                print("⚪ Round ended without knockout")
+                print("   ⚪ Round ended without knockout")
 
             # Pause between episodes
             if episode < args.episodes - 1:
-                print("\nWaiting 3 seconds before next episode...")
+                print("\n⏳ Waiting 3 seconds before next episode...")
                 time.sleep(3)
 
+        # Final statistics
+        print(f"\n📊 Final Results:")
+        print(f"   Wins: {total_wins}/{total_episodes}")
+        print(f"   Win Rate: {(total_wins/total_episodes)*100:.1f}%")
+
     except KeyboardInterrupt:
-        print("\n\nEvaluation interrupted by user")
+        print("\n\n⏹️  Evaluation interrupted by user")
     except Exception as e:
-        print(f"\nError during evaluation: {e}")
+        print(f"\n❌ Error during evaluation: {e}")
+        print(
+            "💡 If you get tensor shape errors, the model was trained with different wrapper settings"
+        )
     finally:
         env.close()
-        print("\nEvaluation complete!")
+        print("\n✅ Evaluation complete!")
 
 
 if __name__ == "__main__":
