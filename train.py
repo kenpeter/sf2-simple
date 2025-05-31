@@ -55,10 +55,13 @@ def main():
         "--total-timesteps", type=int, default=10000000, help="Total timesteps to train"
     )
     parser.add_argument(
-        "--num-envs", type=int, default=16, help="Number of parallel environments"
+        "--num-envs", type=int, default=8, help="Number of parallel environments"
     )
     parser.add_argument(
-        "--learning-rate", type=float, default=3e-4, help="Learning rate"  # FIXED: Increased from 1e-4
+        "--learning-rate",
+        type=float,
+        default=3e-4,
+        help="Learning rate",  # FIXED: Increased from 1e-4
     )
     parser.add_argument(
         "--resume", type=str, default=None, help="Resume from saved model path"
@@ -156,11 +159,13 @@ def main():
             device="cuda",
             verbose=1,
             n_steps=1024,
-            batch_size=1024,           # FIXED: Increased from 256 to 512
+            batch_size=1024,  # FIXED: Increased from 256 to 512
             n_epochs=8,
             gamma=0.995,
             learning_rate=lr_schedule,
-            clip_range=linear_schedule(0.2, 0.1),  # FIXED: Less aggressive clipping decay (to 0.1 instead of 0.05)
+            clip_range=linear_schedule(
+                0.2, 0.1
+            ),  # FIXED: Less aggressive clipping decay (to 0.1 instead of 0.05)
             ent_coef=0.01,
             vf_coef=0.8,
             max_grad_norm=0.5,
