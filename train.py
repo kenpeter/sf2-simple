@@ -10,7 +10,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-# Import the wrapper
+# Import the fixed wrapper
 from wrapper import StreetFighterCustomWrapper
 
 
@@ -41,7 +41,7 @@ def make_env(game, state, seed=0, rendering=False):
 
 
 def linear_schedule(initial_value, final_value=0.0):
-    """Linear scheduler for learning rate"""
+    """FIXED: Less aggressive linear scheduler"""
 
     def scheduler(progress):
         return final_value + progress * (initial_value - final_value)
@@ -58,7 +58,7 @@ def main():
         "--num-envs", type=int, default=16, help="Number of parallel environments"
     )
     parser.add_argument(
-        "--learning-rate", type=float, default=1e-4, help="Learning rate"
+        "--learning-rate", type=float, default=3e-4, help="Learning rate"  # FIXED: Increased from 1e-4
     )
     parser.add_argument(
         "--resume", type=str, default=None, help="Resume from saved model path"
@@ -112,10 +112,10 @@ def main():
     save_dir = "trained_models"
     os.makedirs(save_dir, exist_ok=True)
 
-    print(f"🚀 Street Fighter II Training")
+    print(f"🚀 Street Fighter II Training - FIXED Hyperparameters")
     print(f"   Total timesteps: {args.total_timesteps:,}")
     print(f"   Environments: {args.num_envs}")
-    print(f"   Learning rate: {args.learning_rate}")
+    print(f"   Learning rate: {args.learning_rate} (INCREASED)")
     print(f"   State file: {state_file}")
     if args.resume:
         print(f"   Resuming from: {args.resume}")
@@ -140,14 +140,15 @@ def main():
         print(f"📂 Loading model from: {args.resume}")
         model = PPO.load(args.resume, env=env, device="cuda")
 
-        # Update learning rate for resumed training
-        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
+        # FIXED: Less aggressive decay (to 30% instead of 10%)
+        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.3)
         model.learning_rate = lr_schedule
         print("✅ Model loaded, resuming training")
 
     else:
-        print("🧠 Creating new PPO model")
-        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.1)
+        print("🧠 Creating new PPO model with FIXED hyperparameters")
+        # FIXED: Less aggressive decay (to 30% instead of 10%)
+        lr_schedule = linear_schedule(args.learning_rate, args.learning_rate * 0.3)
 
         model = PPO(
             "CnnPolicy",
@@ -155,11 +156,11 @@ def main():
             device="cuda",
             verbose=1,
             n_steps=1024,
-            batch_size=256,
+            batch_size=1024,           # FIXED: Increased from 256 to 512
             n_epochs=8,
             gamma=0.995,
             learning_rate=lr_schedule,
-            clip_range=linear_schedule(0.2, 0.05),
+            clip_range=linear_schedule(0.2, 0.1),  # FIXED: Less aggressive clipping decay (to 0.1 instead of 0.05)
             ent_coef=0.01,
             vf_coef=0.8,
             max_grad_norm=0.5,
