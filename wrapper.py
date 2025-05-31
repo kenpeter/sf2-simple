@@ -111,24 +111,45 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _calculate_reward(self, curr_player_health, curr_opponent_health):
-        """Calculate reward based on damage dealt/received - UNCHANGED"""
+        """FIXED: Enhanced reward function for better learning"""
         reward = 0.0
         done = False
 
-        # Episode timeout
+        # CRITICAL: Base survival reward (prevents negative spiral)
+        reward += 0.1  # Small reward just for staying alive
+
+        # Episode timeout check
         if self.episode_steps >= self.max_episode_steps:
             done = True
+            reward -= 50  # Timeout penalty
             return reward, done
+
+        # Damage calculation
+        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
+        damage_received = max(0, self.prev_player_health - curr_player_health)
+
+        # ENHANCED: Better damage reward scaling
+        reward += damage_dealt * 3.0  # Increased reward for dealing damage
+        reward -= damage_received * 1.0  # Reduced penalty for taking damage
+
+        # Health preservation bonus
+        health_ratio = curr_player_health / self.full_hp
+        reward += health_ratio * 0.5  # Bonus for staying healthy
 
         # Check for round end
         if curr_player_health <= 0 or curr_opponent_health <= 0:
             self.total_rounds += 1
 
             if curr_opponent_health <= 0 and curr_player_health > 0:
+                # MASSIVE WIN BONUS - This is critical!
+                reward += 300  # Huge win reward
                 self.wins += 1
                 win_rate = self.wins / self.total_rounds
                 print(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
+
             elif curr_player_health <= 0 and curr_opponent_health > 0:
+                # Loss penalty (but much less than win bonus)
+                reward -= 100
                 self.losses += 1
                 win_rate = self.wins / self.total_rounds
                 print(f"💀 LOSS! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
@@ -136,10 +157,9 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             if self.reset_round:
                 done = True
 
-        # Damage-based reward: +1 per damage dealt, -1 per damage received
-        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
-        damage_received = max(0, self.prev_player_health - curr_player_health)
-        reward = damage_dealt - damage_received
+        # Combo bonus (big damage likely means combos)
+        if damage_dealt >= 8:
+            reward += damage_dealt * 1.0  # Extra combo bonus
 
         # Update health tracking
         self.prev_player_health = curr_player_health
