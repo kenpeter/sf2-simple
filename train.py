@@ -166,7 +166,7 @@ def main():
             clip_range=linear_schedule(
                 0.2, 0.1
             ),  # FIXED: Less aggressive clipping decay (to 0.1 instead of 0.05)
-            ent_coef=0.01,
+            ent_coef=0.03,
             vf_coef=0.8,
             max_grad_norm=0.5,
             gae_lambda=0.95,
