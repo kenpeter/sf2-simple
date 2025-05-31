@@ -12,7 +12,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
 
         # Frame processing parameters
         self.resize_scale = 0.75  # Resize to 75% of original size
-        self.num_frames = 18
+        self.num_frames = 9  # CHANGED: Reduced from 18 to 9 frames
         self.frame_stack = collections.deque(maxlen=self.num_frames)
 
         # Health tracking
