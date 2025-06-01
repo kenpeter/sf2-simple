@@ -4,7 +4,7 @@ import numpy as np
 
 
 class StreetFighterCustomWrapper(gym.Wrapper):
-    """Fixed Street Fighter wrapper - observation space matches actual frame dimensions"""
+    """Fixed Street Fighter wrapper - outputs channels-first format (C, H, W)"""
 
     def __init__(self, env, reset_round=True, rendering=False, max_episode_steps=5000):
         super(StreetFighterCustomWrapper, self).__init__(env)
@@ -43,20 +43,20 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         self.target_height = int(original_height * self.resize_scale)
         self.target_width = int(original_width * self.resize_scale)
 
-        # FIXED: Use resized frame dimensions with grayscale (1 channel per frame)
+        # FIXED: Use channels-first format (C, H, W) to match model expectations
         self.observation_space = gym.spaces.Box(
             low=0,
             high=255,
-            shape=(self.target_height, self.target_width, self.num_frames),
+            shape=(self.num_frames, self.target_height, self.target_width),  # C, H, W
             dtype=np.uint8,
         )
 
-        print(f"🚀 StreetFighter Wrapper initialized (FIXED - Grayscale + Resize):")
+        print(f"🚀 StreetFighter Wrapper initialized (CHANNELS-FIRST FORMAT):")
         print(f"   Original frame shape: {actual_obs.shape}")
         print(
             f"   Resized to: ({self.target_height}, {self.target_width}) - {int(self.resize_scale*100)}% of original"
         )
-        print(f"   Final observation shape: {self.observation_space.shape}")
+        print(f"   Final observation shape: {self.observation_space.shape} (C, H, W)")
         print(f"   Max episode steps: {self.max_episode_steps}")
         print(f"   Frame stacking: {self.num_frames} grayscale frames")
 
@@ -88,7 +88,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             return gray
 
     def _stack_observation(self):
-        """Stack recent processed frames"""
+        """Stack frames in channels-first format (C, H, W)"""
         # Fill stack if not enough frames
         while len(self.frame_stack) < self.num_frames:
             if len(self.frame_stack) > 0:
@@ -100,8 +100,8 @@ class StreetFighterCustomWrapper(gym.Wrapper):
                 )
                 self.frame_stack.append(dummy_frame)
 
-        # Stack processed frames along channel dimension
-        stacked = np.stack(list(self.frame_stack), axis=-1)
+        # FIXED: Stack frames along first dimension (channels-first)
+        stacked = np.stack(list(self.frame_stack), axis=0)  # Shape: (C, H, W)
         return stacked
 
     def _extract_health(self, info):
@@ -118,6 +118,7 @@ class StreetFighterCustomWrapper(gym.Wrapper):
         # Episode timeout
         if self.episode_steps >= self.max_episode_steps:
             done = True
+            reward -= 100  # Timeout penalty
             return reward, done
 
         # Check for round end
@@ -125,10 +126,14 @@ class StreetFighterCustomWrapper(gym.Wrapper):
             self.total_rounds += 1
 
             if curr_opponent_health <= 0 and curr_player_health > 0:
+                # Large win bonus
+                reward += 500  # Big win reward
                 self.wins += 1
                 win_rate = self.wins / self.total_rounds
                 print(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
             elif curr_player_health <= 0 and curr_opponent_health > 0:
+                # Loss penalty
+                reward -= 200
                 self.losses += 1
                 win_rate = self.wins / self.total_rounds
                 print(f"💀 LOSS! {self.wins}/{self.total_rounds} ({win_rate:.1%})")

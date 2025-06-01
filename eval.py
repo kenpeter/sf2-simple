@@ -1,6 +1,7 @@
 import os
 import argparse
 import time
+import numpy as np
 
 import retro
 import gymnasium as gym
@@ -72,6 +73,38 @@ def create_eval_env(game, state):
     return env
 
 
+def convert_observation_format(obs, target_shape):
+    """Convert observation between channels-first and channels-last formats"""
+    current_shape = obs.shape
+
+    if current_shape == target_shape:
+        return obs
+
+    # Check if we need to transpose from (H, W, C) to (C, H, W)
+    if len(current_shape) == 3 and len(target_shape) == 3:
+        if (current_shape[0], current_shape[1], current_shape[2]) == (
+            target_shape[1],
+            target_shape[2],
+            target_shape[0],
+        ):
+            # Transpose from (H, W, C) to (C, H, W)
+            # print(f"🔄 Converting observation from {current_shape} to {target_shape}")
+            return np.transpose(obs, (2, 0, 1))
+        elif (current_shape[0], current_shape[1], current_shape[2]) == (
+            target_shape[2],
+            target_shape[0],
+            target_shape[1],
+        ):
+            # Transpose from (C, H, W) to (H, W, C)
+            print(f"🔄 Converting observation from {current_shape} to {target_shape}")
+            return np.transpose(obs, (1, 2, 0))
+
+    print(
+        f"⚠️  Warning: Cannot convert observation shape {current_shape} to {target_shape}"
+    )
+    return obs
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate trained Street Fighter II Agent"
@@ -79,7 +112,7 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_9000000_steps.zip",
+        default="trained_models/ppo_sf2_25999220_steps.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
@@ -130,10 +163,7 @@ def main():
     print(f"🎮 Using state file: {state_file}")
     print(f"🔄 Will run {args.episodes} episodes")
     print("⚡ Running at 60 FPS for smooth gameplay")
-    print("\n⚠️  IMPORTANT: Make sure the model was trained with the same wrapper!")
-    print(
-        "   If you get tensor errors, the model was trained with different observation space."
-    )
+    print("\n🔧 FIXED: Automatic observation format conversion enabled!")
     print("\nPress Ctrl+C to quit at any time")
     print("=" * 60)
 
@@ -155,14 +185,16 @@ def main():
         print("✅ Model loaded successfully!")
 
         # Check observation space compatibility
-        print(f"🔍 Model expects observation shape: {model.observation_space.shape}")
-        print(f"🔍 Environment provides shape: {env.observation_space.shape}")
+        model_shape = model.observation_space.shape
+        env_shape = env.observation_space.shape
 
-        if model.observation_space.shape != env.observation_space.shape:
-            print("⚠️  WARNING: Observation space mismatch!")
-            print("   This model was trained with different wrapper settings.")
-            print("   You may need to use the same wrapper configuration as training.")
-            print("   Or retrain the model with the current wrapper.")
+        print(f"🔍 Model expects observation shape: {model_shape}")
+        print(f"🔍 Environment provides shape: {env_shape}")
+
+        if model_shape != env_shape:
+            print("🔧 Observation shapes differ - will auto-convert during evaluation")
+        else:
+            print("✅ Observation shapes match perfectly!")
 
     except Exception as e:
         print(f"❌ Error loading model: {e}")
@@ -182,8 +214,13 @@ def main():
             print("🎬 Starting new match... Watch the game window!")
 
             while True:
+                # FIXED: Convert observation format if needed
+                obs_for_model = convert_observation_format(
+                    obs, model.observation_space.shape
+                )
+
                 # Get action from the trained model
-                action, _states = model.predict(obs, deterministic=False)
+                action, _states = model.predict(obs_for_model, deterministic=False)
 
                 # Take step in environment
                 obs, reward, terminated, truncated, info = env.step(action)
@@ -239,9 +276,10 @@ def main():
         print("\n\n⏹️  Evaluation interrupted by user")
     except Exception as e:
         print(f"\n❌ Error during evaluation: {e}")
-        print(
-            "💡 If you get tensor shape errors, the model was trained with different wrapper settings"
-        )
+        print("💡 Check that your model and wrapper configurations are compatible")
+        import traceback
+
+        traceback.print_exc()
     finally:
         env.close()
         print("\n✅ Evaluation complete!")
