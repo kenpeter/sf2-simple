@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CUDA-Optimized Training Script for Street Fighter II with Enhanced Vision Pipeline
+CUDA-Optimized Training Script for Street Fighter II with Simplified Vision Pipeline
 Ensures all operations run on GPU for maximum performance
 """
 
@@ -18,8 +18,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-# Import the enhanced wrapper
-from wrapper import StreetFighterVisionWrapper, StreetFighterEnhancedCNN
+# Import the simplified wrapper
+from wrapper import StreetFighterVisionWrapper, StreetFighterSimplifiedCNN
 
 
 # Force CUDA usage and optimize
@@ -49,14 +49,16 @@ def setup_cuda_optimization():
     return device
 
 
-class CUDAOptimizedVisionTransformer(nn.Module):
-    """CUDA-optimized Vision Transformer with consistent dtype handling"""
+class CUDAOptimizedSimplifiedVisionTransformer(nn.Module):
+    """CUDA-optimized Simplified Vision Transformer - attack/defend only"""
 
-    def __init__(self, visual_dim=512, opencv_dim=2, momentum_dim=18, seq_length=8):
+    def __init__(
+        self, visual_dim=512, opencv_dim=2, momentum_dim=19, seq_length=8
+    ):  # Changed from 18 to 19
         super().__init__()
         self.seq_length = seq_length
 
-        # Combined input dimension
+        # Combined input dimension: 512 + 2 + 19 = 533
         combined_dim = visual_dim + opencv_dim + momentum_dim
 
         # Transformer dimension
@@ -83,7 +85,7 @@ class CUDAOptimizedVisionTransformer(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
-        # Tactical prediction heads with consistent dtypes
+        # Simplified tactical prediction head - only attack and defend timing
         self.tactical_predictor = nn.Sequential(
             nn.Linear(d_model, 256),
             nn.ReLU(),
@@ -91,14 +93,7 @@ class CUDAOptimizedVisionTransformer(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 4),
-        )
-
-        self.position_predictor = nn.Sequential(
-            nn.Linear(d_model, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 3),
+            nn.Linear(128, 2),  # [attack_timing, defend_timing] only
         )
 
     def _create_positional_encoding(self, max_len, d_model):
@@ -131,21 +126,13 @@ class CUDAOptimizedVisionTransformer(nn.Module):
         transformer_out = self.transformer(projected)
         final_features = transformer_out[:, -1, :]  # Last timestep
 
-        # Generate predictions
+        # Generate simplified predictions
         tactical_logits = self.tactical_predictor(final_features)
         tactical_probs = torch.sigmoid(tactical_logits)
-
-        position_logits = self.position_predictor(final_features)
-        position_probs = torch.softmax(position_logits, dim=-1)
 
         return {
             "attack_timing": tactical_probs[:, 0],
             "defend_timing": tactical_probs[:, 1],
-            "aggression_level": tactical_probs[:, 2],
-            "positioning_score": tactical_probs[:, 3],
-            "should_advance": position_probs[:, 0],
-            "should_retreat": position_probs[:, 1],
-            "should_maintain": position_probs[:, 2],
         }
 
 
@@ -182,7 +169,7 @@ class CUDAOptimizedCNN(nn.Module):
         # Projection layer
         self.projection = nn.Linear(256, feature_dim)
 
-        # Tactical predictions cache
+        # Simplified tactical predictions cache
         self.register_buffer("attack_timing_cache", torch.tensor(0.0))
         self.register_buffer("defend_timing_cache", torch.tensor(0.0))
 
@@ -211,7 +198,7 @@ class CUDAOptimizedCNN(nn.Module):
             )
 
     def update_tactical_predictions(self, attack_timing, defend_timing):
-        """Update tactical predictions on CUDA"""
+        """Update simplified tactical predictions on CUDA"""
         self.attack_timing_cache.copy_(
             torch.tensor(attack_timing, device="cuda", dtype=torch.float32)
         )
@@ -220,7 +207,7 @@ class CUDAOptimizedCNN(nn.Module):
         )
 
 
-class CUDAStreetFighterCNN(StreetFighterEnhancedCNN):
+class CUDAStreetFighterCNN(StreetFighterSimplifiedCNN):
     """CUDA-optimized version of Street Fighter CNN for stable-baselines3"""
 
     def __init__(self, observation_space, features_dim=512):
@@ -256,7 +243,7 @@ class CUDAStreetFighterCNN(StreetFighterEnhancedCNN):
 
 
 class CUDAOptimizedVisionPipelineCallback(BaseCallback):
-    """CUDA-optimized callback with GPU memory monitoring"""
+    """CUDA-optimized callback with GPU memory monitoring - simplified"""
 
     def __init__(self, enable_vision_transformer=True, verbose=0):
         super().__init__(verbose)
@@ -272,10 +259,10 @@ class CUDAOptimizedVisionPipelineCallback(BaseCallback):
         return True
 
     def _log_cuda_training_stats(self):
-        """Log CUDA-optimized training statistics"""
+        """Log CUDA-optimized training statistics - simplified"""
         try:
             print(
-                f"\n--- 🚀 CUDA Street Fighter Vision Pipeline @ Step {self.num_timesteps:,} ---"
+                f"\n--- 🚀 CUDA Street Fighter Simplified Vision Pipeline @ Step {self.num_timesteps:,} ---"
             )
 
             # CUDA memory statistics
@@ -311,16 +298,12 @@ class CUDAOptimizedVisionPipelineCallback(BaseCallback):
                                 f"   🧠 CUDA Vision Transformer: Active ({predictions:,} predictions)"
                             )
 
-                            # Tactical statistics
+                            # Simplified tactical statistics - only attack and defend
                             avg_attack = stats.get("avg_attack_timing", 0.0)
                             avg_defend = stats.get("avg_defend_timing", 0.0)
-                            avg_aggression = stats.get("avg_aggression_level", 0.0)
-                            avg_positioning = stats.get("avg_positioning_score", 0.0)
 
                             print(f"   ⚔️  Attack Timing: {avg_attack:.3f}")
                             print(f"   🛡️  Defend Timing: {avg_defend:.3f}")
-                            print(f"   🔥 Aggression: {avg_aggression:.3f}")
-                            print(f"   📍 Positioning: {avg_positioning:.3f}")
 
             # Learning rate
             if hasattr(self.model, "learning_rate"):
@@ -341,7 +324,7 @@ def main():
     device = setup_cuda_optimization()
 
     parser = argparse.ArgumentParser(
-        description="CUDA-Optimized Street Fighter II Enhanced Vision Training"
+        description="CUDA-Optimized Street Fighter II Simplified Vision Training"
     )
     parser.add_argument("--total-timesteps", type=int, default=10000000)
     parser.add_argument("--num-envs", type=int, default=8)
@@ -373,16 +356,16 @@ def main():
             print(f"❌ State file not found: ken_bison_12.state")
             return
 
-    save_dir = "trained_models_cuda_enhanced"
+    save_dir = "trained_models_cuda_simplified"
     os.makedirs(save_dir, exist_ok=True)
 
-    print(f"🚀 CUDA-Optimized Street Fighter II Training")
+    print(f"🚀 CUDA-Optimized Street Fighter II Simplified Training")
     print(f"   Total timesteps: {args.total_timesteps:,}")
     print(f"   Learning rate: {args.learning_rate}")
     print(f"   Mixed precision: {args.mixed_precision}")
     print(f"   Device: {device}")
 
-    # Create environment with enhanced wrapper
+    # Create environment with simplified wrapper
     def make_env():
         env = retro.make(
             game=game,
@@ -446,7 +429,7 @@ def main():
             vf_coef=0.5,
             max_grad_norm=0.5,
             gae_lambda=0.95,
-            tensorboard_log="logs_cuda_enhanced",
+            tensorboard_log="logs_cuda_simplified",
         )
 
     # Inject CUDA-optimized feature extractor
@@ -465,7 +448,7 @@ def main():
     checkpoint_callback = CheckpointCallback(
         save_freq=100000,
         save_path=save_dir,
-        name_prefix="ppo_sf2_cuda_enhanced",
+        name_prefix="ppo_sf2_cuda_simplified",
     )
 
     cuda_callback = CUDAOptimizedVisionPipelineCallback(
@@ -474,7 +457,7 @@ def main():
 
     # Training with CUDA optimizations
     start_time = time.time()
-    print(f"🏋️ Starting CUDA-optimized training...")
+    print(f"🏋️ Starting CUDA-optimized simplified training...")
     print(f"💡 Note: Mixed precision disabled to avoid dtype issues")
 
     try:
@@ -495,7 +478,7 @@ def main():
         env.close()
 
     # Save final model
-    final_model_path = os.path.join(save_dir, "ppo_sf2_cuda_enhanced_final.zip")
+    final_model_path = os.path.join(save_dir, "ppo_sf2_cuda_simplified_final.zip")
     model.save(final_model_path)
     print(f"💾 Final CUDA model saved to: {final_model_path}")
 
@@ -503,7 +486,7 @@ def main():
     torch.cuda.empty_cache()
     print("🧹 CUDA cache cleared")
 
-    print("✅ CUDA-optimized training complete!")
+    print("✅ CUDA-optimized simplified training complete!")
 
 
 if __name__ == "__main__":

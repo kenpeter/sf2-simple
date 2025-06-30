@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-wrapper.py - Enhanced Vision Pipeline for Street Fighter II with Position & Score Tracking
+wrapper.py - Simplified Vision Pipeline for Street Fighter II with Position & Score Tracking
 Raw Frames → OpenCV → CNN ↘
-                           Vision Transformer → Predictions
+                           Vision Transformer → Attack/Defend Predictions Only
 Health/Score/Position Data → Enhanced Momentum Tracker ↗
 """
 
@@ -162,7 +162,7 @@ class CNNFeatureExtractor(nn.Module):
         # Project to desired feature dimension
         self.projection = nn.Linear(256, feature_dim)
 
-        # Add tactical prediction tracking
+        # Add tactical prediction tracking (simplified to attack/defend only)
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
 
@@ -322,6 +322,14 @@ class EnhancedMomentumTracker:
             dtype=np.float32,
         )
 
+        # Debug: Check actual feature count
+        actual_count = len(features)
+        expected_count = 19  # Count shows this should be 19, not 18
+        if actual_count != expected_count:
+            logger.warning(
+                f"Momentum feature count mismatch: got {actual_count}, expected {expected_count}"
+            )
+
         return features
 
     def _calculate_momentum(self, history):
@@ -361,35 +369,42 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class EnhancedVisionTransformer(nn.Module):
-    """Enhanced Vision Transformer with relative position and score awareness for Street Fighter"""
+class SimplifiedVisionTransformer(nn.Module):
+    """Simplified Vision Transformer - only attack and defend timing predictions"""
 
-    def __init__(self, visual_dim=512, opencv_dim=2, momentum_dim=18, seq_length=8):
+    def __init__(
+        self, visual_dim=512, opencv_dim=2, momentum_dim=19, seq_length=8
+    ):  # Changed from 18 to 19
         super().__init__()
         self.seq_length = seq_length
 
-        # Combined input dimension: 512 + 2 + 19 = 532
+        # Combined input dimension: 512 + 2 + 19 = 533
         combined_dim = visual_dim + opencv_dim + momentum_dim
+
+        # Debug: Print actual dimensions to catch mismatches
+        print(f"🔍 SimplifiedVisionTransformer dimensions:")
+        print(
+            f"   Visual: {visual_dim}, OpenCV: {opencv_dim}, Momentum: {momentum_dim}"
+        )
+        print(f"   Expected combined: {combined_dim}")
 
         # Project to transformer dimension
         d_model = 256
         self.input_projection = nn.Linear(combined_dim, d_model)
         self.pos_encoding = PositionalEncoding(d_model, dropout=0.1)
 
-        # Transformer encoder with more layers for complex tactical understanding
+        # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=8,
-            dim_feedforward=d_model * 4,  # Increased feedforward for better capacity
+            dim_feedforward=d_model * 4,
             dropout=0.1,
             batch_first=True,
             activation="gelu",
         )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=4
-        )  # Increased layers
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
-        # Enhanced tactical prediction heads
+        # Simplified tactical prediction head - only attack and defend timing
         self.tactical_predictor = nn.Sequential(
             nn.Linear(d_model, 256),
             nn.ReLU(),
@@ -397,23 +412,37 @@ class EnhancedVisionTransformer(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(
-                128, 4
-            ),  # [attack_timing, defend_timing, aggression_level, positioning_score]
-        )
-
-        # Relative position-specific prediction head
-        self.position_predictor = nn.Sequential(
-            nn.Linear(d_model, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(
-                128, 3
-            ),  # [should_advance, should_retreat, should_maintain_distance]
+            nn.Linear(128, 2),  # [attack_timing, defend_timing] only
         )
 
     def forward(self, combined_sequence: torch.Tensor) -> Dict[str, torch.Tensor]:
         try:
+            # Debug: Check actual input dimensions
+            batch_size, seq_len, actual_dim = combined_sequence.shape
+            expected_dim = 533  # 512 + 2 + 19
+
+            if actual_dim != expected_dim:
+                logger.error(
+                    f"Dimension mismatch: got {actual_dim}, expected {expected_dim}"
+                )
+                # Truncate or pad to fix the mismatch
+                if actual_dim > expected_dim:
+                    combined_sequence = combined_sequence[:, :, :expected_dim]
+                    logger.warning(
+                        f"Truncated input from {actual_dim} to {expected_dim}"
+                    )
+                else:
+                    # Pad with zeros
+                    padding = torch.zeros(
+                        batch_size,
+                        seq_len,
+                        expected_dim - actual_dim,
+                        device=combined_sequence.device,
+                        dtype=combined_sequence.dtype,
+                    )
+                    combined_sequence = torch.cat([combined_sequence, padding], dim=-1)
+                    logger.warning(f"Padded input from {actual_dim} to {expected_dim}")
+
             # Project input features
             projected = self.input_projection(combined_sequence)
             projected = self.pos_encoding(projected)
@@ -426,20 +455,9 @@ class EnhancedVisionTransformer(nn.Module):
             tactical_logits = self.tactical_predictor(final_features)
             tactical_probs = torch.sigmoid(tactical_logits)
 
-            # Generate position predictions (softmax for mutually exclusive choices)
-            position_logits = self.position_predictor(final_features)
-            position_probs = torch.softmax(position_logits, dim=-1)
-
             return {
                 "attack_timing": tactical_probs[:, 0],  # Best time to attack (0-1)
                 "defend_timing": tactical_probs[:, 1],  # Best time to defend (0-1)
-                "aggression_level": tactical_probs[:, 2],  # How aggressive to be (0-1)
-                "positioning_score": tactical_probs[
-                    :, 3
-                ],  # Current position quality (0-1)
-                "should_advance": position_probs[:, 0],  # Move closer to enemy
-                "should_retreat": position_probs[:, 1],  # Move away from enemy
-                "should_maintain": position_probs[:, 2],  # Stay at current distance
             }
 
         except Exception as e:
@@ -449,18 +467,11 @@ class EnhancedVisionTransformer(nn.Module):
             return {
                 "attack_timing": torch.zeros(batch_size, device=device),
                 "defend_timing": torch.zeros(batch_size, device=device),
-                "aggression_level": torch.zeros(batch_size, device=device),
-                "positioning_score": torch.zeros(batch_size, device=device),
-                "should_advance": torch.zeros(batch_size, device=device),
-                "should_retreat": torch.zeros(batch_size, device=device),
-                "should_maintain": torch.ones(
-                    batch_size, device=device
-                ),  # Default to maintain
             }
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """Enhanced Street Fighter wrapper with tactical vision pipeline using relative positioning"""
+    """Simplified Street Fighter wrapper with tactical vision pipeline - attack/defend only"""
 
     def __init__(
         self,
@@ -510,7 +521,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # Initialize pipeline components
         self.opencv_detector = EnhancedOpenCVDetector()
-        self.momentum_tracker = EnhancedMomentumTracker()  # Use enhanced tracker
+        self.momentum_tracker = EnhancedMomentumTracker()
 
         # Frame and feature buffers
         self.frame_buffer = deque(maxlen=frame_stack)
@@ -523,32 +534,30 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.vision_transformer = None
         self.vision_ready = False
 
-        # Current tactical predictions and learning
+        # Current tactical predictions (simplified)
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
-        self.current_aggression_level = 0.0
-        self.current_positioning_score = 0.0
         self.recent_rewards = deque(maxlen=10)
 
-        # Statistics
+        # Statistics (simplified)
         self.stats = {
             "motion_detected_count": 0,
             "predictions_made": 0,
             "vision_transformer_ready": False,
             "avg_attack_timing": 0.0,
             "avg_defend_timing": 0.0,
-            "avg_aggression_level": 0.0,
-            "avg_positioning_score": 0.0,
         }
 
-        logger.info(f"🎮 Enhanced Street Fighter Vision Pipeline Wrapper initialized:")
+        logger.info(
+            f"🎮 Simplified Street Fighter Vision Pipeline Wrapper initialized:"
+        )
         logger.info(f"   Resolution: {self.target_size[1]}×{self.target_size[0]}")
         logger.info(f"   Frame stack: {frame_stack} RGB frames (24 channels total)")
         logger.info(f"   OpenCV: Simple motion detection (2 features)")
         logger.info(
             f"   Enhanced Momentum: Health + Score + Relative Position (18 features)"
         )
-        logger.info(f"   Tactical Predictions: Attack/Defend/Aggression/Positioning")
+        logger.info(f"   Tactical Predictions: Attack/Defend timing only")
         logger.info(
             f"   Position Analysis: Uses relative positioning (agent-enemy diffs)"
         )
@@ -560,7 +569,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
 
     def inject_feature_extractor(self, feature_extractor):
-        """Inject CNN feature extractor and initialize enhanced vision transformer"""
+        """Inject CNN feature extractor and initialize simplified vision transformer"""
         if not self.enable_vision_transformer:
             logger.info("   🔧 Vision Transformer disabled")
             return
@@ -570,18 +579,18 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             actual_feature_dim = self.cnn_extractor.features_dim
             logger.info(f"   📏 Detected CNN feature dimension: {actual_feature_dim}")
 
-            # Initialize enhanced vision transformer with correct dimensions
+            # Initialize simplified vision transformer with correct dimensions
             device = next(feature_extractor.parameters()).device
-            self.vision_transformer = EnhancedVisionTransformer(
+            self.vision_transformer = SimplifiedVisionTransformer(
                 visual_dim=actual_feature_dim,
                 opencv_dim=2,
-                momentum_dim=19,  # Updated for enhanced momentum tracker
+                momentum_dim=19,  # Updated to 19 to match actual momentum features
                 seq_length=self.frame_stack,
             ).to(device)
             self.vision_ready = True
             self.stats["vision_transformer_ready"] = True
 
-            logger.info("   ✅ Enhanced Vision Transformer initialized and ready!")
+            logger.info("   ✅ Simplified Vision Transformer initialized and ready!")
 
         except Exception as e:
             logger.error(f"   ❌ Vision Transformer injection failed: {e}")
@@ -604,11 +613,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Reset defense anti-spam tracking
         self.last_defense_frame = -100
 
-        # Reset tactical predictions
+        # Reset tactical predictions (simplified)
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
-        self.current_aggression_level = 0.0
-        self.current_positioning_score = 0.0
 
         # Initialize frame buffer with processed frames
         processed_frame = self._preprocess_frame(observation)
@@ -625,7 +632,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return stacked_obs, info
 
     def step(self, action):
-        """Execute action and process through enhanced vision pipeline"""
+        """Execute action and process through simplified vision pipeline"""
         # Convert action if needed
         if isinstance(action, np.ndarray) and action.ndim == 0:
             binary_action = np.zeros(self.env.action_space.n, dtype=int)
@@ -675,8 +682,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Get current stacked observation
         stacked_obs = self._get_stacked_observation()
 
-        # Process through enhanced vision pipeline
-        tactical_predictions = self._process_enhanced_vision_pipeline(
+        # Process through simplified vision pipeline
+        tactical_predictions = self._process_simplified_vision_pipeline(
             stacked_obs,
             curr_player_health,
             curr_opponent_health,
@@ -709,10 +716,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         opponent_x = info.get("enemy_x", 90)
         opponent_y = info.get("enemy_y", 64)
 
-        # print(
-        #     f"== agent_hp: {player_health}, enemy_hp: {opponent_health}, score: {score}, player_x: {player_x}, player_y: {player_y}, opponent_x: {opponent_x}, opponent_y: {opponent_y}"
-        # )
-
         return (
             player_health,
             opponent_health,
@@ -723,7 +726,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             opponent_y,
         )
 
-    def _process_enhanced_vision_pipeline(
+    def _process_simplified_vision_pipeline(
         self,
         stacked_obs,
         player_health,
@@ -734,7 +737,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         opponent_x,
         opponent_y,
     ):
-        """Process through enhanced vision pipeline with relative positioning"""
+        """Process through simplified vision pipeline - attack/defend only"""
         try:
             # Step 1: OpenCV detection on latest frame
             latest_frame = self._extract_latest_frame_rgb(stacked_obs)
@@ -773,12 +776,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.opencv_features_history.append(opencv_features)
             self.momentum_features_history.append(momentum_features)
 
-            # Step 4: Enhanced vision transformer prediction
+            # Step 4: Simplified vision transformer prediction
             if (
                 self.vision_ready
                 and len(self.visual_features_history) == self.frame_stack
             ):
-                prediction = self._make_enhanced_tactical_prediction()
+                prediction = self._make_simplified_tactical_prediction()
                 if prediction:
                     self.stats["predictions_made"] += 1
 
@@ -790,12 +793,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     # Update current predictions
                     self.current_attack_timing = prediction["attack_timing"]
                     self.current_defend_timing = prediction["defend_timing"]
-                    self.current_aggression_level = prediction.get(
-                        "aggression_level", 0.0
-                    )
-                    self.current_positioning_score = prediction.get(
-                        "positioning_score", 0.0
-                    )
 
                     # Update running averages for stats
                     self.stats["avg_attack_timing"] = (
@@ -806,25 +803,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                         self.stats["avg_defend_timing"] * 0.99
                         + prediction["defend_timing"] * 0.01
                     )
-                    self.stats["avg_aggression_level"] = (
-                        self.stats["avg_aggression_level"] * 0.99
-                        + prediction.get("aggression_level", 0.0) * 0.01
-                    )
-                    self.stats["avg_positioning_score"] = (
-                        self.stats["avg_positioning_score"] * 0.99
-                        + prediction.get("positioning_score", 0.0) * 0.01
-                    )
 
                     return prediction
 
             return None
 
         except Exception as e:
-            logger.error(f"Enhanced vision pipeline processing error: {e}")
+            logger.error(f"Simplified vision pipeline processing error: {e}")
             return None
 
-    def _make_enhanced_tactical_prediction(self):
-        """Make enhanced tactical predictions using vision transformer with relative positioning"""
+    def _make_simplified_tactical_prediction(self):
+        """Make simplified tactical predictions - attack and defend timing only"""
         try:
             if (
                 not self.vision_ready
@@ -848,22 +837,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 torch.from_numpy(combined_seq).float().unsqueeze(0).to(device)
             )  # [1, 8, 532]
 
-            # Get enhanced tactical predictions from vision transformer
+            # Get simplified tactical predictions from vision transformer
             with torch.no_grad():
                 predictions = self.vision_transformer(combined_tensor)
 
             return {
                 "attack_timing": predictions["attack_timing"].cpu().item(),
                 "defend_timing": predictions["defend_timing"].cpu().item(),
-                "aggression_level": predictions["aggression_level"].cpu().item(),
-                "positioning_score": predictions["positioning_score"].cpu().item(),
-                "should_advance": predictions["should_advance"].cpu().item(),
-                "should_retreat": predictions["should_retreat"].cpu().item(),
-                "should_maintain": predictions["should_maintain"].cpu().item(),
             }
 
         except Exception as e:
-            logger.error(f"Enhanced vision prediction error: {e}")
+            logger.error(f"Simplified vision prediction error: {e}")
             return None
 
     def _preprocess_frame(self, frame):
@@ -964,9 +948,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return reward, done
 
 
-# Enhanced CNN for stable-baselines3 compatibility
-class StreetFighterEnhancedCNN(BaseFeaturesExtractor):
-    """Enhanced CNN feature extractor for Street Fighter compatible with stable-baselines3"""
+# Simplified CNN for stable-baselines3 compatibility
+class StreetFighterSimplifiedCNN(BaseFeaturesExtractor):
+    """Simplified CNN feature extractor for Street Fighter compatible with stable-baselines3"""
 
     def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 512):
         super().__init__(observation_space, features_dim)
@@ -976,7 +960,7 @@ class StreetFighterEnhancedCNN(BaseFeaturesExtractor):
             input_channels=n_input_channels, feature_dim=features_dim
         )
 
-        logger.info(f"🏗️ Street Fighter Enhanced CNN initialized:")
+        logger.info(f"🏗️ Street Fighter Simplified CNN initialized:")
         logger.info(
             f"   Input: {n_input_channels} channels (8 RGB frames) → Output: {features_dim} features"
         )
