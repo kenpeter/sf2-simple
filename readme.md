@@ -14,3 +14,38 @@ python train.py \
   --learning-rate 0.0004 \
   --ent-coef 0.03 \
   --render
+
+
+
+python logger.py --frames 5000 --state ken_bison_12.state --output clean_test.csv --render
+
+
+
+{
+  "info": {
+    "continuetimer": {
+      "address": 16744917,
+      "type": "|u1"
+    },
+    "enemy_health": {
+      "address": 16745154,
+      "type": ">i2"
+    },
+    "enemy_matches_won": {
+      "address": 16745559,
+      "type": ">u4"
+    },
+    "health": {
+      "address": 16744514,
+      "type": ">i2"
+    },
+    "matches_won": {
+      "address": 16744922,
+      "type": "|u1"
+    },
+    "score": {
+      "address": 16744936,
+      "type": ">d4"
+    }
+  }
+}
