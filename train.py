@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-CUDA-Optimized Training Script for Street Fighter II with Simplified Vision Pipeline
-Ensures all operations run on GPU for maximum performance
+CUDA-Optimized Training Script for Street Fighter II with Discrete Actions
+Strategic Features (33: 21 combat + 12 button features) + Discrete Action Space
 """
 
 import os
@@ -18,11 +18,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-# Import the simplified wrapper
+# Import the wrapper with discrete actions
 from wrapper import StreetFighterVisionWrapper, StreetFighterSimplifiedCNN
 
 
-# Force CUDA usage and optimize
 def setup_cuda_optimization():
     """Setup CUDA for optimal performance"""
     if not torch.cuda.is_available():
@@ -49,17 +48,15 @@ def setup_cuda_optimization():
     return device
 
 
-class CUDAOptimizedSimplifiedVisionTransformer(nn.Module):
-    """CUDA-optimized Simplified Vision Transformer - attack/defend only"""
+class CUDAOptimizedStrategicVisionTransformer(nn.Module):
+    """CUDA-optimized Strategic Vision Transformer with 33 features and discrete actions"""
 
-    def __init__(
-        self, visual_dim=512, opencv_dim=2, momentum_dim=19, seq_length=8
-    ):  # Changed from 18 to 19
+    def __init__(self, visual_dim=512, strategic_dim=33, seq_length=8):
         super().__init__()
         self.seq_length = seq_length
 
-        # Combined input dimension: 512 + 2 + 19 = 533
-        combined_dim = visual_dim + opencv_dim + momentum_dim
+        # Combined input dimension: 512 + 33 = 545
+        combined_dim = visual_dim + strategic_dim
 
         # Transformer dimension
         d_model = 256
@@ -85,7 +82,7 @@ class CUDAOptimizedSimplifiedVisionTransformer(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
-        # Simplified tactical prediction head - only attack and defend timing
+        # Tactical prediction head - only attack and defend timing
         self.tactical_predictor = nn.Sequential(
             nn.Linear(d_model, 256),
             nn.ReLU(),
@@ -126,7 +123,7 @@ class CUDAOptimizedSimplifiedVisionTransformer(nn.Module):
         transformer_out = self.transformer(projected)
         final_features = transformer_out[:, -1, :]  # Last timestep
 
-        # Generate simplified predictions
+        # Generate tactical predictions
         tactical_logits = self.tactical_predictor(final_features)
         tactical_probs = torch.sigmoid(tactical_logits)
 
@@ -147,7 +144,7 @@ class CUDAOptimizedCNN(nn.Module):
         self.cnn = nn.Sequential(
             # First conv block
             nn.Conv2d(input_channels, 32, kernel_size=8, stride=4, padding=2),
-            nn.BatchNorm2d(32),  # Back to BatchNorm for stability
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             # Second conv block
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
@@ -169,7 +166,7 @@ class CUDAOptimizedCNN(nn.Module):
         # Projection layer
         self.projection = nn.Linear(256, feature_dim)
 
-        # Simplified tactical predictions cache
+        # Tactical predictions cache
         self.register_buffer("attack_timing_cache", torch.tensor(0.0))
         self.register_buffer("defend_timing_cache", torch.tensor(0.0))
 
@@ -198,7 +195,7 @@ class CUDAOptimizedCNN(nn.Module):
             )
 
     def update_tactical_predictions(self, attack_timing, defend_timing):
-        """Update simplified tactical predictions on CUDA"""
+        """Update tactical predictions on CUDA"""
         self.attack_timing_cache.copy_(
             torch.tensor(attack_timing, device="cuda", dtype=torch.float32)
         )
@@ -242,8 +239,8 @@ class CUDAStreetFighterCNN(StreetFighterSimplifiedCNN):
         return self.cnn(normalized_obs)
 
 
-class CUDAOptimizedVisionPipelineCallback(BaseCallback):
-    """CUDA-optimized callback with GPU memory monitoring - simplified"""
+class CUDAOptimizedDiscreteActionCallback(BaseCallback):
+    """CUDA-optimized callback with discrete action monitoring"""
 
     def __init__(self, enable_vision_transformer=True, verbose=0):
         super().__init__(verbose)
@@ -259,10 +256,10 @@ class CUDAOptimizedVisionPipelineCallback(BaseCallback):
         return True
 
     def _log_cuda_training_stats(self):
-        """Log CUDA-optimized training statistics - simplified"""
+        """Log CUDA-optimized training statistics with discrete actions"""
         try:
             print(
-                f"\n--- 🚀 CUDA Street Fighter Simplified Vision Pipeline @ Step {self.num_timesteps:,} ---"
+                f"\n--- 🚀 CUDA Street Fighter Discrete Action Training @ Step {self.num_timesteps:,} ---"
             )
 
             # CUDA memory statistics
@@ -286,24 +283,26 @@ class CUDAOptimizedVisionPipelineCallback(BaseCallback):
                 if all_stats and len(all_stats) > 0:
                     stats = all_stats[0]
 
-                    motion_count = stats.get("motion_detected_count", 0)
                     predictions = stats.get("predictions_made", 0)
-
-                    print(f"   🔍 Motion Detections: {motion_count:,}")
 
                     if self.enable_vision_transformer:
                         vt_ready = stats.get("vision_transformer_ready", False)
                         if vt_ready:
                             print(
-                                f"   🧠 CUDA Vision Transformer: Active ({predictions:,} predictions)"
+                                f"   🧠 CUDA Strategic Transformer: Active ({predictions:,} predictions)"
                             )
 
-                            # Simplified tactical statistics - only attack and defend
+                            # Strategic tactical statistics - only attack and defend
                             avg_attack = stats.get("avg_attack_timing", 0.0)
                             avg_defend = stats.get("avg_defend_timing", 0.0)
 
                             print(f"   ⚔️  Attack Timing: {avg_attack:.3f}")
                             print(f"   🛡️  Defend Timing: {avg_defend:.3f}")
+
+                    print(
+                        f"   🎮 Action Space: Discrete (Street Fighter button combinations)"
+                    )
+                    print(f"   📊 Features: 33 total (21 strategic + 12 button)")
 
             # Learning rate
             if hasattr(self.model, "learning_rate"):
@@ -324,7 +323,7 @@ def main():
     device = setup_cuda_optimization()
 
     parser = argparse.ArgumentParser(
-        description="CUDA-Optimized Street Fighter II Simplified Vision Training"
+        description="CUDA-Optimized Street Fighter II Discrete Action Training"
     )
     parser.add_argument("--total-timesteps", type=int, default=10000000)
     parser.add_argument("--num-envs", type=int, default=8)
@@ -333,7 +332,9 @@ def main():
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--no-vision-transformer", action="store_true")
     parser.add_argument("--use-original-state", action="store_true")
-    parser.add_argument("--defend-actions", type=str, default="4,5,6")
+    parser.add_argument(
+        "--defend-actions", type=str, default="54,55,56"
+    )  # Discrete action indices for blocking
     parser.add_argument(
         "--mixed-precision",
         action="store_true",
@@ -356,21 +357,23 @@ def main():
             print(f"❌ State file not found: ken_bison_12.state")
             return
 
-    save_dir = "trained_models_cuda_simplified"
+    save_dir = "trained_models_cuda_discrete"
     os.makedirs(save_dir, exist_ok=True)
 
-    print(f"🚀 CUDA-Optimized Street Fighter II Simplified Training")
+    print(f"🚀 CUDA-Optimized Street Fighter II Discrete Action Training")
     print(f"   Total timesteps: {args.total_timesteps:,}")
     print(f"   Learning rate: {args.learning_rate}")
     print(f"   Mixed precision: {args.mixed_precision}")
     print(f"   Device: {device}")
+    print(f"   Features: 33 strategic (21 combat + 12 button)")
+    print(f"   Action Space: Discrete (Street Fighter combinations)")
 
-    # Create environment with simplified wrapper
+    # Create environment with discrete action wrapper
     def make_env():
         env = retro.make(
             game=game,
             state=state_file,
-            use_restricted_actions=retro.Actions.FILTERED,
+            use_restricted_actions=retro.Actions.FILTERED,  # Use filtered actions (12 buttons)
             obs_type=retro.Observations.IMAGE,
             render_mode="human" if args.render else None,
         )
@@ -391,7 +394,7 @@ def main():
 
     env = DummyVecEnv([make_env])
 
-    # CUDA-optimized policy configuration
+    # CUDA-optimized policy configuration for discrete actions
     policy_kwargs = dict(
         features_extractor_class=CUDAStreetFighterCNN,
         features_extractor_kwargs=dict(features_dim=512),
@@ -407,14 +410,14 @@ def main():
         print(f"📂 Loading CUDA model from: {args.resume}")
         model = PPO.load(args.resume, env=env, device=device)
     else:
-        print(f"🧠 Creating CUDA-optimized PPO model")
+        print(f"🧠 Creating CUDA-optimized PPO model with discrete actions")
 
         # Learning rate schedule
         def lr_schedule(progress):
             return args.learning_rate * (1.0 - 0.9 * progress)
 
         model = PPO(
-            "CnnPolicy",
+            "CnnPolicy",  # Use CnnPolicy for discrete actions
             env,
             policy_kwargs=policy_kwargs,
             device=device,
@@ -429,7 +432,7 @@ def main():
             vf_coef=0.5,
             max_grad_norm=0.5,
             gae_lambda=0.95,
-            tensorboard_log="logs_cuda_simplified",
+            tensorboard_log="logs_cuda_discrete",
         )
 
     # Inject CUDA-optimized feature extractor
@@ -448,17 +451,17 @@ def main():
     checkpoint_callback = CheckpointCallback(
         save_freq=100000,
         save_path=save_dir,
-        name_prefix="ppo_sf2_cuda_simplified",
+        name_prefix="ppo_sf2_cuda_discrete",
     )
 
-    cuda_callback = CUDAOptimizedVisionPipelineCallback(
+    cuda_callback = CUDAOptimizedDiscreteActionCallback(
         enable_vision_transformer=enable_vision_transformer
     )
 
     # Training with CUDA optimizations
     start_time = time.time()
-    print(f"🏋️ Starting CUDA-optimized simplified training...")
-    print(f"💡 Note: Mixed precision disabled to avoid dtype issues")
+    print(f"🏋️ Starting CUDA-optimized discrete action training...")
+    print(f"💡 Note: Using discrete actions with button features")
 
     try:
         model.learn(
@@ -478,7 +481,7 @@ def main():
         env.close()
 
     # Save final model
-    final_model_path = os.path.join(save_dir, "ppo_sf2_cuda_simplified_final.zip")
+    final_model_path = os.path.join(save_dir, "ppo_sf2_cuda_discrete_final.zip")
     model.save(final_model_path)
     print(f"💾 Final CUDA model saved to: {final_model_path}")
 
@@ -486,7 +489,7 @@ def main():
     torch.cuda.empty_cache()
     print("🧹 CUDA cache cleared")
 
-    print("✅ CUDA-optimized simplified training complete!")
+    print("✅ CUDA-optimized discrete action training complete!")
 
 
 if __name__ == "__main__":

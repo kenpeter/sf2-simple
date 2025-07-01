@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 
 """
-wrapper.py - Simplified Vision Pipeline for Street Fighter II with Position & Score Tracking
-Raw Frames → OpenCV → CNN ↘
-                           Vision Transformer → Attack/Defend Predictions Only
-Health/Score/Position Data → Enhanced Momentum Tracker ↗
+wrapper.py - Complete Street Fighter II Wrapper with Discrete Actions and Button Features
+Raw Frames → CNN → Vision Transformer → Attack/Defend Predictions
+Strategic Combat Data (33 features: 21 combat + 12 button features)
+Discrete Actions → Multi-Binary → Emulator
 """
 
 import cv2
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 import gymnasium as gym
 from collections import deque
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from typing import Dict, List, Tuple, Optional
+from typing import Dict
 import math
-import warnings
 import logging
 
 # Configure logging
@@ -27,106 +25,173 @@ logger = logging.getLogger(__name__)
 
 # Constants for Street Fighter
 MAX_HEALTH = 176
-CRITICAL_HEALTH_THRESHOLD = MAX_HEALTH * 0.3
-SCREEN_WIDTH = 180  # Game screen width for position normalization
-SCREEN_HEIGHT = 128  # Game screen height for position normalization
+SCREEN_WIDTH = 180
+SCREEN_HEIGHT = 128
 
 
-class EnhancedOpenCVDetector:
-    """Simple OpenCV detector for Street Fighter - focuses only on motion"""
+class StreetFighterDiscreteActions:
+    """
+    Street Fighter II Discrete Action System for stable-retro
+    Maps discrete integer actions to multi-binary button combinations
+
+    Stable-retro uses filtered actions with 12 buttons total:
+    Index 0-11: [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
+
+    Street Fighter layout:
+    - Light Punch: Y (index 1)
+    - Medium Punch: X (index 9)
+    - Heavy Punch: L (index 10)
+    - Light Kick: B (index 0)
+    - Medium Kick: A (index 8)
+    - Heavy Kick: R (index 11)
+    - Directions: UP(4), DOWN(5), LEFT(6), RIGHT(7)
+    """
 
     def __init__(self):
-        # Simple motion detection only
-        self.prev_frame_gray = None
-        self.frame_count = 0
-        self.motion_history = deque(maxlen=5)  # Track recent motion
+        # Button indices for stable-retro filtered actions (12 total)
+        self.button_names = [
+            "B",
+            "Y",
+            "SELECT",
+            "START",
+            "UP",
+            "DOWN",
+            "LEFT",
+            "RIGHT",
+            "A",
+            "X",
+            "L",
+            "R",
+        ]
+        self.num_buttons = 12
 
-        logger.info("🔍 OpenCV detector for Street Fighter:")
-        logger.info("   Simple motion detection only")
-        logger.info("   No complex activity analysis")
+        # Define meaningful action combinations for Street Fighter
+        self.action_combinations = [
+            # 0: No action
+            [],
+            # Basic movements (1-8)
+            [6],  # 1: LEFT
+            [7],  # 2: RIGHT
+            [4],  # 3: UP (jump)
+            [5],  # 4: DOWN (crouch)
+            [6, 4],  # 5: LEFT + UP (jump back)
+            [7, 4],  # 6: RIGHT + UP (jump forward)
+            [6, 5],  # 7: LEFT + DOWN (crouch back)
+            [7, 5],  # 8: RIGHT + DOWN (crouch forward)
+            # Light attacks (9-14)
+            [1],  # 9: Light punch (Y)
+            [0],  # 10: Light kick (B)
+            [1, 6],  # 11: Light punch + LEFT
+            [1, 7],  # 12: Light punch + RIGHT
+            [0, 6],  # 13: Light kick + LEFT
+            [0, 7],  # 14: Light kick + RIGHT
+            # Medium attacks (15-20)
+            [9],  # 15: Medium punch (X)
+            [8],  # 16: Medium kick (A)
+            [9, 6],  # 17: Medium punch + LEFT
+            [9, 7],  # 18: Medium punch + RIGHT
+            [8, 6],  # 19: Medium kick + LEFT
+            [8, 7],  # 20: Medium kick + RIGHT
+            # Heavy attacks (21-26)
+            [10],  # 21: Heavy punch (L)
+            [11],  # 22: Heavy kick (R)
+            [10, 6],  # 23: Heavy punch + LEFT
+            [10, 7],  # 24: Heavy punch + RIGHT
+            [11, 6],  # 25: Heavy kick + LEFT
+            [11, 7],  # 26: Heavy kick + RIGHT
+            # Jumping attacks (27-32)
+            [1, 4],  # 27: Jumping light punch
+            [0, 4],  # 28: Jumping light kick
+            [9, 4],  # 29: Jumping medium punch
+            [8, 4],  # 30: Jumping medium kick
+            [10, 4],  # 31: Jumping heavy punch
+            [11, 4],  # 32: Jumping heavy kick
+            # Crouching attacks (33-38)
+            [1, 5],  # 33: Crouching light punch
+            [0, 5],  # 34: Crouching light kick
+            [9, 5],  # 35: Crouching medium punch
+            [8, 5],  # 36: Crouching medium kick
+            [10, 5],  # 37: Crouching heavy punch
+            [11, 5],  # 38: Crouching heavy kick
+            # Special move motions (39-50)
+            [5, 7],  # 39: Down-forward (quarter circle start)
+            [5, 6],  # 40: Down-back (reverse quarter circle)
+            [5, 7, 1],  # 41: Hadoken motion + light punch
+            [5, 7, 9],  # 42: Hadoken motion + medium punch
+            [5, 7, 10],  # 43: Hadoken motion + heavy punch
+            [5, 6, 1],  # 44: Reverse hadoken + light punch
+            [5, 6, 9],  # 45: Reverse hadoken + medium punch
+            [5, 6, 10],  # 46: Reverse hadoken + heavy punch
+            [5, 7, 0],  # 47: Quarter circle + light kick
+            [5, 7, 8],  # 48: Quarter circle + medium kick
+            [5, 7, 11],  # 49: Quarter circle + heavy kick
+            [4, 5],  # 50: Up-down (charge motion)
+            # Anti-air and defensive (51-56)
+            [7, 1],  # 51: Forward + light punch (anti-air)
+            [7, 9],  # 52: Forward + medium punch
+            [7, 10],  # 53: Forward + heavy punch
+            [6],  # 54: Block (hold back)
+            [6, 5],  # 55: Low block (back + down)
+            [4, 6],  # 56: Jump back (defensive)
+        ]
 
-    def detect_activity(self, frame: np.ndarray) -> Dict:
+        self.num_actions = len(self.action_combinations)
+
+        logger.info(f"🎮 Street Fighter Discrete Actions initialized:")
+        logger.info(f"   Total discrete actions: {self.num_actions}")
+        logger.info(f"   Button layout: {self.button_names}")
+        logger.info(f"   Using stable-retro filtered actions (12 buttons)")
+
+    def discrete_to_multibinary(self, action_index: int) -> np.ndarray:
         """
-        Simple motion detection for Street Fighter
-        Input: frame [128, 180, 3] - RGB frame (H×W×C)
-        Output: basic motion analysis
+        Convert discrete action to multi-binary array for stable-retro
+
+        Args:
+            action_index: Integer from 0 to num_actions-1
+
+        Returns:
+            Multi-binary array of shape (12,) with 1s for pressed buttons
         """
-        if frame is None or frame.size == 0:
-            return self._empty_detection()
+        if action_index < 0 or action_index >= self.num_actions:
+            logger.error(f"Invalid action index: {action_index}")
+            action_index = 0  # Default to idle
 
-        try:
-            self.frame_count += 1
+        # Create empty multi-binary action
+        multibinary_action = np.zeros(self.num_buttons, dtype=np.uint8)
 
-            # Convert to grayscale for motion detection
-            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        # Get button indices for this action
+        button_indices = self.action_combinations[action_index]
 
-            # Detect motion
-            motion_info = self._detect_motion(gray)
+        # Set corresponding buttons to 1
+        for button_idx in button_indices:
+            if 0 <= button_idx < self.num_buttons:
+                multibinary_action[button_idx] = 1
 
-            # Simple result - just motion data
-            result = {
-                "motion_detected": motion_info["has_motion"],
-                "motion_intensity": motion_info["intensity"],
-            }
+        return multibinary_action
 
-            return result
+    def get_action_name(self, action_index: int) -> str:
+        """Get human-readable name for an action"""
+        if action_index < 0 or action_index >= self.num_actions:
+            return f"INVALID_{action_index}"
 
-        except Exception as e:
-            logger.warning(f"OpenCV detection error: {e}")
-            return self._empty_detection()
+        if action_index == 0:
+            return "IDLE"
 
-    def _detect_motion(self, gray: np.ndarray) -> Dict:
-        """Detect motion for general activity analysis"""
-        try:
-            if self.prev_frame_gray is None:
-                self.prev_frame_gray = gray.copy()
-                return {"has_motion": False, "intensity": 0.0, "motion_areas": []}
+        button_indices = self.action_combinations[action_index]
+        if not button_indices:
+            return "IDLE"
 
-            # Calculate frame difference
-            frame_diff = cv2.absdiff(self.prev_frame_gray, gray)
+        button_names = [
+            self.button_names[i] for i in button_indices if 0 <= i < self.num_buttons
+        ]
+        return "+".join(button_names)
 
-            # Threshold to get motion areas
-            _, motion_mask = cv2.threshold(frame_diff, 25, 255, cv2.THRESH_BINARY)
-
-            # Calculate motion intensity
-            motion_pixels = np.sum(motion_mask > 0)
-            total_pixels = motion_mask.shape[0] * motion_mask.shape[1]
-            motion_intensity = motion_pixels / total_pixels
-
-            # Find contours
-            contours, _ = cv2.findContours(
-                motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-
-            motion_areas = []
-            for contour in contours:
-                area = cv2.contourArea(contour)
-                if area > 50:  # Filter small motions
-                    x, y, w, h = cv2.boundingRect(contour)
-                    motion_areas.append((x, y, w, h))
-
-            # Update motion history
-            self.motion_history.append(motion_intensity)
-
-            # Update previous frame
-            self.prev_frame_gray = gray.copy()
-
-            return {
-                "has_motion": motion_intensity > 0.01,
-                "intensity": motion_intensity,
-                "motion_areas": motion_areas,
-            }
-
-        except Exception as e:
-            logger.warning(f"Motion detection error: {e}")
-            return {"has_motion": False, "intensity": 0.0, "motion_areas": []}
-
-    def _empty_detection(self) -> Dict:
-        """Return empty detection result"""
-        return {
-            "motion_detected": False,
-            "motion_intensity": 0.0,
-        }
+    def get_button_features(self, action_index: int) -> np.ndarray:
+        """
+        Get 12-dimensional button features for strategic analysis
+        Returns the multi-binary representation as float32
+        """
+        return self.discrete_to_multibinary(action_index).astype(np.float32)
 
 
 class CNNFeatureExtractor(nn.Module):
@@ -162,7 +227,7 @@ class CNNFeatureExtractor(nn.Module):
         # Project to desired feature dimension
         self.projection = nn.Linear(256, feature_dim)
 
-        # Add tactical prediction tracking (simplified to attack/defend only)
+        # Add tactical prediction tracking
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
 
@@ -185,8 +250,8 @@ class CNNFeatureExtractor(nn.Module):
         self.current_defend_timing = float(defend_timing)
 
 
-class EnhancedMomentumTracker:
-    """Enhanced tracker for health, score, and relative position momentum in Street Fighter"""
+class StrategicFeatureTracker:
+    """Strategic feature tracker with 33 features: 21 combat + 12 button features"""
 
     def __init__(self, history_length=8):
         self.history_length = history_length
@@ -195,15 +260,45 @@ class EnhancedMomentumTracker:
         self.player_health_history = deque(maxlen=history_length)
         self.opponent_health_history = deque(maxlen=history_length)
 
-        # Score tracking
+        # Position tracking
+        self.player_x_history = deque(maxlen=history_length)
+        self.player_y_history = deque(maxlen=history_length)
+        self.opponent_x_history = deque(maxlen=history_length)
+        self.opponent_y_history = deque(maxlen=history_length)
+
+        # Score and status tracking
         self.score_history = deque(maxlen=history_length)
+        self.player_status_history = deque(maxlen=history_length)
+        self.opponent_status_history = deque(maxlen=history_length)
 
-        # Relative position tracking (agent - enemy)
-        self.x_diff_history = deque(maxlen=history_length)  # agent_x - enemy_x
-        self.y_diff_history = deque(maxlen=history_length)  # agent_y - enemy_y
+        # Victory tracking
+        self.player_victories_history = deque(maxlen=history_length)
+        self.opponent_victories_history = deque(maxlen=history_length)
 
-        # Distance tracking
-        self.distance_history = deque(maxlen=history_length)
+        # Damage tracking
+        self.player_damage_dealt_history = deque(maxlen=history_length)
+        self.opponent_damage_dealt_history = deque(maxlen=history_length)
+
+        # Button tracking - NEW
+        self.button_features_history = deque(maxlen=history_length)
+
+        # Combat state tracking
+        self.close_combat_count = 0
+        self.total_frames = 0
+
+        # Constants for Street Fighter screen
+        self.SCREEN_WIDTH = 180
+        self.SCREEN_HEIGHT = 128
+        self.DANGER_ZONE_HEALTH = MAX_HEALTH * 0.25  # 25% health is danger zone
+        self.CORNER_THRESHOLD = 30  # Distance from screen edge to be "near corner"
+        self.CLOSE_DISTANCE = 40  # Distance to be considered "close combat"
+        self.OPTIMAL_SPACING_MIN = 35
+        self.OPTIMAL_SPACING_MAX = 55
+
+        # Previous values for rate calculations
+        self.prev_player_health = None
+        self.prev_opponent_health = None
+        self.prev_score = None
 
     def update(
         self,
@@ -214,126 +309,218 @@ class EnhancedMomentumTracker:
         player_y: float,
         opponent_x: float,
         opponent_y: float,
+        player_status: int = 0,
+        opponent_status: int = 0,
+        player_victories: int = 0,
+        opponent_victories: int = 0,
+        button_features: np.ndarray = None,  # NEW: 12-dimensional button features
     ) -> np.ndarray:
-        """Update all tracked variables and return enhanced feature vector"""
-
-        # Calculate relative positions (agent - enemy)
-        x_diff = player_x - opponent_x  # Positive = agent is to the right
-        y_diff = (
-            player_y - opponent_y
-        )  # Positive = agent is below (depending on coordinate system)
-
-        # Calculate distance between characters
-        distance = np.sqrt(x_diff**2 + y_diff**2)
+        """Update all tracked variables and return 33-dimensional feature vector"""
 
         # Update histories
         self.player_health_history.append(player_health)
         self.opponent_health_history.append(opponent_health)
+        self.player_x_history.append(player_x)
+        self.player_y_history.append(player_y)
+        self.opponent_x_history.append(opponent_x)
+        self.opponent_y_history.append(opponent_y)
         self.score_history.append(score)
-        self.x_diff_history.append(x_diff)
-        self.y_diff_history.append(y_diff)
-        self.distance_history.append(distance)
+        self.player_status_history.append(player_status)
+        self.opponent_status_history.append(opponent_status)
+        self.player_victories_history.append(player_victories)
+        self.opponent_victories_history.append(opponent_victories)
 
-        # Calculate momentum features
-        player_health_momentum = self._calculate_momentum(self.player_health_history)
-        opponent_health_momentum = self._calculate_momentum(
-            self.opponent_health_history
-        )
-        score_momentum = self._calculate_momentum(self.score_history)
+        # Update button features history - NEW
+        if button_features is not None:
+            self.button_features_history.append(button_features)
+        else:
+            # Default to no buttons pressed
+            self.button_features_history.append(np.zeros(12, dtype=np.float32))
 
-        # Relative position momentum (how the relative position is changing)
-        x_diff_momentum = self._calculate_momentum(
-            self.x_diff_history
-        )  # Moving left/right relative to enemy
-        y_diff_momentum = self._calculate_momentum(
-            self.y_diff_history
-        )  # Moving up/down relative to enemy
+        # Calculate damage rates
+        player_damage_this_frame = 0
+        opponent_damage_this_frame = 0
 
-        # Distance momentum (approaching/retreating)
-        distance_momentum = self._calculate_momentum(self.distance_history)
-
-        # Calculate enhanced features
-        health_advantage = player_health - opponent_health
-
-        # Normalize relative positions (-1 to 1 range)
-        normalized_x_diff = np.clip(
-            x_diff / SCREEN_WIDTH, -1.0, 1.0
-        )  # -1 = far left, +1 = far right
-        normalized_y_diff = np.clip(
-            y_diff / SCREEN_HEIGHT, -1.0, 1.0
-        )  # -1 = above, +1 = below
-        normalized_distance = min(
-            distance / np.sqrt(SCREEN_WIDTH**2 + SCREEN_HEIGHT**2), 1.0
-        )
-
-        # Tactical positioning features based on relative position
-        is_close_combat = 1.0 if normalized_distance < 0.15 else 0.0  # Very close
-        is_medium_range = (
-            1.0 if 0.15 <= normalized_distance < 0.4 else 0.0
-        )  # Medium range
-        is_long_range = 1.0 if normalized_distance >= 0.4 else 0.0  # Long range
-
-        # Relative positioning tactical features
-        agent_on_right = 1.0 if x_diff > 20 else 0.0  # Agent significantly to the right
-        agent_on_left = 1.0 if x_diff < -20 else 0.0  # Agent significantly to the left
-        agents_aligned_x = (
-            1.0 if abs(x_diff) < 20 else 0.0
-        )  # Agents roughly aligned horizontally
-
-        # Vertical positioning (important for jumps/crouches)
-        agent_above = 1.0 if y_diff < -10 else 0.0  # Agent is above enemy (jumping)
-        agent_below = 1.0 if y_diff > 10 else 0.0  # Agent is below enemy
-
-        # Movement patterns
-        approaching = 1.0 if distance_momentum < -2 else 0.0  # Getting closer
-        retreating = 1.0 if distance_momentum > 2 else 0.0  # Getting farther
-
-        # Create enhanced 18-dimensional feature vector focused on relative positioning
-        features = np.array(
-            [
-                # Health momentum (4 features)
-                player_health_momentum,
-                opponent_health_momentum,
-                player_health / MAX_HEALTH,
-                opponent_health / MAX_HEALTH,
-                # Score and advantage (2 features)
-                score_momentum,
-                health_advantage / MAX_HEALTH,
-                # Relative position momentum (2 features)
-                x_diff_momentum,  # How relative X position is changing
-                y_diff_momentum,  # How relative Y position is changing
-                # Normalized relative positioning (3 features)
-                normalized_x_diff,  # Current relative X position
-                normalized_y_diff,  # Current relative Y position
-                normalized_distance,  # Current distance
-                # Distance momentum (1 feature)
-                distance_momentum,  # How distance is changing
-                # Tactical range positioning (3 features)
-                is_close_combat,
-                is_medium_range,
-                is_long_range,
-                # Relative tactical positioning (3 features)
-                agent_on_right,
-                agent_on_left,
-                approaching,
-                # History completeness (1 feature)
-                len(self.player_health_history) / self.history_length,
-            ],
-            dtype=np.float32,
-        )
-
-        # Debug: Check actual feature count
-        actual_count = len(features)
-        expected_count = 19  # Count shows this should be 19, not 18
-        if actual_count != expected_count:
-            logger.warning(
-                f"Momentum feature count mismatch: got {actual_count}, expected {expected_count}"
+        if self.prev_opponent_health is not None:
+            player_damage_this_frame = max(
+                0, self.prev_opponent_health - opponent_health
             )
+        if self.prev_player_health is not None:
+            opponent_damage_this_frame = max(0, self.prev_player_health - player_health)
+
+        self.player_damage_dealt_history.append(player_damage_this_frame)
+        self.opponent_damage_dealt_history.append(opponent_damage_this_frame)
+
+        # Update frame counting for close combat tracking
+        self.total_frames += 1
+        distance = np.sqrt((player_x - opponent_x) ** 2 + (player_y - opponent_y) ** 2)
+        if distance <= self.CLOSE_DISTANCE:
+            self.close_combat_count += 1
+
+        # Calculate 33 features (21 strategic + 12 button)
+        features = self._calculate_features(
+            player_health,
+            opponent_health,
+            score,
+            player_x,
+            player_y,
+            opponent_x,
+            opponent_y,
+            player_status,
+            opponent_status,
+            player_victories,
+            opponent_victories,
+            distance,
+        )
+
+        # Update previous values
+        self.prev_player_health = player_health
+        self.prev_opponent_health = opponent_health
+        self.prev_score = score
+
+        return features
+
+    def _calculate_features(
+        self,
+        player_health,
+        opponent_health,
+        score,
+        player_x,
+        player_y,
+        opponent_x,
+        opponent_y,
+        player_status,
+        opponent_status,
+        player_victories,
+        opponent_victories,
+        distance,
+    ) -> np.ndarray:
+        """Calculate the 33 strategic features (21 strategic + 12 button)"""
+
+        features = np.zeros(33, dtype=np.float32)
+
+        # First 21 features: Strategic combat features
+        # 1. Is player in danger zone
+        features[0] = 1.0 if player_health <= self.DANGER_ZONE_HEALTH else 0.0
+
+        # 2. Is opponent in danger zone
+        features[1] = 1.0 if opponent_health <= self.DANGER_ZONE_HEALTH else 0.0
+
+        # 3. Player / opponent health ratio
+        if opponent_health > 0:
+            features[2] = player_health / opponent_health
+        else:
+            features[2] = 2.0  # Cap at 2.0 when opponent has no health
+        features[2] = np.clip(features[2], 0.0, 2.0)
+
+        # 4. Combined health change rate
+        player_health_change = self._calculate_momentum(self.player_health_history)
+        opponent_health_change = self._calculate_momentum(self.opponent_health_history)
+        features[3] = (player_health_change + opponent_health_change) / 2.0
+
+        # 5. Damage rate player (damage dealt per frame)
+        features[4] = self._calculate_momentum(self.player_damage_dealt_history)
+
+        # 6. Damage rate opponent (damage dealt per frame)
+        features[5] = self._calculate_momentum(self.opponent_damage_dealt_history)
+
+        # 7. Player corner distance (normalized, 0 = at corner, 1 = center)
+        player_left_dist = player_x
+        player_right_dist = self.SCREEN_WIDTH - player_x
+        player_corner_dist = min(player_left_dist, player_right_dist)
+        features[6] = np.clip(player_corner_dist / (self.SCREEN_WIDTH / 2), 0.0, 1.0)
+
+        # 8. Opponent corner distance
+        opponent_left_dist = opponent_x
+        opponent_right_dist = self.SCREEN_WIDTH - opponent_x
+        opponent_corner_dist = min(opponent_left_dist, opponent_right_dist)
+        features[7] = np.clip(opponent_corner_dist / (self.SCREEN_WIDTH / 2), 0.0, 1.0)
+
+        # 9. Player near corner
+        features[8] = 1.0 if player_corner_dist <= self.CORNER_THRESHOLD else 0.0
+
+        # 10. Opponent near corner
+        features[9] = 1.0 if opponent_corner_dist <= self.CORNER_THRESHOLD else 0.0
+
+        # 11. Center control (who is closer to screen center)
+        screen_center = self.SCREEN_WIDTH / 2
+        player_center_dist = abs(player_x - screen_center)
+        opponent_center_dist = abs(opponent_x - screen_center)
+        if player_center_dist < opponent_center_dist:
+            features[10] = 1.0  # Player has center control
+        elif opponent_center_dist < player_center_dist:
+            features[10] = -1.0  # Opponent has center control
+        else:
+            features[10] = 0.0  # Neutral
+
+        # 12. Vertical advantage (who is higher/lower)
+        vertical_diff = player_y - opponent_y
+        features[11] = np.clip(vertical_diff / (self.SCREEN_HEIGHT / 2), -1.0, 1.0)
+
+        # 13. Position stability (how much position is changing)
+        player_x_stability = 1.0 - min(
+            1.0, abs(self._calculate_momentum(self.player_x_history)) / 10.0
+        )
+        opponent_x_stability = 1.0 - min(
+            1.0, abs(self._calculate_momentum(self.opponent_x_history)) / 10.0
+        )
+        features[12] = (player_x_stability + opponent_x_stability) / 2.0
+
+        # 14. Optimal spacing (1.0 if in optimal range, 0.0 if too close/far)
+        if self.OPTIMAL_SPACING_MIN <= distance <= self.OPTIMAL_SPACING_MAX:
+            features[13] = 1.0
+        else:
+            features[13] = 0.0
+
+        # 15. Sustain forward pressure (player moving toward opponent)
+        player_x_momentum = self._calculate_momentum(self.player_x_history)
+
+        # Forward pressure depends on relative positions
+        if player_x < opponent_x:  # Player is on the left
+            forward_pressure = player_x_momentum  # Moving right is forward
+        else:  # Player is on the right
+            forward_pressure = -player_x_momentum  # Moving left is forward
+        features[14] = np.clip(forward_pressure / 5.0, -1.0, 1.0)
+
+        # 16. Sustain defence movement (player moving away from opponent)
+        if player_x < opponent_x:  # Player is on the left
+            defensive_movement = -player_x_momentum  # Moving left is defensive
+        else:  # Player is on the right
+            defensive_movement = player_x_momentum  # Moving right is defensive
+        features[15] = np.clip(defensive_movement / 5.0, -1.0, 1.0)
+
+        # 17. How often players get close (close combat frequency)
+        if self.total_frames > 0:
+            features[16] = self.close_combat_count / self.total_frames
+        else:
+            features[16] = 0.0
+
+        # 18. Score momentum (consecutive hits/advantage)
+        features[17] = self._calculate_momentum(self.score_history)
+
+        # 19. Agent status and enemy status (combined as single feature)
+        status_diff = player_status - opponent_status
+        features[18] = np.clip(status_diff / 100.0, -1.0, 1.0)
+
+        # 20. Agent victories (normalized)
+        features[19] = min(player_victories / 10.0, 1.0)
+
+        # 21. Enemy victories (normalized)
+        features[20] = min(opponent_victories / 10.0, 1.0)
+
+        # Features 22-33: Current button state (12 button features) - NEW
+        if len(self.button_features_history) > 0:
+            current_buttons = self.button_features_history[
+                -1
+            ]  # Most recent button state
+            features[21:33] = current_buttons
+        else:
+            features[21:33] = 0.0  # No buttons pressed
 
         return features
 
     def _calculate_momentum(self, history):
-        """Calculate momentum (rate of change)"""
+        """Calculate momentum (rate of change) from history"""
         if len(history) < 2:
             return 0.0
 
@@ -342,7 +529,7 @@ class EnhancedMomentumTracker:
 
         # Use recent changes (last 3) if available, otherwise all changes
         recent_changes = changes[-3:] if len(changes) >= 3 else changes
-        return np.mean(recent_changes)
+        return np.mean(recent_changes) if recent_changes else 0.0
 
 
 class PositionalEncoding(nn.Module):
@@ -370,23 +557,19 @@ class PositionalEncoding(nn.Module):
 
 
 class SimplifiedVisionTransformer(nn.Module):
-    """Simplified Vision Transformer - only attack and defend timing predictions"""
+    """Simplified Vision Transformer with 33 strategic features - attack/defend timing predictions"""
 
-    def __init__(
-        self, visual_dim=512, opencv_dim=2, momentum_dim=19, seq_length=8
-    ):  # Changed from 18 to 19
+    def __init__(self, visual_dim=512, strategic_dim=33, seq_length=8):
         super().__init__()
         self.seq_length = seq_length
 
-        # Combined input dimension: 512 + 2 + 19 = 533
-        combined_dim = visual_dim + opencv_dim + momentum_dim
+        # Combined input dimension: 512 (visual) + 33 (strategic) = 545
+        combined_dim = visual_dim + strategic_dim
 
-        # Debug: Print actual dimensions to catch mismatches
-        print(f"🔍 SimplifiedVisionTransformer dimensions:")
-        print(
-            f"   Visual: {visual_dim}, OpenCV: {opencv_dim}, Momentum: {momentum_dim}"
-        )
-        print(f"   Expected combined: {combined_dim}")
+        logger.info(f"🔍 SimplifiedVisionTransformer dimensions:")
+        logger.info(f"   Visual: {visual_dim}, Strategic: {strategic_dim}")
+        logger.info(f"   Strategic breakdown: 21 combat + 12 button features")
+        logger.info(f"   Combined input: {combined_dim}")
 
         # Project to transformer dimension
         d_model = 256
@@ -404,7 +587,7 @@ class SimplifiedVisionTransformer(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
-        # Simplified tactical prediction head - only attack and defend timing
+        # Tactical prediction head - only attack and defend timing
         self.tactical_predictor = nn.Sequential(
             nn.Linear(d_model, 256),
             nn.ReLU(),
@@ -419,7 +602,7 @@ class SimplifiedVisionTransformer(nn.Module):
         try:
             # Debug: Check actual input dimensions
             batch_size, seq_len, actual_dim = combined_sequence.shape
-            expected_dim = 533  # 512 + 2 + 19
+            expected_dim = 545  # 512 + 33
 
             if actual_dim != expected_dim:
                 logger.error(
@@ -471,7 +654,7 @@ class SimplifiedVisionTransformer(nn.Module):
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """Simplified Street Fighter wrapper with tactical vision pipeline - attack/defend only"""
+    """Street Fighter wrapper with discrete actions and strategic features with button data"""
 
     def __init__(
         self,
@@ -482,12 +665,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         frame_stack=8,
         enable_vision_transformer=True,
         defend_action_indices=None,
+        log_transformer_predictions=True,  # NEW: Enable transformer logging
     ):
         super().__init__(env)
 
         self.frame_stack = frame_stack
         self.enable_vision_transformer = enable_vision_transformer
         self.target_size = (128, 180)  # H, W - optimized for 180×128
+        self.log_transformer_predictions = log_transformer_predictions  # NEW
+
+        # Initialize discrete action system
+        self.discrete_actions = StreetFighterDiscreteActions()
 
         # Episode management
         self.max_episode_steps = max_episode_steps
@@ -499,8 +687,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
 
-        # Anti-spam defense tracking
-        self.defend_action_indices = defend_action_indices or [4, 5, 6]
+        # Anti-spam defense tracking (convert to discrete action indices)
+        self.defend_action_indices = defend_action_indices or [
+            54,
+            55,
+            56,
+        ]  # Block actions
         self.defense_cooldown_frames = 30
         self.last_defense_frame = -100
 
@@ -519,47 +711,98 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             low=0, high=255, shape=obs_shape, dtype=np.uint8
         )
 
-        # Initialize pipeline components
-        self.opencv_detector = EnhancedOpenCVDetector()
-        self.momentum_tracker = EnhancedMomentumTracker()
+        # Override action space to discrete
+        self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
+
+        # Initialize strategic feature tracker
+        self.strategic_tracker = StrategicFeatureTracker()
 
         # Frame and feature buffers
         self.frame_buffer = deque(maxlen=frame_stack)
         self.visual_features_history = deque(maxlen=frame_stack)
-        self.opencv_features_history = deque(maxlen=frame_stack)
-        self.momentum_features_history = deque(maxlen=frame_stack)
+        self.strategic_features_history = deque(maxlen=frame_stack)
 
         # Vision transformer components
         self.cnn_extractor = None
         self.vision_transformer = None
         self.vision_ready = False
 
-        # Current tactical predictions (simplified)
+        # Current tactical predictions
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
         self.recent_rewards = deque(maxlen=10)
 
-        # Statistics (simplified)
+        # Current action tracking
+        self.current_discrete_action = 0
+
+        # Statistics
         self.stats = {
-            "motion_detected_count": 0,
             "predictions_made": 0,
             "vision_transformer_ready": False,
             "avg_attack_timing": 0.0,
             "avg_defend_timing": 0.0,
         }
 
+        # NEW: Transformer learning analysis
+        if self.log_transformer_predictions:
+            self.transformer_logs = {
+                "predictions": [],
+                "feature_importance": [],
+                "tactical_patterns": {},
+                "situation_analysis": {},
+                "learning_progression": [],
+            }
+            self.log_interval = 100  # Log every 100 predictions
+            self.last_detailed_log = 0
+
+            # Feature names for logging
+            self.strategic_feature_names = [
+                "player_in_danger",
+                "opponent_in_danger",
+                "health_ratio",
+                "combined_health_change",
+                "player_damage_rate",
+                "opponent_damage_rate",
+                "player_corner_distance",
+                "opponent_corner_distance",
+                "player_near_corner",
+                "opponent_near_corner",
+                "center_control",
+                "vertical_advantage",
+                "position_stability",
+                "optimal_spacing",
+                "forward_pressure",
+                "defensive_movement",
+                "close_combat_frequency",
+                "score_momentum",
+                "status_difference",
+                "agent_victories",
+                "enemy_victories",
+            ]
+
+            self.button_feature_names = [
+                "B_pressed",
+                "Y_pressed",
+                "SELECT_pressed",
+                "START_pressed",
+                "UP_pressed",
+                "DOWN_pressed",
+                "LEFT_pressed",
+                "RIGHT_pressed",
+                "A_pressed",
+                "X_pressed",
+                "L_pressed",
+                "R_pressed",
+            ]
+
         logger.info(
-            f"🎮 Simplified Street Fighter Vision Pipeline Wrapper initialized:"
+            f"🎮 Street Fighter Vision Wrapper with Discrete Actions initialized:"
         )
         logger.info(f"   Resolution: {self.target_size[1]}×{self.target_size[0]}")
         logger.info(f"   Frame stack: {frame_stack} RGB frames (24 channels total)")
-        logger.info(f"   OpenCV: Simple motion detection (2 features)")
+        logger.info(f"   Strategic Features: 33 total (21 combat + 12 button)")
         logger.info(
-            f"   Enhanced Momentum: Health + Score + Relative Position (18 features)"
-        )
-        logger.info(f"   Tactical Predictions: Attack/Defend timing only")
-        logger.info(
-            f"   Position Analysis: Uses relative positioning (agent-enemy diffs)"
+            f"   Action Space: Discrete({self.discrete_actions.num_actions}) actions"
         )
         logger.info(
             f"   Defense anti-spam: {self.defense_cooldown_frames} frame cooldown"
@@ -567,9 +810,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         logger.info(
             f"   Vision Transformer: {'Enabled' if enable_vision_transformer else 'Disabled'}"
         )
+        logger.info(
+            f"   Transformer Logging: {'Enabled' if log_transformer_predictions else 'Disabled'}"
+        )  # NEW
 
     def inject_feature_extractor(self, feature_extractor):
-        """Inject CNN feature extractor and initialize simplified vision transformer"""
+        """Inject CNN feature extractor and initialize vision transformer"""
         if not self.enable_vision_transformer:
             logger.info("   🔧 Vision Transformer disabled")
             return
@@ -579,18 +825,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             actual_feature_dim = self.cnn_extractor.features_dim
             logger.info(f"   📏 Detected CNN feature dimension: {actual_feature_dim}")
 
-            # Initialize simplified vision transformer with correct dimensions
+            # Initialize vision transformer with correct dimensions
             device = next(feature_extractor.parameters()).device
             self.vision_transformer = SimplifiedVisionTransformer(
                 visual_dim=actual_feature_dim,
-                opencv_dim=2,
-                momentum_dim=19,  # Updated to 19 to match actual momentum features
+                strategic_dim=33,  # 21 strategic + 12 button features
                 seq_length=self.frame_stack,
             ).to(device)
             self.vision_ready = True
             self.stats["vision_transformer_ready"] = True
 
-            logger.info("   ✅ Simplified Vision Transformer initialized and ready!")
+            logger.info("   ✅ Strategic Vision Transformer initialized and ready!")
 
         except Exception as e:
             logger.error(f"   ❌ Vision Transformer injection failed: {e}")
@@ -613,9 +858,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Reset defense anti-spam tracking
         self.last_defense_frame = -100
 
-        # Reset tactical predictions (simplified)
+        # Reset tactical predictions
         self.current_attack_timing = 0.0
         self.current_defend_timing = 0.0
+        self.current_discrete_action = 0
 
         # Initialize frame buffer with processed frames
         processed_frame = self._preprocess_frame(observation)
@@ -625,35 +871,28 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # Clear feature history buffers
         self.visual_features_history.clear()
-        self.opencv_features_history.clear()
-        self.momentum_features_history.clear()
+        self.strategic_features_history.clear()
 
         stacked_obs = self._get_stacked_observation()
         return stacked_obs, info
 
-    def step(self, action):
-        """Execute action and process through simplified vision pipeline"""
-        # Convert action if needed
-        if isinstance(action, np.ndarray) and action.ndim == 0:
-            binary_action = np.zeros(self.env.action_space.n, dtype=int)
-            if 0 <= action < self.env.action_space.n:
-                binary_action[action] = 1
-            action = binary_action
+    def step(self, discrete_action):
+        """Execute discrete action and process through strategic vision pipeline"""
+        # Store current discrete action
+        self.current_discrete_action = discrete_action
+
+        # Convert discrete action to multi-binary
+        multibinary_action = self.discrete_actions.discrete_to_multibinary(
+            discrete_action
+        )
 
         # Track defense actions for anti-spam
-        is_defending = False
-        if hasattr(action, "__iter__") and len(action) > max(
-            self.defend_action_indices
-        ):
-            is_defending = any(action[i] > 0 for i in self.defend_action_indices)
-        elif isinstance(action, int):
-            is_defending = action in self.defend_action_indices
-
+        is_defending = discrete_action in self.defend_action_indices
         if is_defending:
             self.last_defense_frame = self.episode_steps
 
-        # Execute step
-        observation, reward, done, truncated, info = self.env.step(action)
+        # Execute step with multi-binary action
+        observation, reward, done, truncated, info = self.env.step(multibinary_action)
 
         # Extract enhanced game state information
         (
@@ -664,6 +903,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             player_y,
             opponent_x,
             opponent_y,
+            player_status,
+            opponent_status,
+            player_victories,
+            opponent_victories,
         ) = self._extract_enhanced_state(info)
 
         # Calculate custom reward
@@ -682,8 +925,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Get current stacked observation
         stacked_obs = self._get_stacked_observation()
 
-        # Process through simplified vision pipeline
-        tactical_predictions = self._process_simplified_vision_pipeline(
+        # Get button features from current action
+        button_features = self.discrete_actions.get_button_features(discrete_action)
+
+        # Process through strategic vision pipeline
+        tactical_predictions = self._process_strategic_vision_pipeline(
             stacked_obs,
             curr_player_health,
             curr_opponent_health,
@@ -692,6 +938,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             player_y,
             opponent_x,
             opponent_y,
+            player_status,
+            opponent_status,
+            player_victories,
+            opponent_victories,
+            button_features,  # Include button features
         )
 
         # Update CNN with tactical predictions
@@ -707,14 +958,48 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return stacked_obs, custom_reward, done, truncated, info
 
     def _extract_enhanced_state(self, info):
-        """Extract enhanced game state including positions and score"""
+        """Extract enhanced game state including all required data for strategic features"""
+        # Basic health and score
         player_health = info.get("agent_hp", self.full_hp)
         opponent_health = info.get("enemy_hp", self.full_hp)
         score = info.get("score", 0)
+
+        # Position data
         player_x = info.get("agent_x", 90)  # Default to center if not available
         player_y = info.get("agent_y", 64)
         opponent_x = info.get("enemy_x", 90)
         opponent_y = info.get("enemy_y", 64)
+
+        # Status data
+        player_status = info.get("agent_status", 0)
+        opponent_status = info.get("enemy_status", 0)
+
+        # Victory data
+        player_victories = info.get("agent_victories", 0)
+        opponent_victories = info.get("enemy_victories", 0)
+
+        # Log these values for debugging (only occasionally to avoid spam)
+        if self.episode_steps % 100 == 0:  # Log every 100 steps
+            logger.info(f"DEBUG - Game state values:")
+            logger.info(
+                f"  Player status: {player_status} (type: {type(player_status)})"
+            )
+            logger.info(
+                f"  Opponent status: {opponent_status} (type: {type(opponent_status)})"
+            )
+            logger.info(
+                f"  Player victories: {player_victories} (type: {type(player_victories)})"
+            )
+            logger.info(
+                f"  Opponent victories: {opponent_victories} (type: {type(opponent_victories)})"
+            )
+            logger.info(f"  Score: {score} (type: {type(score)})")
+            logger.info(
+                f"  Positions - Player: ({player_x}, {player_y}), Opponent: ({opponent_x}, {opponent_y})"
+            )
+            logger.info(
+                f"  Current action: {self.discrete_actions.get_action_name(self.current_discrete_action)}"
+            )
 
         return (
             player_health,
@@ -724,9 +1009,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             player_y,
             opponent_x,
             opponent_y,
+            player_status,
+            opponent_status,
+            player_victories,
+            opponent_victories,
         )
 
-    def _process_simplified_vision_pipeline(
+    def _process_strategic_vision_pipeline(
         self,
         stacked_obs,
         player_health,
@@ -736,19 +1025,16 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         player_y,
         opponent_x,
         opponent_y,
+        player_status,
+        opponent_status,
+        player_victories,
+        opponent_victories,
+        button_features,
     ):
-        """Process through simplified vision pipeline - attack/defend only"""
+        """Process through strategic vision pipeline with button features"""
         try:
-            # Step 1: OpenCV detection on latest frame
-            latest_frame = self._extract_latest_frame_rgb(stacked_obs)
-            opencv_detections = self.opencv_detector.detect_activity(latest_frame)
-            opencv_features = self._opencv_to_features(opencv_detections)
-
-            if opencv_detections.get("motion_detected", False):
-                self.stats["motion_detected_count"] += 1
-
-            # Step 2: Enhanced momentum tracking with relative positioning
-            momentum_features = self.momentum_tracker.update(
+            # Step 1: Strategic features using the 33-feature system (21 + 12 button)
+            strategic_features = self.strategic_tracker.update(
                 player_health,
                 opponent_health,
                 score,
@@ -756,9 +1042,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 player_y,
                 opponent_x,
                 opponent_y,
+                player_status,
+                opponent_status,
+                player_victories,
+                opponent_victories,
+                button_features,  # Include button features
             )
 
-            # Step 3: CNN feature extraction
+            # Step 2: CNN feature extraction
             if self.cnn_extractor is not None:
                 with torch.no_grad():
                     device = next(self.cnn_extractor.parameters()).device
@@ -773,15 +1064,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
             # Store in history buffers
             self.visual_features_history.append(visual_features)
-            self.opencv_features_history.append(opencv_features)
-            self.momentum_features_history.append(momentum_features)
+            self.strategic_features_history.append(strategic_features)
 
-            # Step 4: Simplified vision transformer prediction
+            # Step 3: Vision transformer prediction
             if (
                 self.vision_ready
                 and len(self.visual_features_history) == self.frame_stack
             ):
-                prediction = self._make_simplified_tactical_prediction()
+                prediction = self._make_tactical_prediction()
                 if prediction:
                     self.stats["predictions_made"] += 1
 
@@ -809,11 +1099,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return None
 
         except Exception as e:
-            logger.error(f"Simplified vision pipeline processing error: {e}")
+            logger.error(f"Strategic vision pipeline processing error: {e}")
             return None
 
-    def _make_simplified_tactical_prediction(self):
-        """Make simplified tactical predictions - attack and defend timing only"""
+    def _make_tactical_prediction(self):
+        """Make tactical predictions using strategic features with button data"""
         try:
             if (
                 not self.vision_ready
@@ -823,32 +1113,366 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
             # Stack sequences
             visual_seq = np.stack(list(self.visual_features_history))  # [8, 512]
-            opencv_seq = np.stack(list(self.opencv_features_history))  # [8, 2]
-            momentum_seq = np.stack(list(self.momentum_features_history))  # [8, 18]
+            strategic_seq = np.stack(list(self.strategic_features_history))  # [8, 33]
 
             # Combine features at each timestep
             combined_seq = np.concatenate(
-                [visual_seq, opencv_seq, momentum_seq], axis=1
-            )  # [8, 532]
+                [visual_seq, strategic_seq], axis=1
+            )  # [8, 545]
 
             # Convert to tensor and add batch dimension
             device = next(self.vision_transformer.parameters()).device
             combined_tensor = (
                 torch.from_numpy(combined_seq).float().unsqueeze(0).to(device)
-            )  # [1, 8, 532]
+            )  # [1, 8, 545]
 
-            # Get simplified tactical predictions from vision transformer
+            # Get tactical predictions from vision transformer
             with torch.no_grad():
                 predictions = self.vision_transformer(combined_tensor)
 
-            return {
+            prediction_result = {
                 "attack_timing": predictions["attack_timing"].cpu().item(),
                 "defend_timing": predictions["defend_timing"].cpu().item(),
             }
 
+            # NEW: Log transformer predictions for analysis
+            if self.log_transformer_predictions:
+                self._log_transformer_prediction(
+                    prediction_result,
+                    strategic_seq[-1],  # Latest strategic features
+                    visual_seq[-1],  # Latest visual features
+                    combined_tensor,
+                )
+
+            return prediction_result
+
         except Exception as e:
-            logger.error(f"Simplified vision prediction error: {e}")
+            logger.error(f"Strategic vision prediction error: {e}")
             return None
+
+    def _log_transformer_prediction(
+        self, predictions, strategic_features, visual_features, combined_tensor
+    ):
+        """NEW: Log transformer predictions for learning analysis"""
+        try:
+            # Basic prediction logging
+            self.transformer_logs["predictions"].append(
+                {
+                    "step": self.stats["predictions_made"],
+                    "attack_timing": predictions["attack_timing"],
+                    "defend_timing": predictions["defend_timing"],
+                    "action": self.discrete_actions.get_action_name(
+                        self.current_discrete_action
+                    ),
+                    "strategic_features": strategic_features.tolist(),
+                }
+            )
+
+            # Detailed analysis every N predictions
+            if self.stats["predictions_made"] % self.log_interval == 0:
+                self._analyze_transformer_learning(
+                    predictions, strategic_features, visual_features
+                )
+
+            # Log significant predictions
+            if predictions["attack_timing"] > 0.8 or predictions["defend_timing"] > 0.8:
+                self._log_significant_prediction(predictions, strategic_features)
+
+        except Exception as e:
+            logger.warning(f"Transformer logging error: {e}")
+
+    def _analyze_transformer_learning(
+        self, predictions, strategic_features, visual_features
+    ):
+        """NEW: Analyze what the transformer has learned"""
+        try:
+            logger.info(
+                f"\n🧠 TRANSFORMER LEARNING ANALYSIS @ Step {self.stats['predictions_made']}"
+            )
+
+            # Feature importance analysis
+            feature_importance = self._calculate_feature_importance(strategic_features)
+
+            # Strategic feature analysis
+            logger.info("📊 STRATEGIC FEATURE IMPORTANCE (Top 10):")
+            for i, (feature_name, importance) in enumerate(feature_importance[:10]):
+                logger.info(f"   {i+1:2d}. {feature_name:20s}: {importance:.4f}")
+
+            # Current game situation
+            self._log_current_situation(strategic_features, predictions)
+
+            # Tactical patterns discovered
+            self._log_tactical_patterns(predictions, strategic_features)
+
+            # Learning progression
+            self._log_learning_progression()
+
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.warning(f"Transformer analysis error: {e}")
+
+    def _calculate_feature_importance(self, strategic_features):
+        """NEW: Calculate which features the transformer considers most important"""
+        try:
+            # Simple feature importance based on prediction correlation
+            feature_importance = []
+
+            for i, feature_value in enumerate(strategic_features):
+                if i < len(self.strategic_feature_names):
+                    feature_name = self.strategic_feature_names[i]
+                else:
+                    feature_name = self.button_feature_names[
+                        i - len(self.strategic_feature_names)
+                    ]
+
+                # Calculate importance based on feature magnitude and recent usage
+                importance = abs(feature_value) * (1.0 + feature_value * 0.1)
+                feature_importance.append((feature_name, importance))
+
+            # Sort by importance
+            feature_importance.sort(key=lambda x: x[1], reverse=True)
+            return feature_importance
+
+        except Exception as e:
+            logger.warning(f"Feature importance calculation error: {e}")
+            return []
+
+    def _log_current_situation(self, strategic_features, predictions):
+        """NEW: Log current game situation analysis"""
+        try:
+            logger.info("🎯 CURRENT SITUATION ANALYSIS:")
+
+            # Health situation
+            player_danger = strategic_features[0] > 0.5
+            opponent_danger = strategic_features[1] > 0.5
+            health_ratio = strategic_features[2]
+
+            if player_danger:
+                logger.info("   ⚠️  PLAYER IN DANGER ZONE!")
+            if opponent_danger:
+                logger.info("   🎯 OPPONENT IN DANGER ZONE!")
+
+            logger.info(f"   💚 Health Ratio: {health_ratio:.3f} (Player vs Opponent)")
+
+            # Position situation
+            corner_distance = strategic_features[6]
+            center_control = strategic_features[10]
+            optimal_spacing = strategic_features[13]
+
+            logger.info(f"   📍 Corner Distance: {corner_distance:.3f}")
+            logger.info(f"   🎮 Center Control: {center_control:.3f}")
+            logger.info(
+                f"   📏 Optimal Spacing: {'YES' if optimal_spacing > 0.5 else 'NO'}"
+            )
+
+            # Button analysis
+            button_features = strategic_features[21:33]
+            pressed_buttons = [
+                self.button_feature_names[i]
+                for i, pressed in enumerate(button_features)
+                if pressed > 0.5
+            ]
+            logger.info(
+                f"   🎮 Buttons Pressed: {', '.join(pressed_buttons) if pressed_buttons else 'None'}"
+            )
+
+            # Transformer recommendations
+            logger.info(f"   🧠 Transformer Recommends:")
+            logger.info(f"      Attack Timing: {predictions['attack_timing']:.3f}")
+            logger.info(f"      Defend Timing: {predictions['defend_timing']:.3f}")
+
+            if predictions["attack_timing"] > 0.7:
+                logger.info("      → 🗡️  STRONG ATTACK RECOMMENDATION!")
+            if predictions["defend_timing"] > 0.7:
+                logger.info("      → 🛡️  STRONG DEFEND RECOMMENDATION!")
+
+        except Exception as e:
+            logger.warning(f"Situation logging error: {e}")
+
+    def _log_tactical_patterns(self, predictions, strategic_features):
+        """NEW: Log discovered tactical patterns"""
+        try:
+            logger.info("🎯 TACTICAL PATTERNS DISCOVERED:")
+
+            # Attack patterns
+            if predictions["attack_timing"] > 0.6:
+                conditions = []
+                if strategic_features[1] > 0.5:  # opponent in danger
+                    conditions.append("opponent in danger")
+                if strategic_features[13] > 0.5:  # optimal spacing
+                    conditions.append("optimal spacing")
+                if strategic_features[14] > 0.3:  # forward pressure
+                    conditions.append("forward pressure")
+
+                if conditions:
+                    logger.info(f"   ⚔️  Attack when: {', '.join(conditions)}")
+
+            # Defend patterns
+            if predictions["defend_timing"] > 0.6:
+                conditions = []
+                if strategic_features[0] > 0.5:  # player in danger
+                    conditions.append("player in danger")
+                if strategic_features[8] > 0.5:  # player near corner
+                    conditions.append("player near corner")
+                if strategic_features[15] > 0.3:  # defensive movement
+                    conditions.append("defensive movement")
+
+                if conditions:
+                    logger.info(f"   🛡️  Defend when: {', '.join(conditions)}")
+
+            # Button combination patterns
+            button_features = strategic_features[21:33]
+            if np.sum(button_features) > 0:
+                active_buttons = [
+                    name
+                    for i, name in enumerate(self.button_feature_names)
+                    if button_features[i] > 0.5
+                ]
+                if len(active_buttons) > 1:
+                    logger.info(f"   🎮 Learned combo: {' + '.join(active_buttons)}")
+
+        except Exception as e:
+            logger.warning(f"Tactical pattern logging error: {e}")
+
+    def _log_learning_progression(self):
+        """NEW: Log learning progression over time"""
+        try:
+            if len(self.transformer_logs["predictions"]) > 500:  # Need some history
+                recent_predictions = self.transformer_logs["predictions"][-500:]
+                early_predictions = (
+                    self.transformer_logs["predictions"][:500]
+                    if len(self.transformer_logs["predictions"]) > 1000
+                    else []
+                )
+
+                logger.info("📈 LEARNING PROGRESSION:")
+
+                # Calculate average confidence over time
+                recent_attack_avg = np.mean(
+                    [p["attack_timing"] for p in recent_predictions]
+                )
+                recent_defend_avg = np.mean(
+                    [p["defend_timing"] for p in recent_predictions]
+                )
+
+                logger.info(f"   Recent Attack Confidence: {recent_attack_avg:.3f}")
+                logger.info(f"   Recent Defend Confidence: {recent_defend_avg:.3f}")
+
+                if early_predictions:
+                    early_attack_avg = np.mean(
+                        [p["attack_timing"] for p in early_predictions]
+                    )
+                    early_defend_avg = np.mean(
+                        [p["defend_timing"] for p in early_predictions]
+                    )
+
+                    attack_improvement = recent_attack_avg - early_attack_avg
+                    defend_improvement = recent_defend_avg - early_defend_avg
+
+                    logger.info(
+                        f"   Attack Confidence Change: {attack_improvement:+.3f}"
+                    )
+                    logger.info(
+                        f"   Defend Confidence Change: {defend_improvement:+.3f}"
+                    )
+
+                # Win rate correlation
+                if self.total_rounds > 0:
+                    win_rate = self.wins / self.total_rounds
+                    logger.info(f"   Current Win Rate: {win_rate:.1%}")
+
+        except Exception as e:
+            logger.warning(f"Learning progression logging error: {e}")
+
+    def _log_significant_prediction(self, predictions, strategic_features):
+        """NEW: Log high-confidence predictions for pattern analysis"""
+        try:
+            if predictions["attack_timing"] > 0.8:
+                logger.info(
+                    f"🗡️  HIGH ATTACK CONFIDENCE ({predictions['attack_timing']:.3f}):"
+                )
+                logger.info(
+                    f"   Action: {self.discrete_actions.get_action_name(self.current_discrete_action)}"
+                )
+                logger.info(f"   Health Ratio: {strategic_features[2]:.3f}")
+                logger.info(f"   Distance: Optimal={strategic_features[13]:.3f}")
+                logger.info(
+                    f"   Position: Corner={strategic_features[6]:.3f}, Center={strategic_features[10]:.3f}"
+                )
+
+            if predictions["defend_timing"] > 0.8:
+                logger.info(
+                    f"🛡️  HIGH DEFEND CONFIDENCE ({predictions['defend_timing']:.3f}):"
+                )
+                logger.info(
+                    f"   Action: {self.discrete_actions.get_action_name(self.current_discrete_action)}"
+                )
+                logger.info(f"   Player Danger: {strategic_features[0]:.3f}")
+                logger.info(f"   Corner Distance: {strategic_features[6]:.3f}")
+                logger.info(f"   Defensive Movement: {strategic_features[15]:.3f}")
+
+        except Exception as e:
+            logger.warning(f"Significant prediction logging error: {e}")
+
+    def save_transformer_analysis(self, filepath="transformer_analysis.json"):
+        """NEW: Save transformer learning analysis to file"""
+        try:
+            if self.log_transformer_predictions:
+                import json
+
+                analysis_data = {
+                    "total_predictions": len(self.transformer_logs["predictions"]),
+                    "learning_summary": {
+                        "avg_attack_timing": (
+                            np.mean(
+                                [
+                                    p["attack_timing"]
+                                    for p in self.transformer_logs["predictions"]
+                                ]
+                            )
+                            if self.transformer_logs["predictions"]
+                            else 0
+                        ),
+                        "avg_defend_timing": (
+                            np.mean(
+                                [
+                                    p["defend_timing"]
+                                    for p in self.transformer_logs["predictions"]
+                                ]
+                            )
+                            if self.transformer_logs["predictions"]
+                            else 0
+                        ),
+                        "high_confidence_attacks": len(
+                            [
+                                p
+                                for p in self.transformer_logs["predictions"]
+                                if p["attack_timing"] > 0.8
+                            ]
+                        ),
+                        "high_confidence_defends": len(
+                            [
+                                p
+                                for p in self.transformer_logs["predictions"]
+                                if p["defend_timing"] > 0.8
+                            ]
+                        ),
+                        "win_rate": self.wins / max(self.total_rounds, 1),
+                        "total_rounds": self.total_rounds,
+                    },
+                    "recent_predictions": self.transformer_logs["predictions"][
+                        -100:
+                    ],  # Last 100 predictions
+                }
+
+                with open(filepath, "w") as f:
+                    json.dump(analysis_data, f, indent=2)
+
+                logger.info(f"💾 Transformer analysis saved to {filepath}")
+
+        except Exception as e:
+            logger.warning(f"Failed to save transformer analysis: {e}")
 
     def _preprocess_frame(self, frame):
         """Preprocess frame to target size (128, 180)"""
@@ -879,38 +1503,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             logger.error(f"Frame stacking error: {e}")
             return np.zeros(self.observation_space.shape, dtype=np.uint8)
 
-    def _extract_latest_frame_rgb(self, stacked_obs):
-        """Extract latest RGB frame from 8-frame stack for OpenCV processing"""
-        try:
-            # stacked_obs shape: [24, 128, 180] = [8*3, H, W] for 8 RGB frames
-            # Latest frame is last 3 channels: [21:24, :, :] (channels 21, 22, 23)
-            latest_frame_chw = stacked_obs[-3:]  # [3, 128, 180] - last RGB frame
-            latest_frame_hwc = latest_frame_chw.transpose(
-                1, 2, 0
-            )  # [128, 180, 3] - HWC format
-            return latest_frame_hwc
-
-        except Exception as e:
-            logger.error(f"Frame extraction error: {e}")
-            return np.zeros((128, 180, 3), dtype=np.uint8)
-
-    def _opencv_to_features(self, opencv_detections):
-        """Convert OpenCV detections to fixed-size feature vector (2 dims)"""
-        try:
-            features = np.zeros(2, dtype=np.float32)
-
-            # Only motion features - keep it simple
-            features[0] = (
-                1.0 if opencv_detections.get("motion_detected", False) else 0.0
-            )
-            features[1] = opencv_detections.get("motion_intensity", 0.0)
-
-            return features
-
-        except Exception as e:
-            logger.error(f"OpenCV feature conversion error: {e}")
-            return np.zeros(2, dtype=np.float32)
-
     def _calculate_reward(self, curr_player_health, curr_opponent_health):
         """Calculate reward based on damage dealt/received"""
         reward = 0.0
@@ -925,6 +1517,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 self.wins += 1
                 win_rate = self.wins / self.total_rounds
                 logger.info(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
+
+                # NEW: Save analysis on win
+                if self.log_transformer_predictions:
+                    self.save_transformer_analysis(
+                        f"transformer_analysis_win_{self.wins}.json"
+                    )
+
             elif curr_player_health <= 0 and curr_opponent_health > 0:
                 # Loss
                 self.losses += 1
