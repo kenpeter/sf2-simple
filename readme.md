@@ -1,7 +1,14 @@
 ![win_rate](https://github.com/user-attachments/assets/266fb8bb-f97f-4572-a313-b6bcdc16fc5c)
 
 
-win rate at 53.4%!!!!!!!!!!!!!!
+__win rate at 53.4%!!!!!!!!!!!!!!__
+
+
+
+
+
+
+
 
 
 python train.py --resume trained_models/ppo_sf2_7999760_steps.zip --total-timesteps 10000000 --learning-rate 1e-3 --render
