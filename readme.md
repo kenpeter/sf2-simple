@@ -21,7 +21,7 @@ python train.py   --total-timesteps 20000000   --num-envs 1   --learning-rate 3e
 
 
 
-python train.py --total-timesteps 6000000 --resume trained_models_cuda_discrete/ppo_sf2_cuda_discrete_4000000_steps.zip --learning-rate 2.0e-4
+python train.py --total-timesteps 2000000 --resume trained_models_cuda_discrete/ppo_sf2_cuda_discrete_8200000_steps.zip --learning-rate 2.0e-4
 
 
   ta.json 
