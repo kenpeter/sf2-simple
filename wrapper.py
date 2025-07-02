@@ -1518,11 +1518,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 win_rate = self.wins / self.total_rounds
                 logger.info(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
 
-                # NEW: Save analysis on win
-                if self.log_transformer_predictions:
-                    self.save_transformer_analysis(
-                        f"transformer_analysis_win_{self.wins}.json"
-                    )
+                # # NEW: Save analysis on win
+                # if self.log_transformer_predictions:
+                #     self.save_transformer_analysis(
+                #         f"transformer_analysis_win_{self.wins}.json"
+                #     )
 
             elif curr_player_health <= 0 and curr_opponent_health > 0:
                 # Loss

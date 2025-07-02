@@ -1,118 +1,86 @@
+#!/usr/bin/env python3
+"""
+Evaluation script for trained Street Fighter II agent with discrete actions
+Compatible with StreetFighterVisionWrapper and strategic vision pipeline
+"""
+
 import os
 import argparse
 import time
 import numpy as np
+import torch
 
 import retro
 import gymnasium as gym
 from stable_baselines3 import PPO
 
-# Import the wrapper
-from wrapper import StreetFighterCustomWrapper
+# Import the correct wrapper and CNN from training setup
+from wrapper import StreetFighterVisionWrapper, StreetFighterSimplifiedCNN
 
 
-class FilteredActionWrapper(gym.Wrapper):
-    """Wrapper to filter out START and MODE buttons to prevent cheating"""
+def create_eval_env(game, state, enable_vision_transformer=True, defend_actions=None):
+    """Create evaluation environment matching training setup exactly"""
 
-    def __init__(self, env):
-        super(FilteredActionWrapper, self).__init__(env)
-        # Street Fighter II MultiBinary actions:
-        # [B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R]
-        # We want to disable START (index 3) and SELECT (index 2)
-        self.disabled_buttons = [2, 3]  # SELECT and START
-
-    def step(self, action):
-        # Filter out disabled buttons by setting them to 0
-        if hasattr(action, "__len__") and len(action) >= 4:
-            filtered_action = action.copy() if hasattr(action, "copy") else list(action)
-            for button_idx in self.disabled_buttons:
-                if button_idx < len(filtered_action):
-                    filtered_action[button_idx] = 0
-            return self.env.step(filtered_action)
-        return self.env.step(action)
-
-    def reset(self, **kwargs):
-        return self.env.reset(**kwargs)
-
-
-def create_eval_env(game, state):
-    """Create evaluation environment aligned with training setup"""
     # Handle state file path consistently with train.py
     if os.path.isfile(state):
         state_file = os.path.abspath(state)
-        print(f"Using custom state file: {state_file}")
+        print(f"📁 Using custom state file: {state_file}")
     else:
         if state.endswith(".state"):
             state_file = state[:-6]  # Remove .state extension for built-in states
-            print(f"Using built-in state: {state_file}")
+            print(f"🎮 Using built-in state: {state_file}")
         else:
             state_file = state
-            print(f"Using state: {state_file}")
+            print(f"🎮 Using state: {state_file}")
 
-    # Create retro environment with rendering enabled
+    # Create retro environment with exact training settings
     env = retro.make(
         game=game,
         state=state_file,
-        use_restricted_actions=retro.Actions.FILTERED,
+        use_restricted_actions=retro.Actions.FILTERED,  # 12 buttons filtered
         obs_type=retro.Observations.IMAGE,
         render_mode="human",  # Enable rendering for human observation
     )
 
-    # Apply custom wrapper with same settings as training
-    # IMPORTANT: Must match training wrapper configuration exactly!
-    env = StreetFighterCustomWrapper(
+    # Apply StreetFighterVisionWrapper with exact training configuration
+    env = StreetFighterVisionWrapper(
         env,
         reset_round=True,
         rendering=True,
-        max_episode_steps=5000,  # ADDED: Match training configuration
+        max_episode_steps=5000,
+        frame_stack=8,  # 8 RGB frames
+        enable_vision_transformer=enable_vision_transformer,
+        defend_action_indices=defend_actions or [54, 55, 56],  # Default block actions
+        log_transformer_predictions=False,  # Disable logging during eval
     )
 
-    # Print observation space for debugging
-    print(f"🔍 Evaluation environment observation space: {env.observation_space.shape}")
+    print(f"✅ Evaluation environment created:")
+    print(f"   Observation space: {env.observation_space.shape}")
+    print(f"   Action space: Discrete({env.action_space.n}) actions")
+    print(
+        f"   Vision Transformer: {'Enabled' if enable_vision_transformer else 'Disabled'}"
+    )
 
     return env
 
 
-def convert_observation_format(obs, target_shape):
-    """Convert observation between channels-first and channels-last formats"""
-    current_shape = obs.shape
-
-    if current_shape == target_shape:
-        return obs
-
-    # Check if we need to transpose from (H, W, C) to (C, H, W)
-    if len(current_shape) == 3 and len(target_shape) == 3:
-        if (current_shape[0], current_shape[1], current_shape[2]) == (
-            target_shape[1],
-            target_shape[2],
-            target_shape[0],
-        ):
-            # Transpose from (H, W, C) to (C, H, W)
-            # print(f"🔄 Converting observation from {current_shape} to {target_shape}")
-            return np.transpose(obs, (2, 0, 1))
-        elif (current_shape[0], current_shape[1], current_shape[2]) == (
-            target_shape[2],
-            target_shape[0],
-            target_shape[1],
-        ):
-            # Transpose from (C, H, W) to (H, W, C)
-            print(f"🔄 Converting observation from {current_shape} to {target_shape}")
-            return np.transpose(obs, (1, 2, 0))
-
-    print(
-        f"⚠️  Warning: Cannot convert observation shape {current_shape} to {target_shape}"
-    )
-    return obs
+def display_action_info(action, discrete_actions):
+    """Display human-readable action information"""
+    try:
+        action_name = discrete_actions.get_action_name(action)
+        return action_name
+    except:
+        return f"Action_{action}"
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate trained Street Fighter II Agent"
+        description="Evaluate trained Street Fighter II Agent with Discrete Actions"
     )
     parser.add_argument(
         "--model-path",
         type=str,
-        default="trained_models/ppo_sf2_25999220_steps.zip",
+        default="trained_models_cuda_discrete/ppo_sf2_cuda_discrete_final.zip",
         help="Path to the trained model",
     )
     parser.add_argument(
@@ -124,7 +92,7 @@ def main():
     parser.add_argument(
         "--episodes",
         type=int,
-        default=3,
+        default=5,
         help="Number of episodes to run",
     )
     parser.add_argument(
@@ -132,77 +100,157 @@ def main():
         action="store_true",
         help="Use built-in state (removes .state extension)",
     )
+    parser.add_argument(
+        "--no-vision-transformer",
+        action="store_true",
+        help="Disable vision transformer during evaluation",
+    )
+    parser.add_argument(
+        "--defend-actions",
+        type=str,
+        default="54,55,56",
+        help="Comma-separated list of defend action indices",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=60,
+        help="Frames per second for rendering (default: 60)",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Use deterministic actions (no exploration)",
+    )
+    parser.add_argument(
+        "--device", type=str, default="cuda", help="Device to run model on (cuda/cpu)"
+    )
 
     args = parser.parse_args()
 
     # Check if model exists
     if not os.path.exists(args.model_path):
         print(f"❌ Error: Model file not found at {args.model_path}")
-        print("Available models in trained_models/:")
-        if os.path.exists("trained_models"):
-            for f in os.listdir("trained_models"):
-                if f.endswith(".zip"):
-                    print(f"   - {f}")
+
+        # Check common directories
+        for dirname in ["trained_models", "trained_models_cuda_discrete", "."]:
+            if os.path.exists(dirname):
+                print(f"\nAvailable models in {dirname}/:")
+                for f in sorted(os.listdir(dirname)):
+                    if f.endswith(".zip"):
+                        print(f"   - {f}")
         return
 
     game = "StreetFighterIISpecialChampionEdition-Genesis"
+    enable_vision_transformer = not args.no_vision_transformer
+    defend_actions = [int(x.strip()) for x in args.defend_actions.split(",")]
 
     # Handle state file properly
     if args.use_built_in_state:
-        # Use built-in state (remove .state extension if present)
         state_file = (
             args.state_file[:-6]
             if args.state_file.endswith(".state")
             else args.state_file
         )
     else:
-        # Use custom state file
         state_file = args.state_file
 
-    print(f"🤖 Loading model from: {args.model_path}")
-    print(f"🎮 Using state file: {state_file}")
-    print(f"🔄 Will run {args.episodes} episodes")
-    print("⚡ Running at 60 FPS for smooth gameplay")
-    print("\n🔧 FIXED: Automatic observation format conversion enabled!")
-    print("\nPress Ctrl+C to quit at any time")
+    print(f"🚀 Street Fighter II Discrete Action Evaluation")
+    print(f"🤖 Model: {args.model_path}")
+    print(f"🎮 State: {state_file}")
+    print(f"🔄 Episodes: {args.episodes}")
+    print(
+        f"🧠 Vision Transformer: {'Enabled' if enable_vision_transformer else 'Disabled'}"
+    )
+    print(f"🛡️  Defend Actions: {defend_actions}")
+    print(f"🎬 FPS: {args.fps}")
+    print(f"🎯 Deterministic: {args.deterministic}")
+    print(f"💻 Device: {args.device}")
     print("=" * 60)
 
     # Create evaluation environment
     try:
-        env = create_eval_env(game, state_file)
+        env = create_eval_env(
+            game,
+            state_file,
+            enable_vision_transformer=enable_vision_transformer,
+            defend_actions=defend_actions,
+        )
         print("✅ Environment created successfully!")
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
         print(
             "\n💡 Try using --use-built-in-state flag if you're using a built-in state"
         )
+        import traceback
+
+        traceback.print_exc()
         return
 
     # Load the trained model
     try:
         print("🧠 Loading model...")
-        model = PPO.load(args.model_path, device="cuda")
-        print("✅ Model loaded successfully!")
+        device = (
+            args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu"
+        )
+        model = PPO.load(args.model_path, device=device)
+        print(f"✅ Model loaded on {device}!")
 
         # Check observation space compatibility
         model_shape = model.observation_space.shape
         env_shape = env.observation_space.shape
 
-        print(f"🔍 Model expects observation shape: {model_shape}")
-        print(f"🔍 Environment provides shape: {env_shape}")
+        print(f"🔍 Model expects: {model_shape}")
+        print(f"🔍 Environment provides: {env_shape}")
 
         if model_shape != env_shape:
-            print("🔧 Observation shapes differ - will auto-convert during evaluation")
+            print("⚠️  Observation shapes differ! This may cause issues.")
+            return
         else:
             print("✅ Observation shapes match perfectly!")
 
+        # Check action space compatibility
+        model_actions = model.action_space.n
+        env_actions = env.action_space.n
+
+        print(f"🎮 Model actions: {model_actions}")
+        print(f"🎮 Environment actions: {env_actions}")
+
+        if model_actions != env_actions:
+            print("⚠️  Action spaces differ! This may cause issues.")
+            return
+        else:
+            print("✅ Action spaces match perfectly!")
+
     except Exception as e:
         print(f"❌ Error loading model: {e}")
+        import traceback
+
+        traceback.print_exc()
         return
 
+    # Inject feature extractor for vision transformer
+    if enable_vision_transformer:
+        try:
+            print("💉 Injecting feature extractor for vision transformer...")
+            feature_extractor = model.policy.features_extractor
+
+            if hasattr(env, "inject_feature_extractor"):
+                env.inject_feature_extractor(feature_extractor)
+                print("✅ Feature extractor injected successfully!")
+            else:
+                print("⚠️  Environment doesn't support feature extractor injection")
+
+        except Exception as e:
+            print(f"⚠️  Feature extractor injection failed: {e}")
+
+    # Run evaluation episodes
     try:
         total_wins = 0
-        total_episodes = 0
+        total_losses = 0
+        total_draws = 0
+        total_reward = 0.0
+        frame_time = 1.0 / args.fps  # Calculate frame timing
 
         for episode in range(args.episodes):
             print(f"\n🥊 --- Episode {episode + 1}/{args.episodes} ---")
@@ -210,17 +258,21 @@ def main():
             obs, info = env.reset()
             episode_reward = 0
             step_count = 0
+            last_action_name = "IDLE"
 
             print("🎬 Starting new match... Watch the game window!")
+            start_time = time.time()
 
             while True:
-                # FIXED: Convert observation format if needed
-                obs_for_model = convert_observation_format(
-                    obs, model.observation_space.shape
-                )
-
                 # Get action from the trained model
-                action, _states = model.predict(obs_for_model, deterministic=False)
+                action, _states = model.predict(obs, deterministic=args.deterministic)
+
+                # Display action info occasionally
+                if hasattr(env, "discrete_actions"):
+                    action_name = display_action_info(action, env.discrete_actions)
+                    if action_name != last_action_name:
+                        print(f"   🎮 Action: {action_name}")
+                        last_action_name = action_name
 
                 # Take step in environment
                 obs, reward, terminated, truncated, info = env.step(action)
@@ -228,39 +280,61 @@ def main():
                 episode_reward += reward
                 step_count += 1
 
-                # Maintain 60 FPS for smooth viewing
-                time.sleep(0.0167)  # 60 FPS timing
+                # Maintain target FPS for smooth viewing
+                time.sleep(frame_time)
 
                 # Check if episode is done
                 if terminated or truncated:
                     break
 
-                # Optional: Add some info display every 5 seconds at 60fps
-                if step_count % 300 == 0:  # Every 5 seconds at 60fps (300 steps)
+                # Display info every 5 seconds
+                if step_count % (args.fps * 5) == 0:  # Every 5 seconds
+                    elapsed = time.time() - start_time
                     player_hp = info.get("agent_hp", "?")
                     enemy_hp = info.get("enemy_hp", "?")
                     print(
-                        f"   Step {step_count}: Player HP: {player_hp}, Enemy HP: {enemy_hp}"
+                        f"   ⏱️  {elapsed:.1f}s - Player: {player_hp} HP, Enemy: {enemy_hp} HP"
                     )
 
-            total_episodes += 1
+                    # Show vision transformer predictions if available
+                    if enable_vision_transformer and hasattr(
+                        env, "current_attack_timing"
+                    ):
+                        attack_timing = getattr(env, "current_attack_timing", 0)
+                        defend_timing = getattr(env, "current_defend_timing", 0)
+                        print(
+                            f"   🧠 AI Analysis - Attack: {attack_timing:.3f}, Defend: {defend_timing:.3f}"
+                        )
+
+            # Episode finished
+            total_reward += episode_reward
             print(f"🏁 Episode {episode + 1} finished!")
+            print(f"   Duration: {time.time() - start_time:.1f} seconds")
             print(f"   Total reward: {episode_reward:.1f}")
             print(f"   Steps taken: {step_count}")
 
-            # Get final health values
-            player_hp = info.get("agent_hp", "?")
-            enemy_hp = info.get("enemy_hp", "?")
+            # Get final health values and determine winner
+            player_hp = info.get("agent_hp", 0)
+            enemy_hp = info.get("enemy_hp", 0)
             print(f"   Final - Player HP: {player_hp}, Enemy HP: {enemy_hp}")
 
-            # Determine winner
-            if player_hp <= 0:
+            if player_hp <= 0 and enemy_hp > 0:
                 print("   🔴 AI Lost this round")
-            elif enemy_hp <= 0:
+                total_losses += 1
+            elif enemy_hp <= 0 and player_hp > 0:
                 print("   🟢 AI Won this round")
                 total_wins += 1
             else:
-                print("   ⚪ Round ended without knockout")
+                print("   ⚪ Draw or timeout")
+                total_draws += 1
+
+            # Show win rate so far
+            total_games = total_wins + total_losses + total_draws
+            if total_games > 0:
+                win_rate = (total_wins / total_games) * 100
+                print(
+                    f"   📊 Win rate so far: {win_rate:.1f}% ({total_wins}/{total_games})"
+                )
 
             # Pause between episodes
             if episode < args.episodes - 1:
@@ -268,9 +342,29 @@ def main():
                 time.sleep(3)
 
         # Final statistics
-        print(f"\n📊 Final Results:")
-        print(f"   Wins: {total_wins}/{total_episodes}")
-        print(f"   Win Rate: {(total_wins/total_episodes)*100:.1f}%")
+        total_games = total_wins + total_losses + total_draws
+        win_rate = (total_wins / total_games) * 100 if total_games > 0 else 0
+        avg_reward = total_reward / args.episodes
+
+        print(f"\n📊 === FINAL EVALUATION RESULTS ===")
+        print(f"   Games Played: {total_games}")
+        print(f"   Wins: {total_wins}")
+        print(f"   Losses: {total_losses}")
+        print(f"   Draws: {total_draws}")
+        print(f"   Win Rate: {win_rate:.1f}%")
+        print(f"   Average Reward: {avg_reward:.2f}")
+        print(f"   Model: {os.path.basename(args.model_path)}")
+        print("=" * 40)
+
+        # Performance assessment
+        if win_rate >= 80:
+            print("🏆 EXCELLENT performance!")
+        elif win_rate >= 60:
+            print("🥈 GOOD performance!")
+        elif win_rate >= 40:
+            print("🥉 AVERAGE performance")
+        else:
+            print("📚 Needs more training")
 
     except KeyboardInterrupt:
         print("\n\n⏹️  Evaluation interrupted by user")
