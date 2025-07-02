@@ -7,6 +7,7 @@ Key improvements:
 2. Enhanced reward system with combo bonuses
 3. Improved strategic feature weighting
 4. Better action space design for more effective gameplay
+5. REDUCED LOGGING FREQUENCY to prevent large log files
 """
 
 import cv2
@@ -23,11 +24,11 @@ import logging
 import os
 from datetime import datetime
 
-# Configure logging to file instead of console
+# Configure logging to file instead of console - REDUCED FREQUENCY
 os.makedirs("logs", exist_ok=True)
 log_filename = f'logs/training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # CHANGED: Reduced from INFO to WARNING
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(log_filename),
@@ -139,84 +140,86 @@ class StreetFighterDiscreteActions:
             [6],  # 54: Block (hold back)
             [6, 5],  # 55: Low block (back + down)
             [4, 6],  # 56: Jump back (defensive)
-            [4],  # 3: UP (jump)
-            [5],  # 4: DOWN (crouch)
-            [6, 4],  # 5: JUMP BACK (defensive)
-            [7, 4],  # 6: JUMP FORWARD (aggressive)
-            [6, 5],  # 7: CROUCH BACK (low block position)
-            [7, 5],  # 8: CROUCH FORWARD (approach)
-            # QUICK ATTACKS (9-16) - Fast startup for pressure
-            [1],  # 9: Light Punch (jab)
-            [0],  # 10: Light Kick
-            [1, 7],  # 11: Forward Light Punch (advancing jab)
-            [0, 7],  # 12: Forward Light Kick
-            [1, 5],  # 13: Crouching Light Punch
-            [0, 5],  # 14: Crouching Light Kick
-            # MEDIUM ATTACKS (17-24) - Good damage/range balance
-            [9],  # 15: Medium Punch
-            [8],  # 16: Medium Kick
-            [9, 7],  # 17: Forward Medium Punch
-            [8, 7],  # 18: Forward Medium Kick
-            [9, 5],  # 19: Crouching Medium Punch
-            [8, 5],  # 20: Crouching Medium Kick
-            # HEAVY ATTACKS (21-28) - High damage but slower
-            [10],  # 21: Heavy Punch
-            [11],  # 22: Heavy Kick
-            [10, 7],  # 23: Forward Heavy Punch
-            [11, 7],  # 24: Forward Heavy Kick
-            [10, 5],  # 25: Crouching Heavy Punch (sweep setup)
-            [11, 5],  # 26: Crouching Heavy Kick (sweep)
-            # JUMP ATTACKS (27-34) - Air control and crossups
-            [1, 4],  # 27: Jumping Light Punch
-            [0, 4],  # 28: Jumping Light Kick
-            [9, 4],  # 29: Jumping Medium Punch
-            [8, 4],  # 30: Jumping Medium Kick
-            [10, 4],  # 31: Jumping Heavy Punch
-            [11, 4],  # 32: Jumping Heavy Kick
-            [1, 4, 7],  # 33: Jump Forward Light Punch
-            [9, 4, 7],  # 34: Jump Forward Medium Punch
-            # SPECIAL MOVE MOTIONS (35-46) - Improved special move inputs
-            [5, 7],  # 35: Quarter Circle Forward (QCF start)
-            [5, 6],  # 36: Quarter Circle Back (QCB start)
-            [5, 7, 1],  # 37: Hadoken Light (fireball)
-            [5, 7, 9],  # 38: Hadoken Medium
-            [5, 7, 10],  # 39: Hadoken Heavy
-            [7, 5, 7, 1],  # 40: Dragon Punch Light (DP motion)
-            [7, 5, 7, 9],  # 41: Dragon Punch Medium
-            [7, 5, 7, 10],  # 42: Dragon Punch Heavy
-            [5, 6, 0],  # 43: Hurricane Kick Light
-            [5, 6, 8],  # 44: Hurricane Kick Medium
-            [5, 6, 11],  # 45: Hurricane Kick Heavy
-            [6, 5, 6, 1],  # 46: Reverse Dragon Punch
-            # DEFENSIVE OPTIONS (47-52) - Improved defensive play
-            [6],  # 47: Block (hold back)
-            [6, 5],  # 48: Low Block
-            [4, 6],  # 49: Jump Back Block
-            [6, 1],  # 50: Jab while blocking (frame trap escape)
-            [5],  # 51: Crouch (avoid high attacks)
-            [4],  # 52: Jump (avoid low attacks)
-            # COMBO STARTERS (53-60) - Common combo initiators
-            [1, 1],  # 53: Double Jab (link combo)
-            [0, 1],  # 54: Light Kick to Light Punch
-            [9, 10],  # 55: Medium Punch to Heavy Punch
-            [8, 11],  # 56: Medium Kick to Heavy Kick
-            [5, 0, 9],  # 57: Crouch Light Kick to Medium Punch
-            [1, 5, 7, 10],  # 58: Jab to Hadoken Heavy
-            [9, 5, 7, 9],  # 59: Medium Punch to Hadoken Medium
-            [0, 5, 6, 8],  # 60: Light Kick to Hurricane Medium
+            [4],  # 57: UP (jump)
+            [5],  # 58: DOWN (crouch)
+            [6, 4],  # 59: JUMP BACK (defensive)
+            [7, 4],  # 60: JUMP FORWARD (aggressive)
+            [6, 5],  # 61: CROUCH BACK (low block position)
+            [7, 5],  # 62: CROUCH FORWARD (approach)
+            # QUICK ATTACKS (63-70) - Fast startup for pressure
+            [1],  # 63: Light Punch (jab)
+            [0],  # 64: Light Kick
+            [1, 7],  # 65: Forward Light Punch (advancing jab)
+            [0, 7],  # 66: Forward Light Kick
+            [1, 5],  # 67: Crouching Light Punch
+            [0, 5],  # 68: Crouching Light Kick
+            # MEDIUM ATTACKS (69-76) - Good damage/range balance
+            [9],  # 69: Medium Punch
+            [8],  # 70: Medium Kick
+            [9, 7],  # 71: Forward Medium Punch
+            [8, 7],  # 72: Forward Medium Kick
+            [9, 5],  # 73: Crouching Medium Punch
+            [8, 5],  # 74: Crouching Medium Kick
+            # HEAVY ATTACKS (75-82) - High damage but slower
+            [10],  # 75: Heavy Punch
+            [11],  # 76: Heavy Kick
+            [10, 7],  # 77: Forward Heavy Punch
+            [11, 7],  # 78: Forward Heavy Kick
+            [10, 5],  # 79: Crouching Heavy Punch (sweep setup)
+            [11, 5],  # 80: Crouching Heavy Kick (sweep)
+            # JUMP ATTACKS (81-88) - Air control and crossups
+            [1, 4],  # 81: Jumping Light Punch
+            [0, 4],  # 82: Jumping Light Kick
+            [9, 4],  # 83: Jumping Medium Punch
+            [8, 4],  # 84: Jumping Medium Kick
+            [10, 4],  # 85: Jumping Heavy Punch
+            [11, 4],  # 86: Jumping Heavy Kick
+            [1, 4, 7],  # 87: Jump Forward Light Punch
+            [9, 4, 7],  # 88: Jump Forward Medium Punch
+            # SPECIAL MOVE MOTIONS (89-100) - Improved special move inputs
+            [5, 7],  # 89: Quarter Circle Forward (QCF start)
+            [5, 6],  # 90: Quarter Circle Back (QCB start)
+            [5, 7, 1],  # 91: Hadoken Light (fireball)
+            [5, 7, 9],  # 92: Hadoken Medium
+            [5, 7, 10],  # 93: Hadoken Heavy
+            [7, 5, 7, 1],  # 94: Dragon Punch Light (DP motion)
+            [7, 5, 7, 9],  # 95: Dragon Punch Medium
+            [7, 5, 7, 10],  # 96: Dragon Punch Heavy
+            [5, 6, 0],  # 97: Hurricane Kick Light
+            [5, 6, 8],  # 98: Hurricane Kick Medium
+            [5, 6, 11],  # 99: Hurricane Kick Heavy
+            [6, 5, 6, 1],  # 100: Reverse Dragon Punch
+            # DEFENSIVE OPTIONS (101-106) - Improved defensive play
+            [6],  # 101: Block (hold back)
+            [6, 5],  # 102: Low Block
+            [4, 6],  # 103: Jump Back Block
+            [6, 1],  # 104: Jab while blocking (frame trap escape)
+            [5],  # 105: Crouch (avoid high attacks)
+            [4],  # 106: Jump (avoid low attacks)
+            # COMBO STARTERS (107-114) - Common combo initiators
+            [1, 1],  # 107: Double Jab (link combo)
+            [0, 1],  # 108: Light Kick to Light Punch
+            [9, 10],  # 109: Medium Punch to Heavy Punch
+            [8, 11],  # 110: Medium Kick to Heavy Kick
+            [5, 0, 9],  # 111: Crouch Light Kick to Medium Punch
+            [1, 5, 7, 10],  # 112: Jab to Hadoken Heavy
+            [9, 5, 7, 9],  # 113: Medium Punch to Hadoken Medium
+            [0, 5, 6, 8],  # 114: Light Kick to Hurricane Medium
         ]
 
         self.num_actions = len(self.action_combinations)
 
-        logger.info(f"🎮 Enhanced Street Fighter Discrete Actions initialized:")
-        logger.info(f"   Total discrete actions: {self.num_actions}")
-        logger.info(f"   Improved focus on: combos, specials, positioning")
-        logger.info(f"   Button layout: {self.button_names}")
+        # REDUCED: Only log initialization once
+        print(f"🎮 Enhanced Street Fighter Discrete Actions initialized:")
+        print(f"   Total discrete actions: {self.num_actions}")
+        print(f"   Improved focus on: combos, specials, positioning")
 
     def discrete_to_multibinary(self, action_index: int) -> np.ndarray:
         """Convert discrete action to multi-binary array for stable-retro"""
         if action_index < 0 or action_index >= self.num_actions:
-            logger.error(f"Invalid action index: {action_index}")
+            # REDUCED: Only log critical errors
+            if action_index < -10 or action_index > self.num_actions + 10:
+                logger.error(f"Invalid action index: {action_index}")
             action_index = 0
 
         multibinary_action = np.zeros(self.num_buttons, dtype=np.uint8)
@@ -293,6 +296,7 @@ class CNNFeatureExtractor(nn.Module):
             features = self.projection(cnn_output)
             return features
         except Exception as e:
+            # REDUCED: Only log critical CNN errors
             logger.error(f"CNN error: {e}")
             batch_size = frame_stack.shape[0] if len(frame_stack.shape) > 0 else 1
             return torch.zeros(batch_size, self.feature_dim, device=frame_stack.device)
@@ -734,10 +738,10 @@ class SimplifiedVisionTransformer(nn.Module):
         # Combined input dimension: 512 (visual) + 33 (strategic) = 545
         combined_dim = visual_dim + strategic_dim
 
-        logger.info(f"🔍 SimplifiedVisionTransformer dimensions:")
-        logger.info(f"   Visual: {visual_dim}, Strategic: {strategic_dim}")
-        logger.info(f"   Strategic breakdown: 21 combat + 12 button features")
-        logger.info(f"   Combined input: {combined_dim}")
+        # REDUCED: Only log initialization once
+        print(f"🔍 SimplifiedVisionTransformer dimensions:")
+        print(f"   Visual: {visual_dim}, Strategic: {strategic_dim}")
+        print(f"   Combined input: {combined_dim}")
 
         # Project to transformer dimension
         d_model = 256
@@ -773,14 +777,12 @@ class SimplifiedVisionTransformer(nn.Module):
             expected_dim = 545  # 512 + 33
 
             if actual_dim != expected_dim:
+                # REDUCED: Only log critical dimension mismatches
                 logger.error(
                     f"Dimension mismatch: got {actual_dim}, expected {expected_dim}"
                 )
                 if actual_dim > expected_dim:
                     combined_sequence = combined_sequence[:, :, :expected_dim]
-                    logger.warning(
-                        f"Truncated input from {actual_dim} to {expected_dim}"
-                    )
                 else:
                     padding = torch.zeros(
                         batch_size,
@@ -790,7 +792,6 @@ class SimplifiedVisionTransformer(nn.Module):
                         dtype=combined_sequence.dtype,
                     )
                     combined_sequence = torch.cat([combined_sequence, padding], dim=-1)
-                    logger.warning(f"Padded input from {actual_dim} to {expected_dim}")
 
             # Project input features
             projected = self.input_projection(combined_sequence)
@@ -810,6 +811,7 @@ class SimplifiedVisionTransformer(nn.Module):
             }
 
         except Exception as e:
+            # REDUCED: Only log critical transformer errors
             logger.error(f"Transformer error: {e}")
             batch_size = combined_sequence.shape[0]
             device = combined_sequence.device
@@ -821,11 +823,12 @@ class SimplifiedVisionTransformer(nn.Module):
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    ENHANCED Street Fighter wrapper with improved reward system and score momentum
+    ENHANCED Street Fighter wrapper with REDUCED LOGGING FREQUENCY
     Key improvements:
     1. Better reward calculation with combo bonuses
     2. Enhanced action space for more effective gameplay
     3. Improved tactical analysis and logging
+    4. REDUCED logging frequency to prevent large log files
     """
 
     def __init__(
@@ -861,13 +864,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # ENHANCED: Defense action indices (updated for new action space)
         self.defend_action_indices = defend_action_indices or [
-            47,
-            48,
-            49,
-            50,
-            51,
-            52,
-        ]  # Enhanced defensive actions
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,  # Updated indices for defensive actions
+        ]
         self.defense_cooldown_frames = 30
         self.last_defense_frame = -100
 
@@ -921,7 +924,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             "defensive_efficiency": 0.0,
         }
 
-        # Transformer learning analysis (if enabled)
+        # REDUCED LOGGING: Increase intervals and reduce detail
         if self.log_transformer_predictions:
             self.transformer_logs = {
                 "predictions": [],
@@ -931,14 +934,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "learning_progression": [],
                 "combo_analysis": [],
             }
-            self.log_interval = 100
+            # INCREASED: From 100 to 1000 for less frequent detailed logging
+            self.log_interval = 1000
             self.last_detailed_log = 0
 
-            # Save interval for periodic analysis dumps
-            self.save_interval_steps = 50000  # Save every 50k steps
+            # INCREASED: From 50k to 100k for less frequent saves
+            self.save_interval_steps = 100000
             self.last_save_step = 0
 
-            # Feature names for logging
+            # Feature names for logging (when needed)
             self.strategic_feature_names = [
                 "player_in_danger",
                 "opponent_in_danger",
@@ -978,29 +982,29 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "prev_R_pressed",
             ]
 
-        logger.info(f"🎮 ENHANCED Street Fighter Vision Wrapper initialized:")
-        logger.info(f"   Resolution: {self.target_size[1]}×{self.target_size[0]}")
-        logger.info(f"   Frame stack: {frame_stack} RGB frames (24 channels total)")
-        logger.info(f"   Strategic Features: 33 total (21 combat + 12 button)")
-        logger.info(
+        # REDUCED: Only log initialization once with print instead of logger
+        print(f"🎮 ENHANCED Street Fighter Vision Wrapper initialized:")
+        print(f"   Resolution: {self.target_size[1]}×{self.target_size[0]}")
+        print(f"   Frame stack: {frame_stack} RGB frames (24 channels total)")
+        print(f"   Strategic Features: 33 total (21 combat + 12 button)")
+        print(
             f"   Action Space: Enhanced Discrete({self.discrete_actions.num_actions}) actions"
         )
-        logger.info(
-            f"   Enhanced Features: Combo detection, better rewards, improved actions"
+        print(
+            f"   REDUCED LOGGING: Detail every {self.log_interval} predictions, saves every {self.save_interval_steps} steps"
         )
-        logger.info(f"   Analysis Output: {ANALYSIS_OUTPUT_DIR}/")
-        logger.info(f"   Log File: {log_filename}")
+        print(f"   Analysis Output: {ANALYSIS_OUTPUT_DIR}/")
 
     def inject_feature_extractor(self, feature_extractor):
         """Inject CNN feature extractor and initialize vision transformer"""
         if not self.enable_vision_transformer:
-            logger.info("   🔧 Vision Transformer disabled")
+            print("   🔧 Vision Transformer disabled")
             return
 
         try:
             self.cnn_extractor = feature_extractor
             actual_feature_dim = self.cnn_extractor.features_dim
-            logger.info(f"   📏 Detected CNN feature dimension: {actual_feature_dim}")
+            print(f"   📏 Detected CNN feature dimension: {actual_feature_dim}")
 
             # Initialize vision transformer with correct dimensions
             device = next(feature_extractor.parameters()).device
@@ -1012,12 +1016,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.vision_ready = True
             self.stats["vision_transformer_ready"] = True
 
-            logger.info(
-                "   ✅ Enhanced Strategic Vision Transformer initialized and ready!"
-            )
+            print("   ✅ Enhanced Strategic Vision Transformer initialized and ready!")
 
         except Exception as e:
-            logger.error(f"   ❌ Vision Transformer injection failed: {e}")
+            # REDUCED: Only log critical injection failures
+            logger.error(f"Vision Transformer injection failed: {e}")
             self.vision_ready = False
 
     def reset(self, **kwargs):
@@ -1057,7 +1060,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return stacked_obs, info
 
     def step(self, discrete_action):
-        """ENHANCED step method with improved reward calculation"""
+        """ENHANCED step method with improved reward calculation and REDUCED LOGGING"""
         # Store current discrete action
         self.current_discrete_action = discrete_action
 
@@ -1135,7 +1138,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Update enhanced statistics and periodic saves
         self._update_enhanced_stats()
 
-        # Periodic analysis saves (every 50k steps)
+        # REDUCED: Less frequent analysis saves (every 100k steps instead of 50k)
         if (
             self.log_transformer_predictions
             and self.episode_steps - self.last_save_step >= self.save_interval_steps
@@ -1155,6 +1158,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
     ):
         """
         ENHANCED reward calculation with combo bonuses and strategic incentives
+        REDUCED LOGGING: Only log wins/losses, not every reward calculation
         """
         reward = 0.0
         done = False
@@ -1170,18 +1174,21 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 ) * 50  # Up to 50 point bonus
                 self.wins += 1
                 win_rate = self.wins / self.total_rounds
-                logger.info(
-                    f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%}) Health Bonus: {health_bonus:.1f}"
-                )
+
+                # REDUCED: Only log wins, not detailed breakdown
+                print(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
+
                 reward += 100 + health_bonus  # Base win reward + health bonus
 
                 # Combo bonus for wins
                 combo_stats = self.strategic_tracker.get_combo_stats()
                 if combo_stats["max_combo_this_round"] >= 3:
                     combo_bonus = combo_stats["max_combo_this_round"] * 10
-                    logger.info(
-                        f"   🔥 Combo Bonus: {combo_bonus} (Max combo: {combo_stats['max_combo_this_round']})"
-                    )
+                    # REDUCED: Only log significant combos
+                    if combo_stats["max_combo_this_round"] >= 5:
+                        print(
+                            f"   🔥 BIG COMBO: {combo_stats['max_combo_this_round']} hits!"
+                        )
                     reward += combo_bonus
                     self.stats["max_combo"] = max(
                         self.stats["max_combo"], combo_stats["max_combo_this_round"]
@@ -1191,9 +1198,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 # Loss
                 self.losses += 1
                 win_rate = self.wins / self.total_rounds
-                logger.info(
-                    f"💀 LOSS! {self.wins}/{self.total_rounds} ({win_rate:.1%})"
-                )
+                # REDUCED: Only log losses, not detailed info
+                print(f"💀 LOSS! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
 
             if self.reset_round:
                 done = True
@@ -1210,12 +1216,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             combo_multiplier = (
                 1.0 + (combo_stats["current_combo"] - 1) * 0.2
             )  # 20% bonus per combo hit
-            combo_bonus = damage_dealt * (combo_multiplier - 1.0)
             reward += base_reward * combo_multiplier
-            if combo_bonus > 0:
-                logger.debug(
-                    f"   ⚡ Combo {combo_stats['current_combo']}: +{combo_bonus:.1f} bonus"
-                )
+            # REMOVED: Debug logging for combo bonuses to reduce noise
         else:
             reward += base_reward
 
@@ -1246,10 +1248,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         # Aggressive bonus when opponent is in danger
         if opponent_health <= self.full_hp * 0.3:  # Enemy low health
             # Check if action is offensive (attacks)
-            if action in range(9, 35):  # Attack actions in our action space
+            if action in range(63, 88):  # Attack actions in our action space
                 bonus += 1.0  # Bigger bonus for attacking when enemy is low
-
-        # Position-based bonuses could be added here based on spacing, corner position, etc.
 
         return bonus
 
@@ -1300,7 +1300,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         player_victories = info.get("agent_victories", 0)
         opponent_victories = info.get("enemy_victories", 0)
 
-        # Removed debug logging to reduce noise
+        # REMOVED: Debug logging to reduce noise
 
         return (
             player_health,
@@ -1332,7 +1332,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         opponent_victories,
         button_features,
     ):
-        """Process through enhanced strategic vision pipeline"""
+        """Process through enhanced strategic vision pipeline with REDUCED LOGGING"""
         try:
             # Step 1: Enhanced strategic features (33 features with improved score momentum)
             strategic_features = self.strategic_tracker.update(
@@ -1400,11 +1400,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return None
 
         except Exception as e:
-            logger.error(f"Enhanced strategic vision pipeline error: {e}")
+            # REDUCED: Only log critical pipeline errors
+            logger.error(f"Strategic vision pipeline error: {e}")
             return None
 
     def _make_tactical_prediction(self):
-        """Make tactical predictions using enhanced strategic features"""
+        """Make tactical predictions using enhanced strategic features with REDUCED LOGGING"""
         try:
             if (
                 not self.vision_ready
@@ -1436,7 +1437,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "defend_timing": predictions["defend_timing"].cpu().item(),
             }
 
-            # Enhanced logging for transformer predictions
+            # REDUCED LOGGING: Only log predictions if they meet frequency criteria
             if self.log_transformer_predictions:
                 self._log_enhanced_transformer_prediction(
                     prediction_result,
@@ -1448,99 +1449,95 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return prediction_result
 
         except Exception as e:
-            logger.error(f"Enhanced strategic vision prediction error: {e}")
+            # REDUCED: Only log critical prediction errors
+            logger.error(f"Strategic vision prediction error: {e}")
             return None
 
     def _log_enhanced_transformer_prediction(
         self, predictions, strategic_features, visual_features, combined_tensor
     ):
-        """Enhanced transformer prediction logging with combo analysis"""
+        """REDUCED LOGGING: Enhanced transformer prediction logging with much less frequency"""
         try:
             combo_stats = self.strategic_tracker.get_combo_stats()
 
-            # Basic prediction logging with combo context
-            self.transformer_logs["predictions"].append(
-                {
-                    "step": self.stats["predictions_made"],
-                    "attack_timing": predictions["attack_timing"],
-                    "defend_timing": predictions["defend_timing"],
-                    "action": self.discrete_actions.get_action_name(
-                        self.current_discrete_action
-                    ),
-                    "strategic_features": strategic_features.tolist(),
-                    "combo_context": combo_stats,
-                }
-            )
+            # REDUCED: Only store lightweight prediction data, not full logs
+            if len(self.transformer_logs["predictions"]) < 1000:  # Limit storage
+                self.transformer_logs["predictions"].append(
+                    {
+                        "step": self.stats["predictions_made"],
+                        "attack_timing": predictions["attack_timing"],
+                        "defend_timing": predictions["defend_timing"],
+                        "combo_count": combo_stats["current_combo"],
+                        "score_momentum": strategic_features[17],  # Only key features
+                    }
+                )
 
-            # Enhanced combo analysis logging
-            if combo_stats["current_combo"] > 0:
+            # REDUCED: Only store significant combo events (3+ hits)
+            if combo_stats["current_combo"] >= 3:
                 self.transformer_logs["combo_analysis"].append(
                     {
                         "step": self.stats["predictions_made"],
                         "combo_count": combo_stats["current_combo"],
                         "attack_confidence": predictions["attack_timing"],
-                        "action": self.discrete_actions.get_action_name(
-                            self.current_discrete_action
-                        ),
-                        "score_momentum": strategic_features[
-                            17
-                        ],  # Enhanced score momentum feature
+                        "score_momentum": strategic_features[17],
                     }
                 )
 
-            # Detailed analysis every N predictions
+            # REDUCED: Much less frequent detailed analysis (every 1000 instead of 100)
             if self.stats["predictions_made"] % self.log_interval == 0:
                 self._analyze_enhanced_transformer_learning(
                     predictions, strategic_features, visual_features
                 )
 
-            # Log high-confidence predictions with combo context
-            if predictions["attack_timing"] > 0.8 or predictions["defend_timing"] > 0.8:
+            # REDUCED: Only log extremely high-confidence predictions (>0.9 instead of >0.8)
+            if predictions["attack_timing"] > 0.9 or predictions["defend_timing"] > 0.9:
                 self._log_enhanced_significant_prediction(
                     predictions, strategic_features, combo_stats
                 )
 
         except Exception as e:
-            logger.warning(f"Enhanced transformer logging error: {e}")
+            # REDUCED: Don't log minor transformer logging errors
+            pass
 
     def _analyze_enhanced_transformer_learning(
         self, predictions, strategic_features, visual_features
     ):
-        """Enhanced analysis including combo pattern recognition - LOG TO FILE ONLY"""
+        """REDUCED LOGGING: Enhanced analysis with much less detail - LOG TO FILE ONLY"""
         try:
-            logger.info(
-                f"ENHANCED TRANSFORMER ANALYSIS @ Step {self.stats['predictions_made']}"
-            )
+            # REDUCED: Only log every 1000 predictions instead of every 100
+            print(f"🔍 TRANSFORMER ANALYSIS @ Step {self.stats['predictions_made']}")
 
-            # Feature importance analysis
+            # REDUCED: Only log top 5 features instead of top 10
             feature_importance = self._calculate_enhanced_feature_importance(
                 strategic_features
             )
 
-            # Log top features to file
-            logger.info("ENHANCED STRATEGIC FEATURE IMPORTANCE (Top 10):")
-            for i, (feature_name, importance) in enumerate(feature_importance[:10]):
-                logger.info(f"   {i+1:2d}. {feature_name:25s}: {importance:.4f}")
+            print("TOP 5 STRATEGIC FEATURES:")
+            for i, (feature_name, importance) in enumerate(feature_importance[:5]):
+                print(f"   {i+1}. {feature_name}: {importance:.3f}")
 
-            # Current game situation with combo context
+            # REDUCED: Simplified situation logging
             combo_stats = self.strategic_tracker.get_combo_stats()
-            self._log_enhanced_current_situation(
-                strategic_features, predictions, combo_stats
+            if combo_stats["current_combo"] > 0:
+                print(f"   ACTIVE COMBO: {combo_stats['current_combo']} hits")
+
+            print(
+                f"   Attack/Defend: {predictions['attack_timing']:.2f}/{predictions['defend_timing']:.2f}"
             )
 
-            # Enhanced tactical patterns with combo analysis
-            self._log_enhanced_tactical_patterns(
-                predictions, strategic_features, combo_stats
-            )
-
-            # Enhanced learning progression
-            self._log_enhanced_learning_progression()
+            # REDUCED: Only log performance summary
+            if self.total_rounds > 0:
+                win_rate = self.wins / self.total_rounds
+                print(
+                    f"   Performance: {win_rate:.1%} wins, Max Combo: {self.stats['max_combo']}"
+                )
 
         except Exception as e:
-            logger.warning(f"Enhanced transformer analysis error: {e}")
+            # REDUCED: Don't log analysis errors
+            pass
 
     def _calculate_enhanced_feature_importance(self, strategic_features):
-        """Enhanced feature importance calculation"""
+        """Enhanced feature importance calculation (unchanged)"""
         try:
             feature_importance = []
 
@@ -1557,11 +1554,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
                 # Boost importance for combo-related features
                 if feature_name == "enhanced_score_momentum":
-                    base_importance *= 1.5  # Score momentum is more important now
+                    base_importance *= 1.5
                 elif "damage" in feature_name.lower():
-                    base_importance *= 1.3  # Damage-related features are important
+                    base_importance *= 1.3
                 elif feature_name in ["optimal_spacing", "center_control"]:
-                    base_importance *= 1.2  # Position features matter more
+                    base_importance *= 1.2
 
                 feature_importance.append((feature_name, base_importance))
 
@@ -1569,190 +1566,27 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return feature_importance
 
         except Exception as e:
-            logger.warning(f"Enhanced feature importance calculation error: {e}")
             return []
-
-    def _log_enhanced_current_situation(
-        self, strategic_features, predictions, combo_stats
-    ):
-        """Enhanced situation logging with combo context - LOG TO FILE ONLY"""
-        try:
-            logger.info("ENHANCED CURRENT SITUATION ANALYSIS:")
-
-            # Health situation
-            player_danger = strategic_features[0] > 0.5
-            opponent_danger = strategic_features[1] > 0.5
-            health_ratio = strategic_features[2]
-
-            if player_danger:
-                logger.info("   PLAYER IN DANGER ZONE!")
-            if opponent_danger:
-                logger.info("   OPPONENT IN DANGER ZONE!")
-
-            logger.info(f"   Health Ratio: {health_ratio:.3f}")
-
-            # Enhanced combo information
-            logger.info(f"   COMBO STATUS:")
-            logger.info(f"      Current Combo: {combo_stats['current_combo']}")
-            logger.info(f"      Max This Round: {combo_stats['max_combo_this_round']}")
-            logger.info(f"      Enhanced Score Momentum: {strategic_features[17]:.3f}")
-
-            # Position and spacing
-            corner_distance = strategic_features[6]
-            center_control = strategic_features[10]
-            optimal_spacing = strategic_features[13]
-
-            logger.info(f"   Positioning:")
-            logger.info(f"      Corner Distance: {corner_distance:.3f}")
-            logger.info(f"      Center Control: {center_control:.3f}")
-            logger.info(
-                f"      Optimal Spacing: {'YES' if optimal_spacing > 0.5 else 'NO'}"
-            )
-
-            # Enhanced transformer recommendations
-            logger.info(f"   Enhanced AI Recommendations:")
-            logger.info(f"      Attack Timing: {predictions['attack_timing']:.3f}")
-            logger.info(f"      Defend Timing: {predictions['defend_timing']:.3f}")
-
-            if predictions["attack_timing"] > 0.7:
-                logger.info("      STRONG ATTACK RECOMMENDATION!")
-                if combo_stats["current_combo"] > 0:
-                    logger.info(
-                        f"         (Continue {combo_stats['current_combo']}-hit combo!)"
-                    )
-            if predictions["defend_timing"] > 0.7:
-                logger.info("      STRONG DEFEND RECOMMENDATION!")
-
-        except Exception as e:
-            logger.warning(f"Enhanced situation logging error: {e}")
-
-    def _log_enhanced_tactical_patterns(
-        self, predictions, strategic_features, combo_stats
-    ):
-        """Enhanced tactical pattern logging with combo analysis"""
-        try:
-            logger.info("🎯 ENHANCED TACTICAL PATTERNS:")
-
-            # Attack patterns with combo context
-            if predictions["attack_timing"] > 0.6:
-                conditions = []
-                if strategic_features[1] > 0.5:  # opponent in danger
-                    conditions.append("opponent vulnerable")
-                if strategic_features[13] > 0.5:  # optimal spacing
-                    conditions.append("optimal range")
-                if strategic_features[17] > 0.3:  # enhanced score momentum
-                    conditions.append("momentum building")
-                if combo_stats["current_combo"] > 0:
-                    conditions.append(
-                        f"{combo_stats['current_combo']}-hit combo active"
-                    )
-
-                if conditions:
-                    logger.info(f"   ⚔️  Attack Pattern: {', '.join(conditions)}")
-
-            # Defend patterns
-            if predictions["defend_timing"] > 0.6:
-                conditions = []
-                if strategic_features[0] > 0.5:  # player in danger
-                    conditions.append("player vulnerable")
-                if strategic_features[8] > 0.5:  # player near corner
-                    conditions.append("cornered")
-                if strategic_features[15] > 0.3:  # defensive movement
-                    conditions.append("retreating")
-
-                if conditions:
-                    logger.info(f"   🛡️  Defend Pattern: {', '.join(conditions)}")
-
-            # Combo pattern analysis
-            if combo_stats["current_combo"] >= 3:
-                logger.info(
-                    f"   🔥 COMBO MASTERY: {combo_stats['current_combo']}-hit combo!"
-                )
-                logger.info(f"      Score Momentum: {strategic_features[17]:.3f}")
-
-        except Exception as e:
-            logger.warning(f"Enhanced tactical pattern logging error: {e}")
-
-    def _log_enhanced_learning_progression(self):
-        """Enhanced learning progression with combo statistics"""
-        try:
-            if len(self.transformer_logs["predictions"]) > 500:
-                recent_predictions = self.transformer_logs["predictions"][-500:]
-
-                logger.info("📈 ENHANCED LEARNING PROGRESSION:")
-
-                # Attack/defend confidence trends
-                recent_attack_avg = np.mean(
-                    [p["attack_timing"] for p in recent_predictions]
-                )
-                recent_defend_avg = np.mean(
-                    [p["defend_timing"] for p in recent_predictions]
-                )
-
-                logger.info(f"   Recent Attack Confidence: {recent_attack_avg:.3f}")
-                logger.info(f"   Recent Defend Confidence: {recent_defend_avg:.3f}")
-
-                # Combo learning analysis
-                combo_predictions = [
-                    p
-                    for p in recent_predictions
-                    if p.get("combo_context", {}).get("current_combo", 0) > 0
-                ]
-                if combo_predictions:
-                    combo_attack_avg = np.mean(
-                        [p["attack_timing"] for p in combo_predictions]
-                    )
-                    logger.info(
-                        f"   Attack Confidence in Combos: {combo_attack_avg:.3f}"
-                    )
-                    logger.info(
-                        f"   Combo Prediction Rate: {len(combo_predictions)/len(recent_predictions):.1%}"
-                    )
-
-                # Performance metrics
-                if self.total_rounds > 0:
-                    win_rate = self.wins / self.total_rounds
-                    logger.info(f"   🏆 Current Win Rate: {win_rate:.1%}")
-                    logger.info(f"   💪 Max Combo Achieved: {self.stats['max_combo']}")
-                    logger.info(f"   ⚡ Total Combos: {self.stats['total_combos']}")
-                    logger.info(
-                        f"   🎯 Avg Damage/Round: {self.stats['avg_damage_per_round']:.1f}"
-                    )
-
-        except Exception as e:
-            logger.warning(f"Enhanced learning progression logging error: {e}")
 
     def _log_enhanced_significant_prediction(
         self, predictions, strategic_features, combo_stats
     ):
-        """Enhanced significant prediction logging with combo context"""
+        """REDUCED LOGGING: Only log extremely significant predictions (>0.9)"""
         try:
-            if predictions["attack_timing"] > 0.8:
-                logger.info(
-                    f"🗡️  HIGH ATTACK CONFIDENCE ({predictions['attack_timing']:.3f}):"
+            if predictions["attack_timing"] > 0.9:
+                print(
+                    f"🗡️ VERY HIGH ATTACK CONFIDENCE ({predictions['attack_timing']:.3f})"
                 )
-                logger.info(
-                    f"   Action: {self.discrete_actions.get_action_name(self.current_discrete_action)}"
-                )
-                logger.info(f"   Health Ratio: {strategic_features[2]:.3f}")
-                logger.info(f"   Score Momentum: {strategic_features[17]:.3f}")
                 if combo_stats["current_combo"] > 0:
-                    logger.info(
-                        f"   🔥 Active Combo: {combo_stats['current_combo']} hits"
-                    )
+                    print(f"   🔥 {combo_stats['current_combo']}-hit combo active!")
 
-            if predictions["defend_timing"] > 0.8:
-                logger.info(
-                    f"🛡️  HIGH DEFEND CONFIDENCE ({predictions['defend_timing']:.3f}):"
+            if predictions["defend_timing"] > 0.9:
+                print(
+                    f"🛡️ VERY HIGH DEFEND CONFIDENCE ({predictions['defend_timing']:.3f})"
                 )
-                logger.info(
-                    f"   Action: {self.discrete_actions.get_action_name(self.current_discrete_action)}"
-                )
-                logger.info(f"   Player Danger: {strategic_features[0]:.3f}")
-                logger.info(f"   Position: Corner={strategic_features[6]:.3f}")
 
         except Exception as e:
-            logger.warning(f"Enhanced significant prediction logging error: {e}")
+            pass
 
     def _preprocess_frame(self, frame):
         """Preprocess frame to target size (128, 180)"""
@@ -1765,6 +1599,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return resized
 
         except Exception as e:
+            # REDUCED: Only log critical frame preprocessing errors
             logger.error(f"Frame preprocessing error: {e}")
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
 
@@ -1780,11 +1615,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return stacked.transpose(2, 0, 1)  # [24, H, W]
 
         except Exception as e:
+            # REDUCED: Only log critical frame stacking errors
             logger.error(f"Frame stacking error: {e}")
             return np.zeros(self.observation_space.shape, dtype=np.uint8)
 
     def save_enhanced_analysis(self, filepath=None):
-        """Save enhanced transformer learning analysis to analysis_data folder"""
+        """REDUCED LOGGING: Save lightweight transformer analysis"""
         try:
             if self.log_transformer_predictions:
                 import json
@@ -1792,76 +1628,49 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 # Use default filepath if none provided
                 if filepath is None:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"enhanced_transformer_analysis_{timestamp}.json"
+                    filename = f"transformer_analysis_{timestamp}.json"
                     filepath = os.path.join(ANALYSIS_OUTPUT_DIR, filename)
 
+                # REDUCED: Save only essential data, not detailed logs
                 analysis_data = {
                     "timestamp": datetime.now().isoformat(),
                     "total_predictions": len(self.transformer_logs["predictions"]),
-                    "enhanced_learning_summary": {
-                        "avg_attack_timing": (
-                            np.mean(
-                                [
-                                    p["attack_timing"]
-                                    for p in self.transformer_logs["predictions"]
-                                ]
-                            )
-                            if self.transformer_logs["predictions"]
-                            else 0
-                        ),
-                        "avg_defend_timing": (
-                            np.mean(
-                                [
-                                    p["defend_timing"]
-                                    for p in self.transformer_logs["predictions"]
-                                ]
-                            )
-                            if self.transformer_logs["predictions"]
-                            else 0
-                        ),
-                        "combo_statistics": {
-                            "total_combos": self.stats["total_combos"],
-                            "max_combo": self.stats["max_combo"],
-                            "combo_predictions": len(
-                                self.transformer_logs["combo_analysis"]
-                            ),
-                        },
-                        "performance_metrics": {
-                            "win_rate": self.wins / max(self.total_rounds, 1),
-                            "total_rounds": self.total_rounds,
-                            "wins": self.wins,
-                            "losses": self.losses,
-                            "avg_damage_per_round": self.stats["avg_damage_per_round"],
-                            "defensive_efficiency": self.stats["defensive_efficiency"],
-                        },
+                    "performance_summary": {
+                        "win_rate": self.wins / max(self.total_rounds, 1),
+                        "total_rounds": self.total_rounds,
+                        "wins": self.wins,
+                        "losses": self.losses,
+                        "max_combo": self.stats["max_combo"],
+                        "total_combos": self.stats["total_combos"],
+                        "avg_damage_per_round": self.stats["avg_damage_per_round"],
                     },
                     "recent_predictions": self.transformer_logs["predictions"][
-                        -500:
-                    ],  # Last 500 predictions
-                    "combo_analysis": self.transformer_logs["combo_analysis"][
                         -100:
-                    ],  # Last 100 combo events
+                    ],  # Only last 100 instead of 500
+                    "significant_combos": [
+                        combo
+                        for combo in self.transformer_logs["combo_analysis"]
+                        if combo.get("combo_count", 0) >= 5
+                    ],  # Only 5+ hit combos
                     "training_metadata": {
                         "episode_steps": self.episode_steps,
-                        "total_damage_dealt": self.total_damage_dealt,
-                        "total_damage_received": self.total_damage_received,
                         "vision_transformer_ready": self.vision_ready,
-                        "action_space_size": self.discrete_actions.num_actions,
-                        "strategic_features": len(self.strategic_feature_names),
-                        "button_features": len(self.button_feature_names),
+                        "logging_reduced": True,  # Flag to indicate reduced logging
                     },
                 }
 
                 with open(filepath, "w") as f:
                     json.dump(analysis_data, f, indent=2)
 
-                logger.info(f"Enhanced transformer analysis saved to {filepath}")
+                print(f"📊 Lightweight analysis saved to {filepath}")
 
         except Exception as e:
-            logger.warning(f"Failed to save enhanced transformer analysis: {e}")
+            # REDUCED: Don't log analysis save failures unless critical
+            if "permission" in str(e).lower() or "disk" in str(e).lower():
+                logger.error(f"Critical: Failed to save analysis: {e}")
 
 
-# Enhanced CNN for stable-baselines3 compatibility
+# Enhanced CNN for stable-baselines3 compatibility (unchanged)
 class StreetFighterSimplifiedCNN(BaseFeaturesExtractor):
     """
     Enhanced CNN feature extractor for Street Fighter compatible with stable-baselines3
@@ -1876,12 +1685,11 @@ class StreetFighterSimplifiedCNN(BaseFeaturesExtractor):
             input_channels=n_input_channels, feature_dim=features_dim
         )
 
-        logger.info(f"🏗️ Enhanced Street Fighter CNN initialized:")
-        logger.info(
-            f"   Input: {n_input_channels} channels (8 RGB frames) → Output: {features_dim} features"
+        # REDUCED: Only log initialization once with print
+        print(f"🏗️ Enhanced Street Fighter CNN initialized:")
+        print(
+            f"   Input: {n_input_channels} channels → Output: {features_dim} features"
         )
-        logger.info(f"   Expected input shape: {observation_space.shape}")
-        logger.info(f"   Enhanced for combo detection and strategic play")
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Normalize observations to [0, 1] range
