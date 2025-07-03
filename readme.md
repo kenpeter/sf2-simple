@@ -4,31 +4,8 @@
 __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
+python train.py --total-timesteps 20000000 --learning-rate 2e-4 --render
 
-
-
-
-python train.py --total-timesteps 15000000 --learning-rate 2.0e-4 --render
-
-
-
-python train.py --total-timesteps 20000000 --resume enhanced_ppo_sf2_4550000_steps.zip --learning-rate 1.0e-4 --render
-
-
-
-
-
-python train.py --resume trained_models/ppo_sf2_7999760_steps.zip --total-timesteps 10000000 --learning-rate 1e-3 --render
-
-
-python train.py   --total-timesteps 20000000   --num-envs 1   --learning-rate 3e-4 --render
-
-
-
-
-
-
-python train.py --total-timesteps 2000000 --resume trained_models_cuda_discrete/ppo_sf2_cuda_discrete_8200000_steps.zip --learning-rate 2.0e-4
 
 
   ta.json 

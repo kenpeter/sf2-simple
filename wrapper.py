@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-
 """
-wrapper.py - Improved Street Fighter II Wrapper with Enhanced Score Momentum
+wrapper.py - Enhanced Street Fighter II Wrapper with Cross-Attention Vision Transformer
 Key improvements:
-1. Better score momentum calculation with combo detection
-2. Enhanced reward system with combo bonuses
-3. Improved strategic feature weighting
-4. Better action space design for more effective gameplay
+1. Cross-attention mechanism with Q="what button should I press now?"
+2. Separate processing of visual (512), strategy (21), and previous button (12) features
+3. Enhanced tactical prediction with button-specific outputs
+4. Better feature interaction through multi-head cross-attention
 5. REDUCED LOGGING FREQUENCY to prevent large log files
 """
 
 import cv2
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import gymnasium as gym
 from collections import deque
@@ -54,7 +54,7 @@ class StreetFighterDiscreteActions:
     """
 
     def __init__(self):
-        # Button indices for stable-retro filtered actions (12 total)
+        # button names -> action_combo -> later convert to muti binary
         self.button_names = [
             "B",  # 0 - Light Kick
             "Y",  # 1 - Light Punch
@@ -71,8 +71,7 @@ class StreetFighterDiscreteActions:
         ]
         self.num_buttons = 12
 
-        # IMPROVED: More strategic action combinations based on fighting game theory
-        # COMPATIBLE: Keep original 57 actions for model compatibility
+        # Keep original action combinations for compatibility
         self.action_combinations = [
             # 0: No action (neutral)
             [],
@@ -140,84 +139,15 @@ class StreetFighterDiscreteActions:
             [6],  # 54: Block (hold back)
             [6, 5],  # 55: Low block (back + down)
             [4, 6],  # 56: Jump back (defensive)
-            [4],  # 57: UP (jump)
-            [5],  # 58: DOWN (crouch)
-            [6, 4],  # 59: JUMP BACK (defensive)
-            [7, 4],  # 60: JUMP FORWARD (aggressive)
-            [6, 5],  # 61: CROUCH BACK (low block position)
-            [7, 5],  # 62: CROUCH FORWARD (approach)
-            # QUICK ATTACKS (63-70) - Fast startup for pressure
-            [1],  # 63: Light Punch (jab)
-            [0],  # 64: Light Kick
-            [1, 7],  # 65: Forward Light Punch (advancing jab)
-            [0, 7],  # 66: Forward Light Kick
-            [1, 5],  # 67: Crouching Light Punch
-            [0, 5],  # 68: Crouching Light Kick
-            # MEDIUM ATTACKS (69-76) - Good damage/range balance
-            [9],  # 69: Medium Punch
-            [8],  # 70: Medium Kick
-            [9, 7],  # 71: Forward Medium Punch
-            [8, 7],  # 72: Forward Medium Kick
-            [9, 5],  # 73: Crouching Medium Punch
-            [8, 5],  # 74: Crouching Medium Kick
-            # HEAVY ATTACKS (75-82) - High damage but slower
-            [10],  # 75: Heavy Punch
-            [11],  # 76: Heavy Kick
-            [10, 7],  # 77: Forward Heavy Punch
-            [11, 7],  # 78: Forward Heavy Kick
-            [10, 5],  # 79: Crouching Heavy Punch (sweep setup)
-            [11, 5],  # 80: Crouching Heavy Kick (sweep)
-            # JUMP ATTACKS (81-88) - Air control and crossups
-            [1, 4],  # 81: Jumping Light Punch
-            [0, 4],  # 82: Jumping Light Kick
-            [9, 4],  # 83: Jumping Medium Punch
-            [8, 4],  # 84: Jumping Medium Kick
-            [10, 4],  # 85: Jumping Heavy Punch
-            [11, 4],  # 86: Jumping Heavy Kick
-            [1, 4, 7],  # 87: Jump Forward Light Punch
-            [9, 4, 7],  # 88: Jump Forward Medium Punch
-            # SPECIAL MOVE MOTIONS (89-100) - Improved special move inputs
-            [5, 7],  # 89: Quarter Circle Forward (QCF start)
-            [5, 6],  # 90: Quarter Circle Back (QCB start)
-            [5, 7, 1],  # 91: Hadoken Light (fireball)
-            [5, 7, 9],  # 92: Hadoken Medium
-            [5, 7, 10],  # 93: Hadoken Heavy
-            [7, 5, 7, 1],  # 94: Dragon Punch Light (DP motion)
-            [7, 5, 7, 9],  # 95: Dragon Punch Medium
-            [7, 5, 7, 10],  # 96: Dragon Punch Heavy
-            [5, 6, 0],  # 97: Hurricane Kick Light
-            [5, 6, 8],  # 98: Hurricane Kick Medium
-            [5, 6, 11],  # 99: Hurricane Kick Heavy
-            [6, 5, 6, 1],  # 100: Reverse Dragon Punch
-            # DEFENSIVE OPTIONS (101-106) - Improved defensive play
-            [6],  # 101: Block (hold back)
-            [6, 5],  # 102: Low Block
-            [4, 6],  # 103: Jump Back Block
-            [6, 1],  # 104: Jab while blocking (frame trap escape)
-            [5],  # 105: Crouch (avoid high attacks)
-            [4],  # 106: Jump (avoid low attacks)
-            # COMBO STARTERS (107-114) - Common combo initiators
-            [1, 1],  # 107: Double Jab (link combo)
-            [0, 1],  # 108: Light Kick to Light Punch
-            [9, 10],  # 109: Medium Punch to Heavy Punch
-            [8, 11],  # 110: Medium Kick to Heavy Kick
-            [5, 0, 9],  # 111: Crouch Light Kick to Medium Punch
-            [1, 5, 7, 10],  # 112: Jab to Hadoken Heavy
-            [9, 5, 7, 9],  # 113: Medium Punch to Hadoken Medium
-            [0, 5, 6, 8],  # 114: Light Kick to Hurricane Medium
         ]
 
         self.num_actions = len(self.action_combinations)
-
-        # REDUCED: Only log initialization once
         print(f"🎮 Enhanced Street Fighter Discrete Actions initialized:")
         print(f"   Total discrete actions: {self.num_actions}")
-        print(f"   Improved focus on: combos, specials, positioning")
 
     def discrete_to_multibinary(self, action_index: int) -> np.ndarray:
         """Convert discrete action to multi-binary array for stable-retro"""
         if action_index < 0 or action_index >= self.num_actions:
-            # REDUCED: Only log critical errors
             if action_index < -10 or action_index > self.num_actions + 10:
                 logger.error(f"Invalid action index: {action_index}")
             action_index = 0
@@ -296,7 +226,6 @@ class CNNFeatureExtractor(nn.Module):
             features = self.projection(cnn_output)
             return features
         except Exception as e:
-            # REDUCED: Only log critical CNN errors
             logger.error(f"CNN error: {e}")
             batch_size = frame_stack.shape[0] if len(frame_stack.shape) > 0 else 1
             return torch.zeros(batch_size, self.feature_dim, device=frame_stack.device)
@@ -704,131 +633,372 @@ class StrategicFeatureTracker:
         }
 
 
-class PositionalEncoding(nn.Module):
-    """Positional encoding for transformer"""
+class MultiHeadCrossAttention(nn.Module):
+    """Multi-head cross-attention module for feature interaction"""
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    def __init__(self, d_model: int, num_heads: int = 8, dropout: float = 0.1):
         super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
+        assert d_model % num_heads == 0
 
-        position = torch.arange(max_len).unsqueeze(1).float()
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        # Linear layers for Q, K, V
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(d_model)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            query: [batch_size, seq_len_q, d_model]
+            key: [batch_size, seq_len_k, d_model]
+            value: [batch_size, seq_len_v, d_model]
+            mask: Optional attention mask
+        """
+        batch_size = query.size(0)
+
+        # Apply linear transformations and reshape for multi-head attention
+        Q = (
+            self.w_q(query)
+            .view(batch_size, -1, self.num_heads, self.d_k)
+            .transpose(1, 2)
+        )
+        K = self.w_k(key).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        V = (
+            self.w_v(value)
+            .view(batch_size, -1, self.num_heads, self.d_k)
+            .transpose(1, 2)
         )
 
-        pe = torch.zeros(max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer("pe", pe)
+        # Scaled dot-product attention
+        attention_output, attention_weights = self.scaled_dot_product_attention(
+            Q, K, V, mask
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        seq_len = x.size(1)
-        x = x + self.pe[:, :seq_len, :]
-        return self.dropout(x)
+        # Concatenate heads and apply output projection
+        attention_output = (
+            attention_output.transpose(1, 2)
+            .contiguous()
+            .view(batch_size, -1, self.d_model)
+        )
+
+        output = self.w_o(attention_output)
+
+        # Residual connection and layer norm
+        return self.layer_norm(output + query)
+
+    def scaled_dot_product_attention(
+        self,
+        Q: torch.Tensor,
+        K: torch.Tensor,
+        V: torch.Tensor,
+        mask: torch.Tensor = None,
+    ) -> (torch.Tensor, torch.Tensor):
+        """Scaled dot-product attention mechanism"""
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+
+        attention_weights = F.softmax(scores, dim=-1)
+        attention_weights = self.dropout(attention_weights)
+
+        return torch.matmul(attention_weights, V), attention_weights
 
 
-class SimplifiedVisionTransformer(nn.Module):
-    """Simplified Vision Transformer with 33 strategic features"""
+class FeatureGroupProcessor(nn.Module):
+    """Process individual feature groups before cross-attention"""
 
-    def __init__(self, visual_dim=512, strategic_dim=33, seq_length=8):
+    def __init__(self, input_dim: int, d_model: int, group_name: str):
         super().__init__()
+        self.group_name = group_name
+        self.input_dim = input_dim
+        self.d_model = d_model
+
+        # Feature-specific processing
+        if group_name == "visual":
+            # Visual features need more complex processing
+            self.processor = nn.Sequential(
+                nn.Linear(input_dim, d_model * 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(d_model * 2, d_model),
+                nn.LayerNorm(d_model),
+            )
+        elif group_name == "strategy":
+            # Strategy features are already well-structured
+            self.processor = nn.Sequential(
+                nn.Linear(input_dim, d_model),
+                nn.ReLU(),
+                nn.Dropout(0.05),
+                nn.LayerNorm(d_model),
+            )
+        elif group_name == "previous_buttons":
+            # Previous button features are binary, need special handling
+            self.processor = nn.Sequential(
+                nn.Linear(input_dim, d_model // 2),
+                nn.ReLU(),
+                nn.Linear(d_model // 2, d_model),
+                nn.LayerNorm(d_model),
+            )
+        else:
+            # Default processor
+            self.processor = nn.Sequential(
+                nn.Linear(input_dim, d_model), nn.ReLU(), nn.LayerNorm(d_model)
+            )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Process features and add positional encoding if needed"""
+        return self.processor(features)
+
+
+class EnhancedCrossAttentionVisionTransformer(nn.Module):
+    """
+    Enhanced Vision Transformer with Cross-Attention for Street Fighter II
+
+    Architecture:
+    1. Process visual (512), strategy (21), and previous button (12) features separately
+    2. Use cross-attention with Q="what button should I press now?"
+    3. Generate tactical predictions and button-specific outputs
+    """
+
+    def __init__(
+        self,
+        visual_dim: int = 512,
+        strategic_dim: int = 21,
+        button_dim: int = 12,
+        seq_length: int = 8,
+    ):
+        super().__init__()
+
+        self.visual_dim = visual_dim
+        self.strategic_dim = strategic_dim
+        self.button_dim = button_dim
         self.seq_length = seq_length
 
-        # Combined input dimension: 512 (visual) + 33 (strategic) = 545
-        combined_dim = visual_dim + strategic_dim
+        # Model dimension for transformer
+        self.d_model = 256
 
-        # REDUCED: Only log initialization once
-        print(f"🔍 SimplifiedVisionTransformer dimensions:")
-        print(f"   Visual: {visual_dim}, Strategic: {strategic_dim}")
-        print(f"   Combined input: {combined_dim}")
-
-        # Project to transformer dimension
-        d_model = 256
-        self.input_projection = nn.Linear(combined_dim, d_model)
-        self.pos_encoding = PositionalEncoding(d_model, dropout=0.1)
-
-        # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=8,
-            dim_feedforward=d_model * 4,
-            dropout=0.1,
-            batch_first=True,
-            activation="gelu",
+        # Feature group processors
+        self.visual_processor = FeatureGroupProcessor(
+            visual_dim, self.d_model, "visual"
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
-
-        # Tactical prediction head - only attack and defend timing
-        self.tactical_predictor = nn.Sequential(
-            nn.Linear(d_model, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 2),  # [attack_timing, defend_timing] only
+        self.strategy_processor = FeatureGroupProcessor(
+            strategic_dim, self.d_model, "strategy"
         )
+        self.button_processor = FeatureGroupProcessor(
+            button_dim, self.d_model, "previous_buttons"
+        )
+
+        # Learnable query: "What button should I press now?"
+        self.action_query = nn.Parameter(torch.randn(1, 1, self.d_model))
+
+        # Cross-attention modules for each feature group
+        self.visual_cross_attention = MultiHeadCrossAttention(self.d_model, num_heads=8)
+        self.strategy_cross_attention = MultiHeadCrossAttention(
+            self.d_model, num_heads=8
+        )
+        self.button_cross_attention = MultiHeadCrossAttention(self.d_model, num_heads=8)
+
+        # Feature fusion layer
+        self.feature_fusion = nn.Sequential(
+            nn.Linear(self.d_model * 3, self.d_model * 2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(self.d_model * 2, self.d_model),
+            nn.LayerNorm(self.d_model),
+        )
+
+        # Temporal attention across sequence
+        self.temporal_attention = nn.MultiheadAttention(
+            embed_dim=self.d_model, num_heads=8, dropout=0.1, batch_first=True
+        )
+
+        # No prediction heads - features go directly to agent.predict
+
+        # Initialize parameters
+        self._init_parameters()
+
+        print(f"🎯 Enhanced Cross-Attention Vision Transformer initialized:")
+        print(f"   Visual features: {visual_dim} → {self.d_model}")
+        print(f"   Strategy features: {strategic_dim} → {self.d_model}")
+        print(f"   Previous button features: {button_dim} → {self.d_model}")
+        print(f"   Cross-attention heads: 8 per feature group")
+        print(f"   Learnable query: 'What button should I press now?'")
+
+    def _init_parameters(self):
+        """Initialize parameters with appropriate scaling"""
+        # Initialize the action query
+        nn.init.normal_(self.action_query, mean=0.0, std=0.02)
+
+        # Initialize linear layers
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, combined_sequence: torch.Tensor) -> Dict[str, torch.Tensor]:
-        try:
-            # Debug: Check actual input dimensions
-            batch_size, seq_len, actual_dim = combined_sequence.shape
-            expected_dim = 545  # 512 + 33
+        """
+        Forward pass with cross-attention mechanism
 
-            if actual_dim != expected_dim:
-                # REDUCED: Only log critical dimension mismatches
-                logger.error(
-                    f"Dimension mismatch: got {actual_dim}, expected {expected_dim}"
+        Args:
+            combined_sequence: [batch_size, seq_length, 545] where 545 = 512 + 21 + 12
+
+        Returns:
+            Dict with tactical predictions and button probabilities
+        """
+        try:
+            batch_size, seq_len, total_dim = combined_sequence.shape
+
+            # Verify input dimensions
+            expected_dim = self.visual_dim + self.strategic_dim + self.button_dim  # 545
+            if total_dim != expected_dim:
+                logger.warning(
+                    f"Input dimension mismatch: got {total_dim}, expected {expected_dim}"
                 )
-                if actual_dim > expected_dim:
-                    combined_sequence = combined_sequence[:, :, :expected_dim]
-                else:
+                # Pad or truncate as needed
+                if total_dim < expected_dim:
                     padding = torch.zeros(
                         batch_size,
                         seq_len,
-                        expected_dim - actual_dim,
+                        expected_dim - total_dim,
                         device=combined_sequence.device,
                         dtype=combined_sequence.dtype,
                     )
                     combined_sequence = torch.cat([combined_sequence, padding], dim=-1)
+                else:
+                    combined_sequence = combined_sequence[:, :, :expected_dim]
 
-            # Project input features
-            projected = self.input_projection(combined_sequence)
-            projected = self.pos_encoding(projected)
+            # Split features into groups
+            visual_features = combined_sequence[
+                :, :, : self.visual_dim
+            ]  # [batch, seq, 512]
+            strategy_features = combined_sequence[
+                :, :, self.visual_dim : self.visual_dim + self.strategic_dim
+            ]  # [batch, seq, 21]
+            button_features = combined_sequence[
+                :, :, self.visual_dim + self.strategic_dim :
+            ]  # [batch, seq, 12]
 
-            # Apply transformer
-            transformer_out = self.transformer(projected)
-            final_features = transformer_out[:, -1, :]  # Use last timestep
+            # Process each feature group
+            visual_processed = self.visual_processor(
+                visual_features
+            )  # [batch, seq, d_model]
+            strategy_processed = self.strategy_processor(
+                strategy_features
+            )  # [batch, seq, d_model]
+            button_processed = self.button_processor(
+                button_features
+            )  # [batch, seq, d_model]
 
-            # Generate tactical predictions (0-1 range via sigmoid)
-            tactical_logits = self.tactical_predictor(final_features)
-            tactical_probs = torch.sigmoid(tactical_logits)
+            # Expand action query for batch size
+            action_query = self.action_query.expand(
+                batch_size, -1, -1
+            )  # [batch, 1, d_model]
 
+            # Apply cross-attention: Q = "what button should I press now?"
+            # K, V = different feature groups
+            visual_attended = self.visual_cross_attention(
+                query=action_query, key=visual_processed, value=visual_processed
+            )  # [batch, 1, d_model]
+
+            strategy_attended = self.strategy_cross_attention(
+                query=action_query, key=strategy_processed, value=strategy_processed
+            )  # [batch, 1, d_model]
+
+            button_attended = self.button_cross_attention(
+                query=action_query, key=button_processed, value=button_processed
+            )  # [batch, 1, d_model]
+
+            # Fuse cross-attention outputs
+            fused_features = torch.cat(
+                [
+                    visual_attended.squeeze(1),
+                    strategy_attended.squeeze(1),
+                    button_attended.squeeze(1),
+                ],
+                dim=-1,
+            )  # [batch, d_model * 3]
+
+            fused_features = self.feature_fusion(fused_features)  # [batch, d_model]
+
+            # Apply temporal attention across the sequence for context
+            # Use the fused features as query, and all processed features as key/value
+            all_features = torch.cat(
+                [visual_processed, strategy_processed, button_processed], dim=-1
+            )  # [batch, seq, d_model * 3]
+            all_features = all_features.view(
+                batch_size * seq_len, -1
+            )  # Reshape for fusion layer
+            all_features = self.feature_fusion(all_features)
+            all_features = all_features.view(batch_size, seq_len, -1)  # Reshape back
+
+            temporal_output, _ = self.temporal_attention(
+                query=fused_features.unsqueeze(1),  # [batch, 1, d_model]
+                key=all_features,  # [batch, seq, d_model]
+                value=all_features,  # [batch, seq, d_model]
+            )
+
+            final_features = temporal_output.squeeze(1)  # [batch, d_model]
+
+            # Return processed features for agent.predict - no predictions here
             return {
-                "attack_timing": tactical_probs[:, 0],  # Best time to attack (0-1)
-                "defend_timing": tactical_probs[:, 1],  # Best time to defend (0-1)
+                "processed_features": final_features,  # [batch, d_model] - goes to agent.predict
+                "visual_attention": visual_attended.squeeze(1),
+                "strategy_attention": strategy_attended.squeeze(1),
+                "button_attention": button_attended.squeeze(1),
             }
 
         except Exception as e:
-            # REDUCED: Only log critical transformer errors
-            logger.error(f"Transformer error: {e}")
+            logger.error(f"Cross-attention transformer error: {e}", exc_info=True)
             batch_size = combined_sequence.shape[0]
             device = combined_sequence.device
+
+            # Return safe defaults
             return {
-                "attack_timing": torch.zeros(batch_size, device=device),
-                "defend_timing": torch.zeros(batch_size, device=device),
+                "processed_features": torch.zeros(
+                    batch_size, self.d_model, device=device
+                ),
+                "visual_attention": torch.zeros(
+                    batch_size, self.d_model, device=device
+                ),
+                "strategy_attention": torch.zeros(
+                    batch_size, self.d_model, device=device
+                ),
+                "button_attention": torch.zeros(
+                    batch_size, self.d_model, device=device
+                ),
             }
+
+    def get_processed_features(self, combined_sequence: torch.Tensor) -> torch.Tensor:
+        """Get processed features for agent.predict"""
+        with torch.no_grad():
+            output = self.forward(combined_sequence)
+            return output["processed_features"]
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    ENHANCED Street Fighter wrapper with REDUCED LOGGING FREQUENCY
+    ENHANCED Street Fighter wrapper with Cross-Attention Vision Transformer
     Key improvements:
-    1. Better reward calculation with combo bonuses
-    2. Enhanced action space for more effective gameplay
-    3. Improved tactical analysis and logging
-    4. REDUCED logging frequency to prevent large log files
+    1. Cross-attention mechanism with Q="what button should I press now?"
+    2. Separate processing of visual, strategy, and previous button features
+    3. Enhanced tactical prediction with button-specific outputs
+    4. Better feature interaction through multi-head cross-attention
+    5. REDUCED logging frequency to prevent large log files
     """
 
     def __init__(
@@ -864,12 +1034,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # ENHANCED: Defense action indices (updated for new action space)
         self.defend_action_indices = defend_action_indices or [
-            101,
-            102,
-            103,
-            104,
-            105,
-            106,  # Updated indices for defensive actions
+            54,
+            55,
+            56,  # Updated indices for defensive actions
         ]
         self.defense_cooldown_frames = 30
         self.last_defense_frame = -100
@@ -899,29 +1066,28 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.visual_features_history = deque(maxlen=frame_stack)
         self.strategic_features_history = deque(maxlen=frame_stack)
 
-        # Vision transformer components
+        # Cross-attention vision transformer components
         self.cnn_extractor = None
-        self.vision_transformer = None
+        self.cross_attention_transformer = None
         self.vision_ready = False
-
-        # Current tactical predictions
-        self.current_attack_timing = 0.0
-        self.current_defend_timing = 0.0
-        self.recent_rewards = deque(maxlen=10)
 
         # Current action tracking
         self.current_discrete_action = 0
 
-        # ENHANCED: Statistics with combo tracking
+        self.recent_rewards = deque(maxlen=10)
+
+        # ENHANCED: Statistics with combo tracking and cross-attention analysis
         self.stats = {
             "predictions_made": 0,
             "vision_transformer_ready": False,
-            "avg_attack_timing": 0.0,
-            "avg_defend_timing": 0.0,
             "total_combos": 0,
             "max_combo": 0,
             "avg_damage_per_round": 0.0,
             "defensive_efficiency": 0.0,
+            "cross_attention_ready": False,
+            "visual_attention_weight": 0.0,
+            "strategy_attention_weight": 0.0,
+            "button_attention_weight": 0.0,
         }
 
         # REDUCED LOGGING: Increase intervals and reduce detail
@@ -933,6 +1099,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "situation_analysis": {},
                 "learning_progression": [],
                 "combo_analysis": [],
+                "attention_analysis": [],  # Track attention weights
             }
             # INCREASED: From 100 to 1000 for less frequent detailed logging
             self.log_interval = 1000
@@ -966,7 +1133,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "agent_victories",
                 "enemy_victories",
             ]
-
             self.button_feature_names = [
                 "prev_B_pressed",
                 "prev_Y_pressed",
@@ -982,11 +1148,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "prev_R_pressed",
             ]
 
-        # REDUCED: Only log initialization once with print instead of logger
-        print(f"🎮 ENHANCED Street Fighter Vision Wrapper initialized:")
+        print(
+            f"🎮 ENHANCED Street Fighter Vision Wrapper with Cross-Attention initialized:"
+        )
         print(f"   Resolution: {self.target_size[1]}×{self.target_size[0]}")
         print(f"   Frame stack: {frame_stack} RGB frames (24 channels total)")
-        print(f"   Strategic Features: 33 total (21 combat + 12 button)")
+        print(
+            f"   Strategic Features: {len(self.strategic_feature_names) + len(self.button_feature_names)} total ({len(self.strategic_feature_names)} combat + {len(self.button_feature_names)} button)"
+        )
+        print(
+            f"   Cross-Attention: Visual(512) + Strategy({len(self.strategic_feature_names)}) + PrevButtons({len(self.button_feature_names)})"
+        )
         print(
             f"   Action Space: Enhanced Discrete({self.discrete_actions.num_actions}) actions"
         )
@@ -996,31 +1168,40 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         print(f"   Analysis Output: {ANALYSIS_OUTPUT_DIR}/")
 
     def inject_feature_extractor(self, feature_extractor):
-        """Inject CNN feature extractor and initialize vision transformer"""
+        """Inject CNN feature extractor and initialize cross-attention vision transformer"""
         if not self.enable_vision_transformer:
-            print("   🔧 Vision Transformer disabled")
+            print("   🔧 Cross-Attention Vision Transformer disabled")
             return
 
         try:
-            self.cnn_extractor = feature_extractor
-            actual_feature_dim = self.cnn_extractor.features_dim
-            print(f"   📏 Detected CNN feature dimension: {actual_feature_dim}")
-
-            # Initialize vision transformer with correct dimensions
+            self.cnn_extractor = feature_extractor.cnn
             device = next(feature_extractor.parameters()).device
-            self.vision_transformer = SimplifiedVisionTransformer(
-                visual_dim=actual_feature_dim,
-                strategic_dim=33,  # 21 strategic + 12 button features
+            self.cross_attention_transformer = EnhancedCrossAttentionVisionTransformer(
+                visual_dim=512,
+                strategic_dim=len(self.strategic_feature_names),
+                button_dim=len(self.button_feature_names),
                 seq_length=self.frame_stack,
             ).to(device)
+
+            if hasattr(feature_extractor, "inject_cross_attention_components"):
+                feature_extractor.inject_cross_attention_components(
+                    self.cross_attention_transformer, self
+                )
+
             self.vision_ready = True
             self.stats["vision_transformer_ready"] = True
+            self.stats["cross_attention_ready"] = True
 
-            print("   ✅ Enhanced Strategic Vision Transformer initialized and ready!")
+            print(
+                "   ✅ Enhanced Cross-Attention Vision Transformer initialized and ready!"
+            )
+            print("   🔄 Features flow: CNN → Cross-Attention → Agent.predict")
 
         except Exception as e:
-            # REDUCED: Only log critical injection failures
-            logger.error(f"Vision Transformer injection failed: {e}")
+            logger.error(
+                f"Cross-Attention Vision Transformer injection failed: {e}",
+                exc_info=True,
+            )
             self.vision_ready = False
 
     def reset(self, **kwargs):
@@ -1032,27 +1213,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             observation = result
             info = {}
 
-        # Reset tracking
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
-        self.round_start_time = 0
-
-        # Reset defense anti-spam tracking
         self.last_defense_frame = -100
-
-        # Reset tactical predictions
-        self.current_attack_timing = 0.0
-        self.current_defend_timing = 0.0
         self.current_discrete_action = 0
 
-        # Initialize frame buffer with processed frames
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.clear()
         for _ in range(self.frame_stack):
             self.frame_buffer.append(processed_frame)
 
-        # Clear feature history buffers
         self.visual_features_history.clear()
         self.strategic_features_history.clear()
 
@@ -1060,24 +1231,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return stacked_obs, info
 
     def step(self, discrete_action):
-        """ENHANCED step method with improved reward calculation and REDUCED LOGGING"""
-        # Store current discrete action
+        """ENHANCED step method with cross-attention predictions and REDUCED LOGGING"""
         self.current_discrete_action = discrete_action
-
-        # Convert discrete action to multi-binary
         multibinary_action = self.discrete_actions.discrete_to_multibinary(
             discrete_action
         )
 
-        # Track defense actions for anti-spam
-        is_defending = discrete_action in self.defend_action_indices
-        if is_defending:
+        if discrete_action in self.defend_action_indices:
             self.last_defense_frame = self.episode_steps
 
-        # Execute step with multi-binary action
         observation, reward, done, truncated, info = self.env.step(multibinary_action)
 
-        # Extract enhanced game state information
         (
             curr_player_health,
             curr_opponent_health,
@@ -1092,27 +1256,18 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             opponent_victories,
         ) = self._extract_enhanced_state(info)
 
-        # ENHANCED: Calculate custom reward with combo bonuses
         custom_reward, custom_done = self._calculate_enhanced_reward(
             curr_player_health, curr_opponent_health, score, discrete_action
         )
         self.recent_rewards.append(custom_reward)
+        done = custom_done or done
 
-        if custom_done:
-            done = custom_done
-
-        # Process new frame
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.append(processed_frame)
-
-        # Get current stacked observation
         stacked_obs = self._get_stacked_observation()
-
-        # Get button features from current action
         button_features = self.discrete_actions.get_button_features(discrete_action)
 
-        # Process through strategic vision pipeline
-        tactical_predictions = self._process_strategic_vision_pipeline(
+        self._process_cross_attention_vision_pipeline(
             stacked_obs,
             curr_player_health,
             curr_opponent_health,
@@ -1128,25 +1283,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             button_features,
         )
 
-        # Update CNN with tactical predictions
-        if tactical_predictions and self.cnn_extractor is not None:
-            self.cnn_extractor.update_tactical_predictions(
-                tactical_predictions["attack_timing"],
-                tactical_predictions["defend_timing"],
-            )
-
-        # Update enhanced statistics and periodic saves
         self._update_enhanced_stats()
 
-        # REDUCED: Less frequent analysis saves (every 100k steps instead of 50k)
         if (
             self.log_transformer_predictions
-            and self.episode_steps - self.last_save_step >= self.save_interval_steps
+            and self.episode_steps > 0
+            and self.episode_steps % self.save_interval_steps == 0
         ):
-            self.last_save_step = self.episode_steps
-            filename = f"transformer_analysis_step_{self.episode_steps}.json"
-            filepath = os.path.join(ANALYSIS_OUTPUT_DIR, filename)
-            self.save_enhanced_analysis(filepath)
+            self.save_enhanced_analysis()
 
         self.episode_steps += 1
         info.update(self.stats)
@@ -1156,35 +1300,21 @@ class StreetFighterVisionWrapper(gym.Wrapper):
     def _calculate_enhanced_reward(
         self, curr_player_health, curr_opponent_health, score, action
     ):
-        """
-        ENHANCED reward calculation with combo bonuses and strategic incentives
-        REDUCED LOGGING: Only log wins/losses, not every reward calculation
-        """
+        """ENHANCED reward calculation with combo bonuses and strategic incentives"""
         reward = 0.0
         done = False
 
-        # Check for round end
         if curr_player_health <= 0 or curr_opponent_health <= 0:
             self.total_rounds += 1
-
             if curr_opponent_health <= 0 and curr_player_health > 0:
-                # Win with bonus based on health remaining
-                health_bonus = (
-                    curr_player_health / self.full_hp
-                ) * 50  # Up to 50 point bonus
+                health_bonus = (curr_player_health / self.full_hp) * 50
                 self.wins += 1
                 win_rate = self.wins / self.total_rounds
-
-                # REDUCED: Only log wins, not detailed breakdown
                 print(f"🏆 WIN! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
-
-                reward += 100 + health_bonus  # Base win reward + health bonus
-
-                # Combo bonus for wins
+                reward += 100 + health_bonus
                 combo_stats = self.strategic_tracker.get_combo_stats()
                 if combo_stats["max_combo_this_round"] >= 3:
                     combo_bonus = combo_stats["max_combo_this_round"] * 10
-                    # REDUCED: Only log significant combos
                     if combo_stats["max_combo_this_round"] >= 5:
                         print(
                             f"   🔥 BIG COMBO: {combo_stats['max_combo_this_round']} hits!"
@@ -1193,83 +1323,50 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     self.stats["max_combo"] = max(
                         self.stats["max_combo"], combo_stats["max_combo_this_round"]
                     )
-
             elif curr_player_health <= 0 and curr_opponent_health > 0:
-                # Loss
                 self.losses += 1
                 win_rate = self.wins / self.total_rounds
-                # REDUCED: Only log losses, not detailed info
                 print(f"💀 LOSS! {self.wins}/{self.total_rounds} ({win_rate:.1%})")
-
             if self.reset_round:
                 done = True
 
-        # ENHANCED: Damage-based reward with combo multiplier
         damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
         damage_received = max(0, self.prev_player_health - curr_player_health)
-
         base_reward = damage_dealt - damage_received
-
-        # Combo multiplier for damage
         combo_stats = self.strategic_tracker.get_combo_stats()
         if combo_stats["current_combo"] > 1 and damage_dealt > 0:
-            combo_multiplier = (
-                1.0 + (combo_stats["current_combo"] - 1) * 0.2
-            )  # 20% bonus per combo hit
+            combo_multiplier = 1.0 + (combo_stats["current_combo"] - 1) * 0.2
             reward += base_reward * combo_multiplier
-            # REMOVED: Debug logging for combo bonuses to reduce noise
         else:
             reward += base_reward
 
-        # ENHANCED: Strategic action bonuses
         reward += self._calculate_strategic_action_bonus(
             action, curr_player_health, curr_opponent_health
         )
-
-        # Tracking for statistics
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
-
-        # Update health tracking
         self.prev_player_health = curr_player_health
         self.prev_opponent_health = curr_opponent_health
-
         return reward, done
 
     def _calculate_strategic_action_bonus(self, action, player_health, opponent_health):
-        """Calculate bonus rewards for strategic actions"""
         bonus = 0.0
-
-        # Defensive bonus when in danger
-        if player_health <= self.full_hp * 0.3:  # Low health
-            if action in self.defend_action_indices:
-                bonus += 0.5  # Small bonus for defensive play when low
-
-        # Aggressive bonus when opponent is in danger
-        if opponent_health <= self.full_hp * 0.3:  # Enemy low health
-            # Check if action is offensive (attacks)
-            if action in range(63, 88):  # Attack actions in our action space
-                bonus += 1.0  # Bigger bonus for attacking when enemy is low
-
+        if player_health <= self.full_hp * 0.3 and action in self.defend_action_indices:
+            bonus += 0.5
+        if opponent_health <= self.full_hp * 0.3 and action in range(9, 57):
+            bonus += 1.0
         return bonus
 
     def _update_enhanced_stats(self):
-        """Update enhanced statistics including combo tracking"""
         combo_stats = self.strategic_tracker.get_combo_stats()
-
         if combo_stats["current_combo"] > self.stats["max_combo"]:
             self.stats["max_combo"] = combo_stats["current_combo"]
-
         if combo_stats["current_combo"] >= 2:
             self.stats["total_combos"] += 1
-
-        # Calculate average damage per round
         if self.total_rounds > 0:
             self.stats["avg_damage_per_round"] = (
                 self.total_damage_dealt / self.total_rounds
             )
-
-            # Calculate defensive efficiency (damage dealt vs received ratio)
             if self.total_damage_received > 0:
                 self.stats["defensive_efficiency"] = (
                     self.total_damage_dealt / self.total_damage_received
@@ -1280,43 +1377,21 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 )
 
     def _extract_enhanced_state(self, info):
-        """Extract enhanced game state including all required data"""
-        # Basic health and score
-        player_health = info.get("agent_hp", self.full_hp)
-        opponent_health = info.get("enemy_hp", self.full_hp)
-        score = info.get("score", 0)
-
-        # Position data
-        player_x = info.get("agent_x", 90)
-        player_y = info.get("agent_y", 64)
-        opponent_x = info.get("enemy_x", 90)
-        opponent_y = info.get("enemy_y", 64)
-
-        # Status data
-        player_status = info.get("agent_status", 0)
-        opponent_status = info.get("enemy_status", 0)
-
-        # Victory data
-        player_victories = info.get("agent_victories", 0)
-        opponent_victories = info.get("enemy_victories", 0)
-
-        # REMOVED: Debug logging to reduce noise
-
         return (
-            player_health,
-            opponent_health,
-            score,
-            player_x,
-            player_y,
-            opponent_x,
-            opponent_y,
-            player_status,
-            opponent_status,
-            player_victories,
-            opponent_victories,
+            info.get("agent_hp", self.full_hp),
+            info.get("enemy_hp", self.full_hp),
+            info.get("score", 0),
+            info.get("agent_x", 90),
+            info.get("agent_y", 64),
+            info.get("enemy_x", 90),
+            info.get("enemy_y", 64),
+            info.get("agent_status", 0),
+            info.get("enemy_status", 0),
+            info.get("agent_victories", 0),
+            info.get("enemy_victories", 0),
         )
 
-    def _process_strategic_vision_pipeline(
+    def _process_cross_attention_vision_pipeline(
         self,
         stacked_obs,
         player_health,
@@ -1332,9 +1407,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         opponent_victories,
         button_features,
     ):
-        """Process through enhanced strategic vision pipeline with REDUCED LOGGING"""
         try:
-            # Step 1: Enhanced strategic features (33 features with improved score momentum)
             strategic_features = self.strategic_tracker.update(
                 player_health,
                 opponent_health,
@@ -1349,8 +1422,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 opponent_victories,
                 button_features,
             )
-
-            # Step 2: CNN feature extraction
             if self.cnn_extractor is not None:
                 with torch.no_grad():
                     device = next(self.cnn_extractor.parameters()).device
@@ -1363,49 +1434,34 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             else:
                 visual_features = np.zeros(512, dtype=np.float32)
 
-            # Store in history buffers
             self.visual_features_history.append(visual_features)
             self.strategic_features_history.append(strategic_features)
 
-            # Step 3: Vision transformer prediction
             if (
                 self.vision_ready
                 and len(self.visual_features_history) == self.frame_stack
             ):
-                prediction = self._make_tactical_prediction()
-                if prediction:
+                processed_output = self._get_cross_attention_processed_output()
+                if processed_output is not None:
                     self.stats["predictions_made"] += 1
-
-                    # Apply defense anti-spam logic
-                    frames_since_defense = self.episode_steps - self.last_defense_frame
-                    if frames_since_defense < self.defense_cooldown_frames:
-                        prediction["defend_timing"] *= 0.1
-
-                    # Update current predictions
-                    self.current_attack_timing = prediction["attack_timing"]
-                    self.current_defend_timing = prediction["defend_timing"]
-
-                    # Update running averages for stats
-                    self.stats["avg_attack_timing"] = (
-                        self.stats["avg_attack_timing"] * 0.99
-                        + prediction["attack_timing"] * 0.01
+                    self.stats["visual_attention_weight"] = np.mean(
+                        processed_output["visual_attention"]
                     )
-                    self.stats["avg_defend_timing"] = (
-                        self.stats["avg_defend_timing"] * 0.99
-                        + prediction["defend_timing"] * 0.01
+                    self.stats["strategy_attention_weight"] = np.mean(
+                        processed_output["strategy_attention"]
                     )
-
-                    return prediction
-
+                    self.stats["button_attention_weight"] = np.mean(
+                        processed_output["button_attention"]
+                    )
+                    return processed_output["processed_features"]
             return None
-
         except Exception as e:
-            # REDUCED: Only log critical pipeline errors
-            logger.error(f"Strategic vision pipeline error: {e}")
+            logger.error(
+                f"Cross-attention strategic vision pipeline error: {e}", exc_info=True
+            )
             return None
 
-    def _make_tactical_prediction(self):
-        """Make tactical predictions using enhanced strategic features with REDUCED LOGGING"""
+    def _get_cross_attention_processed_output(self):
         try:
             if (
                 not self.vision_ready
@@ -1413,289 +1469,176 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             ):
                 return None
 
-            # Stack sequences
-            visual_seq = np.stack(list(self.visual_features_history))  # [8, 512]
-            strategic_seq = np.stack(list(self.strategic_features_history))  # [8, 33]
-
-            # Combine features at each timestep
+            visual_seq = np.stack(list(self.visual_features_history))
+            strategic_seq = np.stack(list(self.strategic_features_history))
+            strategy_seq = strategic_seq[:, : len(self.strategic_feature_names)]
+            button_seq = strategic_seq[:, len(self.strategic_feature_names) :]
             combined_seq = np.concatenate(
-                [visual_seq, strategic_seq], axis=1
-            )  # [8, 545]
+                [visual_seq, strategy_seq, button_seq], axis=1
+            )
 
-            # Convert to tensor and add batch dimension
-            device = next(self.vision_transformer.parameters()).device
+            device = next(self.cross_attention_transformer.parameters()).device
             combined_tensor = (
                 torch.from_numpy(combined_seq).float().unsqueeze(0).to(device)
-            )  # [1, 8, 545]
+            )
 
-            # Get tactical predictions from vision transformer
             with torch.no_grad():
-                predictions = self.vision_transformer(combined_tensor)
+                output = self.cross_attention_transformer(combined_tensor)
 
-            prediction_result = {
-                "attack_timing": predictions["attack_timing"].cpu().item(),
-                "defend_timing": predictions["defend_timing"].cpu().item(),
+            processed_features = output["processed_features"].cpu().numpy()[0]
+            attention_weights = {
+                "visual": output["visual_attention"].cpu().numpy()[0],
+                "strategy": output["strategy_attention"].cpu().numpy()[0],
+                "button": output["button_attention"].cpu().numpy()[0],
             }
 
-            # REDUCED LOGGING: Only log predictions if they meet frequency criteria
-            if self.log_transformer_predictions:
-                self._log_enhanced_transformer_prediction(
-                    prediction_result,
-                    strategic_seq[-1],
-                    visual_seq[-1],
-                    combined_tensor,
+            if (
+                self.log_transformer_predictions
+                and self.stats["predictions_made"] % self.log_interval == 0
+            ):
+                self._log_cross_attention_processing(
+                    processed_features, attention_weights, strategic_seq[-1]
                 )
 
-            return prediction_result
-
+            return {"processed_features": processed_features, **attention_weights}
         except Exception as e:
-            # REDUCED: Only log critical prediction errors
-            logger.error(f"Strategic vision prediction error: {e}")
+            logger.error(
+                f"Cross-attention feature processing error: {e}", exc_info=True
+            )
             return None
 
-    def _log_enhanced_transformer_prediction(
-        self, predictions, strategic_features, visual_features, combined_tensor
+    def _log_cross_attention_processing(
+        self, processed_features, attention_weights, strategic_features
     ):
-        """REDUCED LOGGING: Enhanced transformer prediction logging with much less frequency"""
         try:
-            combo_stats = self.strategic_tracker.get_combo_stats()
-
-            # REDUCED: Only store lightweight prediction data, not full logs
-            if len(self.transformer_logs["predictions"]) < 1000:  # Limit storage
-                self.transformer_logs["predictions"].append(
-                    {
-                        "step": self.stats["predictions_made"],
-                        "attack_timing": predictions["attack_timing"],
-                        "defend_timing": predictions["defend_timing"],
-                        "combo_count": combo_stats["current_combo"],
-                        "score_momentum": strategic_features[17],  # Only key features
-                    }
-                )
-
-            # REDUCED: Only store significant combo events (3+ hits)
-            if combo_stats["current_combo"] >= 3:
-                self.transformer_logs["combo_analysis"].append(
-                    {
-                        "step": self.stats["predictions_made"],
-                        "combo_count": combo_stats["current_combo"],
-                        "attack_confidence": predictions["attack_timing"],
-                        "score_momentum": strategic_features[17],
-                    }
-                )
-
-            # REDUCED: Much less frequent detailed analysis (every 1000 instead of 100)
-            if self.stats["predictions_made"] % self.log_interval == 0:
-                self._analyze_enhanced_transformer_learning(
-                    predictions, strategic_features, visual_features
-                )
-
-            # REDUCED: Only log extremely high-confidence predictions (>0.9 instead of >0.8)
-            if predictions["attack_timing"] > 0.9 or predictions["defend_timing"] > 0.9:
-                self._log_enhanced_significant_prediction(
-                    predictions, strategic_features, combo_stats
-                )
-
-        except Exception as e:
-            # REDUCED: Don't log minor transformer logging errors
-            pass
-
-    def _analyze_enhanced_transformer_learning(
-        self, predictions, strategic_features, visual_features
-    ):
-        """REDUCED LOGGING: Enhanced analysis with much less detail - LOG TO FILE ONLY"""
-        try:
-            # REDUCED: Only log every 1000 predictions instead of every 100
-            print(f"🔍 TRANSFORMER ANALYSIS @ Step {self.stats['predictions_made']}")
-
-            # REDUCED: Only log top 5 features instead of top 10
-            feature_importance = self._calculate_enhanced_feature_importance(
-                strategic_features
-            )
-
-            print("TOP 5 STRATEGIC FEATURES:")
-            for i, (feature_name, importance) in enumerate(feature_importance[:5]):
-                print(f"   {i+1}. {feature_name}: {importance:.3f}")
-
-            # REDUCED: Simplified situation logging
-            combo_stats = self.strategic_tracker.get_combo_stats()
-            if combo_stats["current_combo"] > 0:
-                print(f"   ACTIVE COMBO: {combo_stats['current_combo']} hits")
-
+            print(f"🎯 CROSS-ATTENTION @ Step {self.stats['predictions_made']}")
             print(
-                f"   Attack/Defend: {predictions['attack_timing']:.2f}/{predictions['defend_timing']:.2f}"
+                f"   🔍 Attention Weights: Visual={np.mean(attention_weights['visual']):.3f}, "
+                f"Strategy={np.mean(attention_weights['strategy']):.3f}, "
+                f"Buttons={np.mean(attention_weights['button']):.3f}"
             )
-
-            # REDUCED: Only log performance summary
-            if self.total_rounds > 0:
-                win_rate = self.wins / self.total_rounds
-                print(
-                    f"   Performance: {win_rate:.1%} wins, Max Combo: {self.stats['max_combo']}"
-                )
-
-        except Exception as e:
-            # REDUCED: Don't log analysis errors
-            pass
-
-    def _calculate_enhanced_feature_importance(self, strategic_features):
-        """Enhanced feature importance calculation (unchanged)"""
-        try:
-            feature_importance = []
-
-            for i, feature_value in enumerate(strategic_features):
-                if i < len(self.strategic_feature_names):
-                    feature_name = self.strategic_feature_names[i]
-                else:
-                    feature_name = self.button_feature_names[
-                        i - len(self.strategic_feature_names)
-                    ]
-
-                # Enhanced importance calculation considering feature context
-                base_importance = abs(feature_value) * (1.0 + feature_value * 0.1)
-
-                # Boost importance for combo-related features
-                if feature_name == "enhanced_score_momentum":
-                    base_importance *= 1.5
-                elif "damage" in feature_name.lower():
-                    base_importance *= 1.3
-                elif feature_name in ["optimal_spacing", "center_control"]:
-                    base_importance *= 1.2
-
-                feature_importance.append((feature_name, base_importance))
-
-            feature_importance.sort(key=lambda x: x[1], reverse=True)
-            return feature_importance
-
-        except Exception as e:
-            return []
-
-    def _log_enhanced_significant_prediction(
-        self, predictions, strategic_features, combo_stats
-    ):
-        """REDUCED LOGGING: Only log extremely significant predictions (>0.9)"""
-        try:
-            if predictions["attack_timing"] > 0.9:
-                print(
-                    f"🗡️ VERY HIGH ATTACK CONFIDENCE ({predictions['attack_timing']:.3f})"
-                )
-                if combo_stats["current_combo"] > 0:
-                    print(f"   🔥 {combo_stats['current_combo']}-hit combo active!")
-
-            if predictions["defend_timing"] > 0.9:
-                print(
-                    f"🛡️ VERY HIGH DEFEND CONFIDENCE ({predictions['defend_timing']:.3f})"
-                )
-
-        except Exception as e:
+        except Exception:
             pass
 
     def _preprocess_frame(self, frame):
-        """Preprocess frame to target size (128, 180)"""
-        try:
-            if frame is None:
-                return np.zeros((*self.target_size, 3), dtype=np.uint8)
-
-            # Resize to target size: height=128, width=180
-            resized = cv2.resize(frame, (self.target_size[1], self.target_size[0]))
-            return resized
-
-        except Exception as e:
-            # REDUCED: Only log critical frame preprocessing errors
-            logger.error(f"Frame preprocessing error: {e}")
+        if frame is None:
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
+        return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
 
     def _get_stacked_observation(self):
-        """Get stacked observation in CHW format - 8 RGB frames"""
-        try:
-            if len(self.frame_buffer) == 0:
-                return np.zeros(self.observation_space.shape, dtype=np.uint8)
-
-            # Stack 8 RGB frames: [frame1, frame2, ..., frame8] each [H, W, 3]
-            # Convert to [3*8, H, W] = [24, H, W] format
-            stacked = np.concatenate(list(self.frame_buffer), axis=2)  # [H, W, 24]
-            return stacked.transpose(2, 0, 1)  # [24, H, W]
-
-        except Exception as e:
-            # REDUCED: Only log critical frame stacking errors
-            logger.error(f"Frame stacking error: {e}")
+        if len(self.frame_buffer) == 0:
             return np.zeros(self.observation_space.shape, dtype=np.uint8)
+        stacked = np.concatenate(list(self.frame_buffer), axis=2)
+        return stacked.transpose(2, 0, 1)
 
     def save_enhanced_analysis(self, filepath=None):
-        """REDUCED LOGGING: Save lightweight transformer analysis"""
+        if not self.log_transformer_predictions:
+            return
         try:
-            if self.log_transformer_predictions:
-                import json
+            import json
 
-                # Use default filepath if none provided
-                if filepath is None:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"transformer_analysis_{timestamp}.json"
-                    filepath = os.path.join(ANALYSIS_OUTPUT_DIR, filename)
+            if filepath is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filepath = os.path.join(
+                    ANALYSIS_OUTPUT_DIR, f"cross_attention_analysis_{timestamp}.json"
+                )
 
-                # REDUCED: Save only essential data, not detailed logs
-                analysis_data = {
-                    "timestamp": datetime.now().isoformat(),
-                    "total_predictions": len(self.transformer_logs["predictions"]),
-                    "performance_summary": {
-                        "win_rate": self.wins / max(self.total_rounds, 1),
-                        "total_rounds": self.total_rounds,
-                        "wins": self.wins,
-                        "losses": self.losses,
-                        "max_combo": self.stats["max_combo"],
-                        "total_combos": self.stats["total_combos"],
-                        "avg_damage_per_round": self.stats["avg_damage_per_round"],
-                    },
-                    "recent_predictions": self.transformer_logs["predictions"][
-                        -100:
-                    ],  # Only last 100 instead of 500
-                    "significant_combos": [
-                        combo
-                        for combo in self.transformer_logs["combo_analysis"]
-                        if combo.get("combo_count", 0) >= 5
-                    ],  # Only 5+ hit combos
-                    "training_metadata": {
-                        "episode_steps": self.episode_steps,
-                        "vision_transformer_ready": self.vision_ready,
-                        "logging_reduced": True,  # Flag to indicate reduced logging
-                    },
-                }
-
-                with open(filepath, "w") as f:
-                    json.dump(analysis_data, f, indent=2)
-
-                print(f"📊 Lightweight analysis saved to {filepath}")
-
+            win_rate = self.wins / max(self.total_rounds, 1)
+            analysis_data = {
+                "timestamp": datetime.now().isoformat(),
+                "performance_summary": {
+                    "win_rate": win_rate,
+                    "total_rounds": self.total_rounds,
+                    "max_combo": self.stats["max_combo"],
+                },
+                "attention_summary": {
+                    "avg_visual": self.stats["visual_attention_weight"],
+                    "avg_strategy": self.stats["strategy_attention_weight"],
+                    "avg_button": self.stats["button_attention_weight"],
+                },
+            }
+            with open(filepath, "w") as f:
+                json.dump(analysis_data, f, indent=2)
+            print(f"📊 Cross-attention analysis saved to {filepath}")
         except Exception as e:
-            # REDUCED: Don't log analysis save failures unless critical
-            if "permission" in str(e).lower() or "disk" in str(e).lower():
-                logger.error(f"Critical: Failed to save analysis: {e}")
+            logger.error(f"Failed to save cross-attention analysis: {e}")
 
 
-# Enhanced CNN for stable-baselines3 compatibility (unchanged)
-class StreetFighterSimplifiedCNN(BaseFeaturesExtractor):
+class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     """
-    Enhanced CNN feature extractor for Street Fighter compatible with stable-baselines3
-    Improved architecture for better feature extraction
+    Enhanced CNN feature extractor that integrates with cross-attention transformer
+    Features go through: CNN → Cross-Attention → Agent.predict
+    This class is the main entry point for SB3's policy.
     """
 
-    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 512):
+    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 256):
         super().__init__(observation_space, features_dim)
-
         n_input_channels = observation_space.shape[0]
-        self.cnn = CNNFeatureExtractor(
-            input_channels=n_input_channels, feature_dim=features_dim
-        )
 
-        # REDUCED: Only log initialization once with print
-        print(f"🏗️ Enhanced Street Fighter CNN initialized:")
-        print(
-            f"   Input: {n_input_channels} channels → Output: {features_dim} features"
-        )
+        # This is the CNN part that will be injected into the wrapper
+        self.cnn = CNNFeatureExtractor(input_channels=n_input_channels, feature_dim=512)
+        self.cross_attention_transformer = None
+        self.wrapper_env = None
+        self.final_projection = nn.Linear(256, features_dim)
+
+        print(f"🎯 Street Fighter Cross-Attention CNN initialized for SB3:")
+        print(f"   CNN Output: 512 features")
+        print(f"   Cross-Attention Output: 256 features")
+        print(f"   Final Policy Input: {features_dim} features")
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        # Normalize observations to [0, 1] range
-        normalized_obs = observations.float() / 255.0
-        return self.cnn(normalized_obs)
+        """
+        This forward pass is called by the SB3 agent.
+        It relies on the wrapper to perform the full pipeline processing.
+        """
+        # The wrapper's step() method has already run the full pipeline
+        # and stored the final processed features. Here we just need to
+        # use the most recent ones.
+        if self.wrapper_env is not None and self.wrapper_env.vision_ready:
+            # In a batched environment, we need to collect features from each env
+            batch_size = observations.shape[0]
+            processed_features_batch = []
 
-    def update_tactical_predictions(self, attack_timing: float, defend_timing: float):
-        """Update tactical predictions - forward to underlying CNN"""
-        self.cnn.update_tactical_predictions(attack_timing, defend_timing)
+            # This is a simplified approach for DummyVecEnv. For SubprocVecEnv,
+            # a more complex IPC mechanism would be needed.
+            if hasattr(self.wrapper_env, "envs"):  # VecEnv
+                for i in range(batch_size):
+                    # This logic assumes the features are somehow accessible per-environment
+                    # A more robust way is to have the wrapper return them in the `info` dict
+                    # and process them in a custom callback or policy.
+                    # For simplicity, we assume we can get the latest features.
+                    env = self.wrapper_env.envs[i].env
+                    if len(env.visual_features_history) == env.frame_stack:
+                        # Re-run pipeline for this observation
+                        output = env._get_cross_attention_processed_output()
+                        if output is not None:
+                            processed_features_batch.append(
+                                torch.tensor(
+                                    output["processed_features"], device=self.device
+                                )
+                            )
+                        else:  # Fallback
+                            processed_features_batch.append(
+                                torch.zeros(self.features_dim, device=self.device)
+                            )
+                    else:  # Not ready yet
+                        processed_features_batch.append(
+                            torch.zeros(self.features_dim, device=self.device)
+                        )
+
+                if processed_features_batch:
+                    return torch.stack(processed_features_batch)
+
+        # Fallback if the pipeline isn't ready or something fails
+        normalized_obs = observations.float() / 255.0
+        visual_features = self.cnn(normalized_obs)
+        # We project from 512 to 256 as a fallback
+        return self.final_projection(visual_features[:, :256])
+
+    def inject_cross_attention_components(
+        self, cross_attention_transformer, wrapper_env
+    ):
+        """Inject cross-attention transformer and wrapper environment"""
+        self.cross_attention_transformer = cross_attention_transformer
+        self.wrapper_env = wrapper_env  # This is the VecEnv
+        print("✅ Cross-attention components injected into SB3 CNN")
