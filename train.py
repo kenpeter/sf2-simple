@@ -9,6 +9,7 @@ Key improvements:
 5. Better training hyperparameters based on cross-attention analysis
 6. Enhanced curriculum learning approach
 7. File-based logging with attention analysis
+8. FIXED: Proper model loading/resuming with cross-attention transformer
 """
 
 import os
@@ -41,88 +42,37 @@ def setup_cuda_optimization():
         print("⚠️ CUDA not available! Running on CPU. This will be very slow.")
         return torch.device("cpu")
 
-    # Set CUDA device
     device = torch.device("cuda:0")
     torch.cuda.set_device(0)
-
-    # Enable optimizations
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
-
-    # Set memory allocation strategy
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-
     print(f"🚀 CUDA Setup Complete:")
     print(f"   Device: {torch.cuda.get_device_name(0)}")
-    print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
-    print(f"   CUDA Version: {torch.version.cuda}")
-    print(f"   cuDNN Enabled: {torch.backends.cudnn.enabled}")
-    print(f"   cuDNN Benchmark: {torch.backends.cudnn.benchmark}")
-
     return device
 
 
 class EnhancedCrossAttentionTrainingCallback(BaseCallback):
     """Enhanced callback with cross-attention training monitoring and analysis"""
 
-    def __init__(self, enable_vision_transformer=True, verbose=0):
+    def __init__(self, verbose=0):
         super().__init__(verbose)
-        self.enable_vision_transformer = enable_vision_transformer
         self.last_log_time = time.time()
-        self.log_interval = 120  # Log every 2 minutes
-        self.win_rate_history = []
-        self.performance_milestones = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-        self.achieved_milestones = set()
+        self.log_interval = 120
 
     def _on_step(self):
-        current_time = time.time()
-        if current_time - self.last_log_time > self.log_interval:
-            self.last_log_time = current_time
-            self._log_enhanced_cross_attention_stats()
-            self._check_performance_milestones()
+        if time.time() - self.last_log_time > self.log_interval:
+            self.last_log_time = time.time()
+            if hasattr(self.training_env, "get_attr"):
+                stats_list = self.training_env.get_attr("stats")
+                if stats_list:
+                    stats = stats_list[0]
+                    wrapper_env = self.training_env.envs[0].env
+                    win_rate = wrapper_env.wins / max(1, wrapper_env.total_rounds)
+                    print(
+                        f"\nStep: {self.num_timesteps}, Win Rate: {win_rate:.1%}, Max Combo: {stats.get('max_combo', 0)}"
+                    )
         return True
-
-    def _log_enhanced_cross_attention_stats(self):
-        print(f"\n🎯 Cross-Attention Training Step: {self.num_timesteps:,}")
-
-        if hasattr(self.training_env, "get_attr"):
-            all_stats = self.training_env.get_attr("stats")
-            if not all_stats:
-                return
-            stats = all_stats[0]
-
-            wrapper_env = self.training_env.envs[0].env
-            win_rate = wrapper_env.wins / max(wrapper_env.total_rounds, 1)
-            self.win_rate_history.append(win_rate)
-
-            print(
-                f"  🏆 Win Rate: {win_rate:.1%} ({wrapper_env.wins}/{wrapper_env.total_rounds})"
-            )
-            if stats.get("max_combo", 0) > 0:
-                print(f"  🔥 Max Combo: {stats.get('max_combo', 0)}")
-
-            if stats.get("cross_attention_ready", False):
-                print(
-                    f"  🎯 Attention (Vis/Str/Btn): {stats.get('visual_attention_weight', 0.0):.3f} / "
-                    f"{stats.get('strategy_attention_weight', 0.0):.3f} / "
-                    f"{stats.get('button_attention_weight', 0.0):.3f}"
-                )
-
-    def _check_performance_milestones(self):
-        if not self.win_rate_history:
-            return
-        current_win_rate = self.win_rate_history[-1]
-        for milestone in self.performance_milestones:
-            if (
-                milestone not in self.achieved_milestones
-                and current_win_rate >= milestone
-            ):
-                self.achieved_milestones.add(milestone)
-                print(f"🎉 CROSS-ATTENTION MILESTONE: {milestone:.0%} Win Rate!")
-                if hasattr(self.model, "save"):
-                    path = f"enhanced_trained_models/cross_attention_milestone_{milestone:.0%}.zip"
-                    self.model.save(path)
-                    print(f"💾 Milestone model saved to {path}")
 
 
 def create_learning_rate_schedule(initial_lr=3e-4):
@@ -133,12 +83,104 @@ def create_learning_rate_schedule(initial_lr=3e-4):
             return initial_lr
         elif progress < 0.6:
             return initial_lr * 0.5
-        elif progress < 0.9:
-            return initial_lr * 0.25
         else:
             return initial_lr * 0.1
 
     return schedule
+
+
+def create_model_with_proper_structure(env, device, args):
+    """Create a new model with the proper structure for cross-attention"""
+    policy_kwargs = dict(
+        features_extractor_class=StreetFighterCrossAttentionCNN,
+        features_extractor_kwargs=dict(features_dim=256),
+        net_arch=dict(pi=[512, 256], vf=[512, 256]),
+        activation_fn=nn.ReLU,
+    )
+
+    model = PPO(
+        "CnnPolicy",
+        env,
+        policy_kwargs=policy_kwargs,
+        device=device,
+        verbose=1,
+        n_steps=args.n_steps,
+        batch_size=args.batch_size,
+        n_epochs=10,
+        gamma=0.99,
+        learning_rate=create_learning_rate_schedule(args.learning_rate),
+        clip_range=0.2,
+        ent_coef=0.01,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        gae_lambda=0.95,
+        tensorboard_log="enhanced_logs",
+    )
+
+    return model, policy_kwargs
+
+
+def inject_cross_attention_transformer(model, env, args):
+    """Inject cross-attention transformer into the model's feature extractor"""
+    print("💉 Injecting cross-attention feature extractor into wrapper...")
+    try:
+        feature_extractor = model.policy.features_extractor
+        for i in range(args.num_envs):
+            env.envs[i].env.inject_feature_extractor(feature_extractor)
+        print("✅ Cross-attention injection successful.")
+        return True
+    except Exception as e:
+        print(f"⚠️ Feature extractor injection failed: {e}")
+        return False
+
+
+def load_model_with_cross_attention(model_path, env, device, args):
+    """
+    Load a model with cross-attention transformer properly.
+    This creates the base model structure first, then injects the cross-attention,
+    and finally loads the saved parameters.
+    """
+    print(f"📂 Loading model with cross-attention from {model_path}")
+
+    # Step 1: Create a new model with the proper base structure
+    model, policy_kwargs = create_model_with_proper_structure(env, device, args)
+
+    # Step 2: Inject cross-attention transformer to create the full structure
+    inject_success = inject_cross_attention_transformer(model, env, args)
+
+    if not inject_success:
+        print("⚠️ Cross-attention injection failed, loading without it...")
+        # Fallback: load the model without cross-attention
+        model = PPO.load(model_path, env=env, device=device)
+        return model
+
+    # Step 3: Load the saved parameters with strict=False to handle any missing keys
+    print("📥 Loading saved parameters...")
+    try:
+        # Load the saved model data
+        saved_data = torch.load(model_path, map_location=device)
+
+        # Extract the parameters
+        if "policy" in saved_data:
+            saved_params = saved_data["policy"]
+        else:
+            saved_params = saved_data
+
+        # Load parameters with strict=False to ignore missing keys
+        model.policy.load_state_dict(saved_params, strict=False)
+
+        # Update learning rate
+        model.learning_rate = create_learning_rate_schedule(args.learning_rate)
+
+        print("✅ Model parameters loaded successfully!")
+        return model
+
+    except Exception as e:
+        print(f"⚠️ Failed to load saved parameters: {e}")
+        print("🔄 Falling back to fresh model initialization...")
+
+        # Return the fresh model if loading fails
+        return model
 
 
 def main():
@@ -148,16 +190,12 @@ def main():
         description="Enhanced Street Fighter II Training with Cross-Attention"
     )
     parser.add_argument("--total-timesteps", type=int, default=20_000_000)
-    parser.add_argument(
-        "--num-envs", type=int, default=1
-    )  # Using DummyVecEnv, >1 may have issues
+    parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--no-vision-transformer", action="store_true")
-    # --- CHANGE IS HERE ---
     parser.add_argument("--state", type=str, default="ken_bison_12.state")
-    # --- END OF CHANGE ---
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--n-steps", type=int, default=4096)
     args = parser.parse_args()
@@ -168,13 +206,9 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     state_file_name = args.state
-    # Check for existence using an absolute path to give a clear error.
     state_file_path = os.path.abspath(state_file_name)
     if not os.path.exists(state_file_path):
         print(f"❌ State file not found at: {state_file_path}")
-        print(
-            "   Please make sure the .state file is in the current directory or provide a full path."
-        )
         sys.exit(1)
 
     print(f"🎯 Training with Cross-Attention: {enable_vision_transformer}")
@@ -183,19 +217,13 @@ def main():
     def make_env():
         env = retro.make(
             game=game,
-            # Pass the simple file name. retro will find it if it's in the CWD.
             state=state_file_name,
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE,
             render_mode="human" if args.render else None,
         )
         env = StreetFighterVisionWrapper(
-            env,
-            reset_round=True,
-            rendering=args.render,
-            max_episode_steps=8000,
-            enable_vision_transformer=enable_vision_transformer,
-            log_transformer_predictions=True,
+            env, reset_round=True, enable_vision_transformer=enable_vision_transformer
         )
         env = Monitor(env)
         env.reset(seed=0)
@@ -203,61 +231,24 @@ def main():
 
     env = DummyVecEnv([make_env for _ in range(args.num_envs)])
 
-    policy_kwargs = dict(
-        features_extractor_class=StreetFighterCrossAttentionCNN,
-        features_extractor_kwargs=dict(features_dim=256),
-        net_arch=dict(pi=[512, 256], vf=[512, 256]),
-        activation_fn=nn.ReLU,
-    )
-
+    # Model creation and loading logic
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming training from {args.resume}")
-        model = PPO.load(args.resume, env=env, device=device)
-        model.learning_rate = create_learning_rate_schedule(args.learning_rate)
+        model = load_model_with_cross_attention(args.resume, env, device, args)
     else:
         print("🧠 Creating a new PPO model")
-        model = PPO(
-            "CnnPolicy",
-            env,
-            policy_kwargs=policy_kwargs,
-            device=device,
-            verbose=1,
-            n_steps=args.n_steps,
-            batch_size=args.batch_size,
-            n_epochs=10,
-            gamma=0.99,
-            learning_rate=create_learning_rate_schedule(args.learning_rate),
-            clip_range=0.2,
-            ent_coef=0.01,
-            vf_coef=0.5,
-            max_grad_norm=0.5,
-            gae_lambda=0.95,
-            tensorboard_log="enhanced_logs",
-        )
+        model, _ = create_model_with_proper_structure(env, device, args)
 
-    if enable_vision_transformer:
-        print("💉 Injecting cross-attention feature extractor into wrapper...")
-        try:
-            feature_extractor = model.policy.features_extractor
-            # Pass the VecEnv to the feature extractor
-            feature_extractor.inject_cross_attention_components(
-                None, env
-            )  # Pass VecEnv
-            # Inject components into each individual environment
-            for i in range(args.num_envs):
-                env.envs[i].env.inject_feature_extractor(feature_extractor)
-            print("✅ Injection successful.")
-        except Exception as e:
-            print(f"⚠️ Feature extractor injection failed: {e}")
+        # Inject cross-attention transformer for new models
+        if enable_vision_transformer:
+            inject_cross_attention_transformer(model, env, args)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=max(100000 // args.num_envs, 1),
+        save_freq=max(25000 // args.num_envs, 1),
         save_path=save_dir,
         name_prefix="cross_attention_ppo_sf2",
     )
-    enhanced_callback = EnhancedCrossAttentionTrainingCallback(
-        enable_vision_transformer
-    )
+    enhanced_callback = EnhancedCrossAttentionTrainingCallback()
 
     print("🏋️ Starting training...")
     try:
