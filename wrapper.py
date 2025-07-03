@@ -18,7 +18,7 @@ import gymnasium as gym
 from collections import deque
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from typing import Dict
+from typing import Dict, Tuple
 import math
 import logging
 import os
@@ -659,7 +659,7 @@ class MultiHeadCrossAttention(nn.Module):
         key: torch.Tensor,
         value: torch.Tensor,
         mask: torch.Tensor = None,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             query: [batch_size, seq_len_q, d_model]
@@ -696,8 +696,8 @@ class MultiHeadCrossAttention(nn.Module):
 
         output = self.w_o(attention_output)
 
-        # Residual connection and layer norm
-        return self.layer_norm(output + query)
+        # --- FIX: Return both the processed tensor and the attention weights ---
+        return self.layer_norm(output + query), attention_weights
 
     def scaled_dot_product_attention(
         self,
@@ -705,7 +705,7 @@ class MultiHeadCrossAttention(nn.Module):
         K: torch.Tensor,
         V: torch.Tensor,
         mask: torch.Tensor = None,
-    ) -> (torch.Tensor, torch.Tensor):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Scaled dot-product attention mechanism"""
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
 
@@ -909,21 +909,20 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
                 batch_size, -1, -1
             )  # [batch, 1, d_model]
 
-            # Apply cross-attention: Q = "what button should I press now?"
-            # K, V = different feature groups
-            visual_attended = self.visual_cross_attention(
+            # --- FIX: Unpack the tuple (processed_tensor, attention_weights) ---
+            visual_attended, visual_weights = self.visual_cross_attention(
                 query=action_query, key=visual_processed, value=visual_processed
-            )  # [batch, 1, d_model]
+            )
 
-            strategy_attended = self.strategy_cross_attention(
+            strategy_attended, strategy_weights = self.strategy_cross_attention(
                 query=action_query, key=strategy_processed, value=strategy_processed
-            )  # [batch, 1, d_model]
+            )
 
-            button_attended = self.button_cross_attention(
+            button_attended, button_weights = self.button_cross_attention(
                 query=action_query, key=button_processed, value=button_processed
-            )  # [batch, 1, d_model]
+            )
 
-            # Fuse cross-attention outputs
+            # Fuse cross-attention outputs (using the processed tensors)
             fused_features = torch.cat(
                 [
                     visual_attended.squeeze(1),
@@ -954,12 +953,12 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
             final_features = temporal_output.squeeze(1)  # [batch, d_model]
 
-            # Return processed features for agent.predict - no predictions here
+            # --- FIX: Return the actual attention weights in the dictionary ---
             return {
-                "processed_features": final_features,  # [batch, d_model] - goes to agent.predict
-                "visual_attention": visual_attended.squeeze(1),
-                "strategy_attention": strategy_attended.squeeze(1),
-                "button_attention": button_attended.squeeze(1),
+                "processed_features": final_features,
+                "visual_attention": visual_weights,
+                "strategy_attention": strategy_weights,
+                "button_attention": button_weights,
             }
 
         except Exception as e:
@@ -1567,7 +1566,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     """
     Enhanced CNN feature extractor that integrates with cross-attention transformer
-    Features go through: CNN → Cross-Attention → Agent.predict
     This class is the main entry point for SB3's policy.
     """
 
@@ -1591,27 +1589,17 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         This forward pass is called by the SB3 agent.
         It relies on the wrapper to perform the full pipeline processing.
         """
-        # The wrapper's step() method has already run the full pipeline
-        # and stored the final processed features. Here we just need to
-        # use the most recent ones.
         if self.wrapper_env is not None and self.wrapper_env.vision_ready:
-            # In a batched environment, we need to collect features from each env
             batch_size = observations.shape[0]
             processed_features_batch = []
 
-            # This is a simplified approach for DummyVecEnv. For SubprocVecEnv,
-            # a more complex IPC mechanism would be needed.
             if hasattr(self.wrapper_env, "envs"):  # VecEnv
                 for i in range(batch_size):
-                    # This logic assumes the features are somehow accessible per-environment
-                    # A more robust way is to have the wrapper return them in the `info` dict
-                    # and process them in a custom callback or policy.
-                    # For simplicity, we assume we can get the latest features.
                     env = self.wrapper_env.envs[i].env
                     if len(env.visual_features_history) == env.frame_stack:
                         # Re-run pipeline for this observation
                         output = env._get_cross_attention_processed_output()
-                        if output is not None:
+                        if output is not None and "processed_features" in output:
                             processed_features_batch.append(
                                 torch.tensor(
                                     output["processed_features"], device=self.device
@@ -1619,21 +1607,29 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
                             )
                         else:  # Fallback
                             processed_features_batch.append(
-                                torch.zeros(self.features_dim, device=self.device)
+                                torch.zeros(
+                                    self.final_projection.in_features,
+                                    device=self.device,
+                                )
                             )
                     else:  # Not ready yet
                         processed_features_batch.append(
-                            torch.zeros(self.features_dim, device=self.device)
+                            torch.zeros(
+                                self.final_projection.in_features, device=self.device
+                            )
                         )
 
                 if processed_features_batch:
-                    return torch.stack(processed_features_batch)
+                    # Project from 256 to the final features_dim
+                    stacked_features = torch.stack(processed_features_batch)
+                    return self.final_projection(stacked_features)
 
         # Fallback if the pipeline isn't ready or something fails
         normalized_obs = observations.float() / 255.0
         visual_features = self.cnn(normalized_obs)
-        # We project from 512 to 256 as a fallback
-        return self.final_projection(visual_features[:, :256])
+        # Project from 512 (CNN) -> 256 (like transformer) -> final_dim
+        projected_to_256 = visual_features[:, :256]
+        return self.final_projection(projected_to_256)
 
     def inject_cross_attention_components(
         self, cross_attention_transformer, wrapper_env
