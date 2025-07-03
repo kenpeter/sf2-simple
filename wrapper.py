@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-wrapper.py - Enhanced Street Fighter II Wrapper with Cross-Attention Vision Transformer
+wrapper.py - Enhanced Street Fighter II Wrapper with Oscillation-Based Positioning
 Key improvements:
-1. Cross-attention mechanism with Q="what button should I press now?"
-2. Separate processing of visual (512), strategy (21), and previous button (12) features
-3. Enhanced tactical prediction with button-specific outputs
-4. Better feature interaction through multi-head cross-attention
-5. REDUCED LOGGING FREQUENCY to prevent large log files
+1. Oscillation tracking and analysis - the back-and-forth movement in neutral game
+2. Spatial control features for footsies gameplay
+3. Threat bubble and range control analysis
+4. Whiff punishment detection and baiting mechanics
+5. Enhanced neutral game state tracking
 """
 
 import cv2
@@ -18,7 +18,7 @@ import gymnasium as gym
 from collections import deque
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 import math
 import logging
 import os
@@ -45,6 +45,339 @@ os.makedirs(ANALYSIS_OUTPUT_DIR, exist_ok=True)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 180
 SCREEN_HEIGHT = 128
+
+
+class OscillationTracker:
+    """
+    Tracks oscillation patterns in fighting game neutral game
+    Oscillation = the back-and-forth movement players make when probing for openings
+    """
+
+    def __init__(self, history_length=16):
+        self.history_length = history_length
+
+        # Position and movement tracking
+        self.player_x_history = deque(maxlen=history_length)
+        self.opponent_x_history = deque(maxlen=history_length)
+        self.player_velocity_history = deque(maxlen=history_length)
+        self.opponent_velocity_history = deque(maxlen=history_length)
+
+        # Oscillation pattern detection
+        self.player_direction_changes = 0
+        self.opponent_direction_changes = 0
+        self.player_oscillation_amplitude = 0.0
+        self.opponent_oscillation_amplitude = 0.0
+
+        # Threat bubble analysis
+        self.optimal_range_violations = 0
+        self.whiff_bait_attempts = 0
+        self.successful_whiff_punishes = 0
+
+        # Neutral game state tracking
+        self.neutral_game_duration = 0
+        self.advantage_transitions = 0
+        self.space_control_score = 0.0
+
+        # Movement intention detection
+        self.aggressive_forward_count = 0
+        self.defensive_backward_count = 0
+        self.neutral_dance_count = 0
+
+        # Range control constants
+        self.CLOSE_RANGE = 25  # Grappler range
+        self.MID_RANGE = 45  # Poke range
+        self.FAR_RANGE = 70  # Projectile range
+        self.WHIFF_BAIT_RANGE = 35  # Just outside poke range
+
+        # Previous values for calculating changes
+        self.prev_player_x = None
+        self.prev_opponent_x = None
+        self.prev_player_velocity = 0.0
+        self.prev_opponent_velocity = 0.0
+
+        # Frame counting
+        self.frame_count = 0
+
+    def update(
+        self,
+        player_x: float,
+        opponent_x: float,
+        player_attacking: bool = False,
+        opponent_attacking: bool = False,
+    ) -> Dict:
+        """Update oscillation tracking with new position data"""
+        self.frame_count += 1
+
+        # Calculate velocities
+        player_velocity = 0.0
+        opponent_velocity = 0.0
+
+        if self.prev_player_x is not None:
+            player_velocity = player_x - self.prev_player_x
+        if self.prev_opponent_x is not None:
+            opponent_velocity = opponent_x - self.prev_opponent_x
+
+        # Update histories
+        self.player_x_history.append(player_x)
+        self.opponent_x_history.append(opponent_x)
+        self.player_velocity_history.append(player_velocity)
+        self.opponent_velocity_history.append(opponent_velocity)
+
+        # Detect direction changes (oscillation)
+        if (
+            len(self.player_velocity_history) >= 2
+            and self.prev_player_velocity != 0
+            and player_velocity != 0
+        ):
+            if (self.prev_player_velocity > 0 and player_velocity < 0) or (
+                self.prev_player_velocity < 0 and player_velocity > 0
+            ):
+                self.player_direction_changes += 1
+
+        if (
+            len(self.opponent_velocity_history) >= 2
+            and self.prev_opponent_velocity != 0
+            and opponent_velocity != 0
+        ):
+            if (self.prev_opponent_velocity > 0 and opponent_velocity < 0) or (
+                self.prev_opponent_velocity < 0 and opponent_velocity > 0
+            ):
+                self.opponent_direction_changes += 1
+
+        # Calculate oscillation amplitude (range of movement)
+        if len(self.player_x_history) >= 8:
+            player_positions = list(self.player_x_history)[-8:]
+            self.player_oscillation_amplitude = max(player_positions) - min(
+                player_positions
+            )
+
+        if len(self.opponent_x_history) >= 8:
+            opponent_positions = list(self.opponent_x_history)[-8:]
+            self.opponent_oscillation_amplitude = max(opponent_positions) - min(
+                opponent_positions
+            )
+
+        # Analyze movement patterns
+        distance = abs(player_x - opponent_x)
+        movement_analysis = self._analyze_movement_patterns(
+            player_x,
+            opponent_x,
+            player_velocity,
+            opponent_velocity,
+            distance,
+            player_attacking,
+            opponent_attacking,
+        )
+
+        # Update previous values
+        self.prev_player_x = player_x
+        self.prev_opponent_x = opponent_x
+        self.prev_player_velocity = player_velocity
+        self.prev_opponent_velocity = opponent_velocity
+
+        return movement_analysis
+
+    def _analyze_movement_patterns(
+        self,
+        player_x: float,
+        opponent_x: float,
+        player_velocity: float,
+        opponent_velocity: float,
+        distance: float,
+        player_attacking: bool,
+        opponent_attacking: bool,
+    ) -> Dict:
+        """Analyze current movement patterns for oscillation features"""
+
+        # Determine who is moving forward/backward
+        player_moving_forward = (player_x < opponent_x and player_velocity > 0) or (
+            player_x > opponent_x and player_velocity < 0
+        )
+        player_moving_backward = (player_x < opponent_x and player_velocity < 0) or (
+            player_x > opponent_x and player_velocity > 0
+        )
+
+        opponent_moving_forward = (opponent_x < player_x and opponent_velocity > 0) or (
+            opponent_x > player_x and opponent_velocity < 0
+        )
+        opponent_moving_backward = (
+            opponent_x < player_x and opponent_velocity < 0
+        ) or (opponent_x > player_x and opponent_velocity > 0)
+
+        # Detect neutral game state
+        neutral_game = not player_attacking and not opponent_attacking
+        if neutral_game:
+            self.neutral_game_duration += 1
+        else:
+            if self.neutral_game_duration > 0:
+                self.advantage_transitions += 1
+            self.neutral_game_duration = 0
+
+        # Movement intention classification
+        if player_moving_forward and distance > self.MID_RANGE:
+            self.aggressive_forward_count += 1
+        elif player_moving_backward and distance < self.MID_RANGE:
+            self.defensive_backward_count += 1
+        elif (
+            abs(player_velocity) > 0.5 and self.MID_RANGE <= distance <= self.FAR_RANGE
+        ):
+            self.neutral_dance_count += 1
+
+        # Whiff bait detection
+        if (
+            distance > self.WHIFF_BAIT_RANGE
+            and distance < self.MID_RANGE + 5
+            and player_moving_forward
+            and not player_attacking
+        ):
+            self.whiff_bait_attempts += 1
+
+        # Space control analysis
+        self.space_control_score = self._calculate_space_control(
+            player_x, opponent_x, player_velocity, opponent_velocity, distance
+        )
+
+        return {
+            "player_moving_forward": player_moving_forward,
+            "player_moving_backward": player_moving_backward,
+            "opponent_moving_forward": opponent_moving_forward,
+            "opponent_moving_backward": opponent_moving_backward,
+            "neutral_game": neutral_game,
+            "distance": distance,
+            "space_control_score": self.space_control_score,
+        }
+
+    def _calculate_space_control(
+        self,
+        player_x: float,
+        opponent_x: float,
+        player_velocity: float,
+        opponent_velocity: float,
+        distance: float,
+    ) -> float:
+        """Calculate who has better space control based on positioning and movement"""
+
+        # Center control bonus
+        screen_center = SCREEN_WIDTH / 2
+        player_center_distance = abs(player_x - screen_center)
+        opponent_center_distance = abs(opponent_x - screen_center)
+        center_control = (opponent_center_distance - player_center_distance) / (
+            SCREEN_WIDTH / 2
+        )
+
+        # Movement initiative (who's dictating the pace)
+        movement_initiative = 0.0
+        if abs(player_velocity) > abs(opponent_velocity):
+            movement_initiative = 0.5 if player_velocity > 0 else -0.5
+        elif abs(opponent_velocity) > abs(player_velocity):
+            movement_initiative = -0.5 if opponent_velocity > 0 else 0.5
+
+        # Range control (being in your character's optimal range)
+        range_control = 0.0
+        if self.CLOSE_RANGE <= distance <= self.MID_RANGE:
+            range_control = 0.3  # Assume this is generally good for most characters
+        elif distance > self.FAR_RANGE:
+            range_control = -0.2  # Too far for most interactions
+
+        # Oscillation effectiveness (consistent movement patterns)
+        oscillation_effectiveness = 0.0
+        if self.frame_count > 60:  # After 1 second
+            player_oscillation_rate = self.player_direction_changes / (
+                self.frame_count / 60
+            )
+            if 1.0 <= player_oscillation_rate <= 3.0:  # Optimal oscillation rate
+                oscillation_effectiveness = 0.2
+
+        total_control = (
+            center_control
+            + movement_initiative
+            + range_control
+            + oscillation_effectiveness
+        )
+        return np.clip(total_control, -1.0, 1.0)
+
+    def get_oscillation_features(self) -> np.ndarray:
+        """Get 12 oscillation-based features for the neural network"""
+        features = np.zeros(12, dtype=np.float32)
+
+        if self.frame_count == 0:
+            return features
+
+        # Feature 1: Player oscillation frequency (normalized)
+        player_osc_freq = self.player_direction_changes / max(1, self.frame_count / 60)
+        features[0] = np.clip(player_osc_freq / 5.0, 0.0, 1.0)
+
+        # Feature 2: Opponent oscillation frequency
+        opponent_osc_freq = self.opponent_direction_changes / max(
+            1, self.frame_count / 60
+        )
+        features[1] = np.clip(opponent_osc_freq / 5.0, 0.0, 1.0)
+
+        # Feature 3: Player oscillation amplitude (normalized)
+        features[2] = np.clip(self.player_oscillation_amplitude / 50.0, 0.0, 1.0)
+
+        # Feature 4: Opponent oscillation amplitude
+        features[3] = np.clip(self.opponent_oscillation_amplitude / 50.0, 0.0, 1.0)
+
+        # Feature 5: Space control score
+        features[4] = np.clip(self.space_control_score, -1.0, 1.0)
+
+        # Feature 6: Neutral game duration ratio
+        features[5] = np.clip(
+            self.neutral_game_duration / 180.0, 0.0, 1.0
+        )  # 3 seconds max
+
+        # Feature 7: Movement aggression ratio
+        total_movement = (
+            self.aggressive_forward_count
+            + self.defensive_backward_count
+            + self.neutral_dance_count
+        )
+        if total_movement > 0:
+            features[6] = self.aggressive_forward_count / total_movement
+
+        # Feature 8: Defensive movement ratio
+        if total_movement > 0:
+            features[7] = self.defensive_backward_count / total_movement
+
+        # Feature 9: Neutral dance ratio
+        if total_movement > 0:
+            features[8] = self.neutral_dance_count / total_movement
+
+        # Feature 10: Whiff bait attempt frequency
+        features[9] = np.clip(
+            self.whiff_bait_attempts / max(1, self.frame_count / 60), 0.0, 1.0
+        )
+
+        # Feature 11: Advantage transition frequency
+        features[10] = np.clip(
+            self.advantage_transitions / max(1, self.frame_count / 60), 0.0, 1.0
+        )
+
+        # Feature 12: Current velocity differential
+        if (
+            len(self.player_velocity_history) > 0
+            and len(self.opponent_velocity_history) > 0
+        ):
+            velocity_diff = (
+                self.player_velocity_history[-1] - self.opponent_velocity_history[-1]
+            )
+            features[11] = np.clip(velocity_diff / 5.0, -1.0, 1.0)
+
+        return features
+
+    def get_stats(self) -> Dict:
+        """Get current oscillation statistics for logging"""
+        return {
+            "player_direction_changes": self.player_direction_changes,
+            "opponent_direction_changes": self.opponent_direction_changes,
+            "player_oscillation_amplitude": self.player_oscillation_amplitude,
+            "opponent_oscillation_amplitude": self.opponent_oscillation_amplitude,
+            "space_control_score": self.space_control_score,
+            "neutral_game_duration": self.neutral_game_duration,
+            "whiff_bait_attempts": self.whiff_bait_attempts,
+            "advantage_transitions": self.advantage_transitions,
+        }
 
 
 class StreetFighterDiscreteActions:
@@ -182,6 +515,15 @@ class StreetFighterDiscreteActions:
         """Get 12-dimensional button features for strategic analysis"""
         return self.discrete_to_multibinary(action_index).astype(np.float32)
 
+    def is_attack_action(self, action_index: int) -> bool:
+        """Check if action contains attack buttons"""
+        if action_index < 0 or action_index >= self.num_actions:
+            return False
+
+        button_indices = self.action_combinations[action_index]
+        attack_buttons = {0, 1, 8, 9, 10, 11}  # Kick and punch buttons
+        return any(btn in attack_buttons for btn in button_indices)
+
 
 class CNNFeatureExtractor(nn.Module):
     """CNN to extract features from 8-frame RGB stack (180×128 resolution)"""
@@ -238,25 +580,16 @@ class CNNFeatureExtractor(nn.Module):
 
 class StrategicFeatureTracker:
     """
-    ENHANCED Strategic feature tracker with improved button history
-    Features: 33 total (21 strategic + 12 button history features)
-    Key improvement: Button features represent PREVIOUS action, not current
+    ENHANCED Strategic feature tracker with oscillation-based positioning
+    Features: 45 total (21 traditional + 12 oscillation + 12 button history features)
     """
 
     def __init__(self, history_length=8):
         self.history_length = history_length
 
-        # Health tracking
+        # Traditional features
         self.player_health_history = deque(maxlen=history_length)
         self.opponent_health_history = deque(maxlen=history_length)
-
-        # Position tracking
-        self.player_x_history = deque(maxlen=history_length)
-        self.player_y_history = deque(maxlen=history_length)
-        self.opponent_x_history = deque(maxlen=history_length)
-        self.opponent_y_history = deque(maxlen=history_length)
-
-        # ENHANCED: Score tracking with combo detection
         self.score_history = deque(maxlen=history_length)
         self.score_change_history = deque(maxlen=history_length)
         self.combo_counter = 0
@@ -267,21 +600,18 @@ class StrategicFeatureTracker:
         # Status tracking
         self.player_status_history = deque(maxlen=history_length)
         self.opponent_status_history = deque(maxlen=history_length)
-
-        # Victory tracking
         self.player_victories_history = deque(maxlen=history_length)
         self.opponent_victories_history = deque(maxlen=history_length)
-
-        # Damage tracking with enhanced combo detection
         self.player_damage_dealt_history = deque(maxlen=history_length)
         self.opponent_damage_dealt_history = deque(maxlen=history_length)
-        self.recent_damage_events = deque(maxlen=5)  # Track recent damage for combos
+        self.recent_damage_events = deque(maxlen=5)
 
-        # FIXED: Button tracking - represents PREVIOUS actions, not current
+        # Button tracking
         self.button_features_history = deque(maxlen=history_length)
-        self.previous_button_features = np.zeros(
-            12, dtype=np.float32
-        )  # Store previous action
+        self.previous_button_features = np.zeros(12, dtype=np.float32)
+
+        # ENHANCED: Oscillation tracker
+        self.oscillation_tracker = OscillationTracker(history_length=16)
 
         # Combat state tracking
         self.close_combat_count = 0
@@ -295,10 +625,8 @@ class StrategicFeatureTracker:
         self.CLOSE_DISTANCE = 40
         self.OPTIMAL_SPACING_MIN = 35
         self.OPTIMAL_SPACING_MAX = 55
-
-        # ENHANCED: Combo detection parameters
-        self.COMBO_TIMEOUT_FRAMES = 60  # Combo breaks after 1 second of no hits
-        self.MIN_SCORE_INCREASE_FOR_HIT = 50  # Minimum score increase to count as hit
+        self.COMBO_TIMEOUT_FRAMES = 60
+        self.MIN_SCORE_INCREASE_FOR_HIT = 50
 
         # Previous values for rate calculations
         self.prev_player_health = None
@@ -321,24 +649,20 @@ class StrategicFeatureTracker:
         button_features: np.ndarray = None,
     ) -> np.ndarray:
         """
-        ENHANCED update method with improved score momentum calculation
-        FIXED: Button features now represent PREVIOUS action for proper causality
+        ENHANCED update method with oscillation-based positioning
+        Returns 45 features: 21 traditional + 12 oscillation + 12 button history
         """
         self.current_frame += 1
 
         # Update histories
         self.player_health_history.append(player_health)
         self.opponent_health_history.append(opponent_health)
-        self.player_x_history.append(player_x)
-        self.player_y_history.append(player_y)
-        self.opponent_x_history.append(opponent_x)
-        self.opponent_y_history.append(opponent_y)
         self.player_status_history.append(player_status)
         self.opponent_status_history.append(opponent_status)
         self.player_victories_history.append(player_victories)
         self.opponent_victories_history.append(opponent_victories)
 
-        # ENHANCED: Score momentum with combo detection
+        # Enhanced score momentum with combo detection
         score_change = 0
         if self.prev_score is not None:
             score_change = score - self.prev_score
@@ -353,10 +677,8 @@ class StrategicFeatureTracker:
                     frames_since_last_hit <= self.COMBO_TIMEOUT_FRAMES
                     and self.last_score_increase_frame > 0
                 ):
-                    # Continue combo
                     self.combo_counter += 1
                 else:
-                    # Start new combo
                     self.combo_counter = 1
 
                 self.last_score_increase_frame = self.current_frame
@@ -364,7 +686,6 @@ class StrategicFeatureTracker:
                     self.max_combo_this_round, self.combo_counter
                 )
 
-                # Track recent damage events for pattern analysis
                 self.recent_damage_events.append(
                     {
                         "frame": self.current_frame,
@@ -373,7 +694,6 @@ class StrategicFeatureTracker:
                     }
                 )
             else:
-                # Check if combo should break
                 frames_since_last_hit = (
                     self.current_frame - self.last_score_increase_frame
                 )
@@ -383,11 +703,10 @@ class StrategicFeatureTracker:
         self.score_history.append(score)
         self.score_change_history.append(score_change)
 
-        # FIXED: Update button features history with PREVIOUS action
-        # This represents what action was taken in the previous frame
+        # Update button features history with PREVIOUS action
         self.button_features_history.append(self.previous_button_features.copy())
 
-        # Store current button features for next frame (proper causality)
+        # Store current button features for next frame
         if button_features is not None:
             self.previous_button_features = button_features.copy()
         else:
@@ -407,14 +726,27 @@ class StrategicFeatureTracker:
         self.player_damage_dealt_history.append(player_damage_this_frame)
         self.opponent_damage_dealt_history.append(opponent_damage_this_frame)
 
+        # ENHANCED: Update oscillation tracker with attack information
+        player_attacking = (
+            button_features is not None
+            and np.any(button_features[[0, 1, 8, 9, 10, 11]])
+            if button_features is not None
+            else False
+        )
+        opponent_attacking = False  # We don't have opponent action info directly
+
+        oscillation_analysis = self.oscillation_tracker.update(
+            player_x, opponent_x, player_attacking, opponent_attacking
+        )
+
         # Update frame counting for close combat tracking
         self.total_frames += 1
-        distance = np.sqrt((player_x - opponent_x) ** 2 + (player_y - opponent_y) ** 2)
+        distance = abs(player_x - opponent_x)
         if distance <= self.CLOSE_DISTANCE:
             self.close_combat_count += 1
 
-        # Calculate 33 features (21 strategic + 12 button history)
-        features = self._calculate_enhanced_features(
+        # Calculate 45 features (21 traditional + 12 oscillation + 12 button history)
+        features = self._calculate_enhanced_features_with_oscillation(
             player_health,
             opponent_health,
             score,
@@ -427,6 +759,7 @@ class StrategicFeatureTracker:
             player_victories,
             opponent_victories,
             distance,
+            oscillation_analysis,
         )
 
         # Update previous values
@@ -436,7 +769,7 @@ class StrategicFeatureTracker:
 
         return features
 
-    def _calculate_enhanced_features(
+    def _calculate_enhanced_features_with_oscillation(
         self,
         player_health,
         opponent_health,
@@ -450,12 +783,14 @@ class StrategicFeatureTracker:
         player_victories,
         opponent_victories,
         distance,
+        oscillation_analysis,
     ) -> np.ndarray:
         """
-        ENHANCED feature calculation with improved score momentum
+        Calculate 45 features: 21 traditional + 12 oscillation + 12 button history
         """
-        features = np.zeros(33, dtype=np.float32)
+        features = np.zeros(45, dtype=np.float32)
 
+        # Features 1-21: Traditional strategic features (same as before)
         # Features 1-2: Danger zones
         features[0] = 1.0 if player_health <= self.DANGER_ZONE_HEALTH else 0.0
         features[1] = 1.0 if opponent_health <= self.DANGER_ZONE_HEALTH else 0.0
@@ -506,14 +841,8 @@ class StrategicFeatureTracker:
         vertical_diff = player_y - opponent_y
         features[11] = np.clip(vertical_diff / (self.SCREEN_HEIGHT / 2), -1.0, 1.0)
 
-        # Feature 13: Position stability
-        player_x_stability = 1.0 - min(
-            1.0, abs(self._calculate_momentum(self.player_x_history)) / 10.0
-        )
-        opponent_x_stability = 1.0 - min(
-            1.0, abs(self._calculate_momentum(self.opponent_x_history)) / 10.0
-        )
-        features[12] = (player_x_stability + opponent_x_stability) / 2.0
+        # Feature 13: Position stability (replaced with oscillation-based metric)
+        features[12] = oscillation_analysis.get("space_control_score", 0.0)
 
         # Feature 14: Optimal spacing
         if self.OPTIMAL_SPACING_MIN <= distance <= self.OPTIMAL_SPACING_MAX:
@@ -521,20 +850,19 @@ class StrategicFeatureTracker:
         else:
             features[13] = 0.0
 
-        # Feature 15: Forward pressure
-        player_x_momentum = self._calculate_momentum(self.player_x_history)
-        if player_x < opponent_x:
-            forward_pressure = player_x_momentum
+        # Feature 15: Forward pressure (enhanced with oscillation data)
+        if oscillation_analysis.get("player_moving_forward", False):
+            features[14] = 1.0
+        elif oscillation_analysis.get("player_moving_backward", False):
+            features[14] = -1.0
         else:
-            forward_pressure = -player_x_momentum
-        features[14] = np.clip(forward_pressure / 5.0, -1.0, 1.0)
+            features[14] = 0.0
 
         # Feature 16: Defensive movement
-        if player_x < opponent_x:
-            defensive_movement = -player_x_momentum
+        if oscillation_analysis.get("player_moving_backward", False):
+            features[15] = 1.0
         else:
-            defensive_movement = player_x_momentum
-        features[15] = np.clip(defensive_movement / 5.0, -1.0, 1.0)
+            features[15] = 0.0
 
         # Feature 17: Close combat frequency
         if self.total_frames > 0:
@@ -542,7 +870,7 @@ class StrategicFeatureTracker:
         else:
             features[16] = 0.0
 
-        # Feature 18: ENHANCED Score momentum with combo detection
+        # Feature 18: Enhanced score momentum with combo detection
         features[17] = self._calculate_enhanced_score_momentum()
 
         # Feature 19: Status difference
@@ -553,49 +881,46 @@ class StrategicFeatureTracker:
         features[19] = min(player_victories / 10.0, 1.0)
         features[20] = min(opponent_victories / 10.0, 1.0)
 
-        # Features 22-33: PREVIOUS button state (12 button history features) - FIXED
+        # Features 22-33: Oscillation features (12 features)
+        oscillation_features = self.oscillation_tracker.get_oscillation_features()
+        features[21:33] = oscillation_features
+
+        # Features 34-45: Previous button state (12 button history features)
         if len(self.button_features_history) > 0:
-            previous_buttons = self.button_features_history[-1]  # Previous action taken
-            features[21:33] = previous_buttons
+            previous_buttons = self.button_features_history[-1]
+            features[33:45] = previous_buttons
         else:
-            features[21:33] = 0.0  # No previous buttons pressed
+            features[33:45] = 0.0
 
         return features
 
     def _calculate_enhanced_score_momentum(self) -> float:
-        """
-        ENHANCED score momentum calculation incorporating:
-        1. Recent score changes
-        2. Combo multiplier
-        3. Hit frequency
-        4. Damage scaling
-        """
+        """Enhanced score momentum calculation incorporating combo data"""
         if len(self.score_change_history) < 2:
             return 0.0
 
         # Base momentum from recent score changes
-        recent_changes = list(self.score_change_history)[-5:]  # Last 5 frames
+        recent_changes = list(self.score_change_history)[-5:]
         base_momentum = np.mean([max(0, change) for change in recent_changes])
 
-        # Combo multiplier - reward sustained offense
-        combo_multiplier = 1.0 + (self.combo_counter * 0.1)  # 10% bonus per combo hit
+        # Combo multiplier
+        combo_multiplier = 1.0 + (self.combo_counter * 0.1)
 
-        # Hit frequency bonus - reward consistent pressure
+        # Hit frequency bonus
         hit_frequency = 0.0
         if len(self.recent_damage_events) > 0:
             recent_hits = [
                 event
                 for event in self.recent_damage_events
                 if self.current_frame - event["frame"] <= 300
-            ]  # Last 5 seconds
-            hit_frequency = len(recent_hits) / 5.0  # Normalize to 0-1 range
+            ]
+            hit_frequency = len(recent_hits) / 5.0
 
-        # Damage scaling - bigger hits get more momentum
+        # Damage scaling
         damage_scaling = 1.0
         if len(self.score_change_history) > 0:
             recent_score_change = self.score_change_history[-1]
             if recent_score_change > 0:
-                # Scale based on hit strength (larger score increases = stronger hits)
                 damage_scaling = 1.0 + min(recent_score_change / 1000.0, 1.0)
 
         # Combine all factors
@@ -603,7 +928,6 @@ class StrategicFeatureTracker:
             base_momentum * combo_multiplier * damage_scaling + hit_frequency
         )
 
-        # Normalize to reasonable range (-1.0 to 2.0)
         return np.clip(enhanced_momentum / 100.0, -1.0, 2.0)
 
     def _calculate_momentum(self, history):
@@ -614,13 +938,12 @@ class StrategicFeatureTracker:
         values = list(history)
         changes = [values[i] - values[i - 1] for i in range(1, len(values))]
 
-        # Use recent changes (last 3) if available, otherwise all changes
         recent_changes = changes[-3:] if len(changes) >= 3 else changes
         return np.mean(recent_changes) if recent_changes else 0.0
 
     def get_combo_stats(self) -> Dict:
         """Get current combo statistics for logging"""
-        return {
+        combo_stats = {
             "current_combo": self.combo_counter,
             "max_combo_this_round": self.max_combo_this_round,
             "recent_hits": len(
@@ -631,6 +954,12 @@ class StrategicFeatureTracker:
                 ]
             ),
         }
+
+        # Add oscillation stats
+        oscillation_stats = self.oscillation_tracker.get_stats()
+        combo_stats.update(oscillation_stats)
+
+        return combo_stats
 
 
 class MultiHeadCrossAttention(nn.Module):
@@ -744,6 +1073,15 @@ class FeatureGroupProcessor(nn.Module):
                 nn.Dropout(0.05),
                 nn.LayerNorm(d_model),
             )
+        elif group_name == "oscillation":
+            # NEW: Oscillation features need special handling for spatial relationships
+            self.processor = nn.Sequential(
+                nn.Linear(input_dim, d_model // 2),
+                nn.ReLU(),
+                nn.Dropout(0.05),
+                nn.Linear(d_model // 2, d_model),
+                nn.LayerNorm(d_model),
+            )
         elif group_name == "previous_buttons":
             # Previous button features are binary, need special handling
             self.processor = nn.Sequential(
@@ -765,18 +1103,19 @@ class FeatureGroupProcessor(nn.Module):
 
 class EnhancedCrossAttentionVisionTransformer(nn.Module):
     """
-    Enhanced Vision Transformer with Cross-Attention for Street Fighter II
+    Enhanced Vision Transformer with Cross-Attention and Oscillation Analysis
 
     Architecture:
-    1. Process visual (512), strategy (21), and previous button (12) features separately
+    1. Process visual (512), strategy (21), oscillation (12), and previous button (12) features separately
     2. Use cross-attention with Q="what button should I press now?"
-    3. Generate tactical predictions and button-specific outputs
+    3. Generate tactical predictions and button-specific outputs with oscillation context
     """
 
     def __init__(
         self,
         visual_dim: int = 512,
         strategic_dim: int = 21,
+        oscillation_dim: int = 12,
         button_dim: int = 12,
         seq_length: int = 8,
     ):
@@ -784,6 +1123,7 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
         self.visual_dim = visual_dim
         self.strategic_dim = strategic_dim
+        self.oscillation_dim = oscillation_dim
         self.button_dim = button_dim
         self.seq_length = seq_length
         self.num_heads = 8
@@ -798,11 +1138,14 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
         self.strategy_processor = FeatureGroupProcessor(
             strategic_dim, self.d_model, "strategy"
         )
+        self.oscillation_processor = FeatureGroupProcessor(
+            oscillation_dim, self.d_model, "oscillation"
+        )
         self.button_processor = FeatureGroupProcessor(
             button_dim, self.d_model, "previous_buttons"
         )
 
-        # Learnable query: "What button should I press now?"
+        # Learnable query: "What button should I press now considering oscillation patterns?"
         self.action_query = nn.Parameter(torch.randn(1, 1, self.d_model))
 
         # Cross-attention modules for each feature group
@@ -812,13 +1155,16 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
         self.strategy_cross_attention = MultiHeadCrossAttention(
             self.d_model, num_heads=self.num_heads
         )
+        self.oscillation_cross_attention = MultiHeadCrossAttention(
+            self.d_model, num_heads=self.num_heads
+        )
         self.button_cross_attention = MultiHeadCrossAttention(
             self.d_model, num_heads=self.num_heads
         )
 
-        # Feature fusion layer
+        # Feature fusion layer (now handles 4 feature groups)
         self.feature_fusion = nn.Sequential(
-            nn.Linear(self.d_model * 3, self.d_model * 2),
+            nn.Linear(self.d_model * 4, self.d_model * 2),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(self.d_model * 2, self.d_model),
@@ -835,12 +1181,17 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
         self._init_parameters()
 
-        print(f"🎯 Enhanced Cross-Attention Vision Transformer initialized:")
+        print(
+            f"🎯 Enhanced Cross-Attention Vision Transformer with Oscillation initialized:"
+        )
         print(f"   Visual features: {visual_dim} → {self.d_model}")
         print(f"   Strategy features: {strategic_dim} → {self.d_model}")
+        print(f"   Oscillation features: {oscillation_dim} → {self.d_model}")
         print(f"   Previous button features: {button_dim} → {self.d_model}")
         print(f"   Cross-attention heads: {self.num_heads} per feature group")
-        print(f"   Learnable query: 'What button should I press now?'")
+        print(
+            f"   Learnable query: 'What button should I press considering oscillation?'"
+        )
 
     def _init_parameters(self):
         """Initialize parameters with appropriate scaling"""
@@ -853,50 +1204,73 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
     def forward(self, combined_sequence: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
-        Forward pass with cross-attention mechanism
+        Forward pass with cross-attention mechanism including oscillation analysis
         """
         try:
             batch_size, seq_len, total_dim = combined_sequence.shape
 
-            # Split features into groups
+            # Split features into groups (visual + strategy + oscillation + buttons = 512 + 21 + 12 + 12 = 557)
             visual_features = combined_sequence[:, :, : self.visual_dim]
             strategy_features = combined_sequence[
                 :, :, self.visual_dim : self.visual_dim + self.strategic_dim
             ]
+            oscillation_features = combined_sequence[
+                :,
+                :,
+                self.visual_dim
+                + self.strategic_dim : self.visual_dim
+                + self.strategic_dim
+                + self.oscillation_dim,
+            ]
             button_features = combined_sequence[
-                :, :, self.visual_dim + self.strategic_dim :
+                :, :, self.visual_dim + self.strategic_dim + self.oscillation_dim :
             ]
 
             # Process each feature group
             visual_processed = self.visual_processor(visual_features)
             strategy_processed = self.strategy_processor(strategy_features)
+            oscillation_processed = self.oscillation_processor(oscillation_features)
             button_processed = self.button_processor(button_features)
 
             action_query = self.action_query.expand(batch_size, -1, -1)
 
+            # Cross-attention for each feature group
             visual_attended, visual_weights = self.visual_cross_attention(
                 action_query, visual_processed, visual_processed
             )
             strategy_attended, strategy_weights = self.strategy_cross_attention(
                 action_query, strategy_processed, strategy_processed
             )
+            oscillation_attended, oscillation_weights = (
+                self.oscillation_cross_attention(
+                    action_query, oscillation_processed, oscillation_processed
+                )
+            )
             button_attended, button_weights = self.button_cross_attention(
                 action_query, button_processed, button_processed
             )
 
+            # Fuse all feature groups
             fused_features = torch.cat(
                 [
                     visual_attended.squeeze(1),
                     strategy_attended.squeeze(1),
+                    oscillation_attended.squeeze(1),
                     button_attended.squeeze(1),
                 ],
                 dim=-1,
             )
             fused_features = self.feature_fusion(fused_features)
 
-            # --- FIX: Correctly apply fusion to the entire sequence for temporal attention ---
+            # Apply temporal attention across the entire sequence
             all_features_processed = torch.cat(
-                [visual_processed, strategy_processed, button_processed], dim=-1
+                [
+                    visual_processed,
+                    strategy_processed,
+                    oscillation_processed,
+                    button_processed,
+                ],
+                dim=-1,
             )
             all_features_fused = self.feature_fusion(all_features_processed)
 
@@ -912,6 +1286,7 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
                 "processed_features": final_features,
                 "visual_attention": visual_weights,
                 "strategy_attention": strategy_weights,
+                "oscillation_attention": oscillation_weights,
                 "button_attention": button_weights,
             }
 
@@ -920,7 +1295,6 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
             batch_size = combined_sequence.shape[0]
             device = combined_sequence.device
 
-            # --- FIX: Return a complete dictionary with correctly shaped fallback tensors ---
             return {
                 "processed_features": torch.zeros(
                     batch_size, self.d_model, device=device
@@ -931,6 +1305,9 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
                 "strategy_attention": torch.zeros(
                     batch_size, self.num_heads, 1, self.seq_length, device=device
                 ),
+                "oscillation_attention": torch.zeros(
+                    batch_size, self.num_heads, 1, self.seq_length, device=device
+                ),
                 "button_attention": torch.zeros(
                     batch_size, self.num_heads, 1, self.seq_length, device=device
                 ),
@@ -939,7 +1316,7 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    ENHANCED Street Fighter wrapper with Cross-Attention Vision Transformer
+    ENHANCED Street Fighter wrapper with Oscillation-Based Positioning Analysis
     """
 
     def __init__(
@@ -972,18 +1349,30 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.total_rounds = 0
         self.total_damage_dealt = 0
         self.total_damage_received = 0
+
+        # Initialize observation space
         obs_shape = (3 * frame_stack, self.target_size[0], self.target_size[1])
         self.observation_space = spaces.Box(
             low=0, high=255, shape=obs_shape, dtype=np.uint8
         )
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
+
+        # Initialize strategic tracker
         self.strategic_tracker = StrategicFeatureTracker()
+
+        # Initialize frame buffer
         self.frame_buffer = deque(maxlen=frame_stack)
+
+        # Initialize feature histories BEFORE using them
         self.visual_features_history = deque(maxlen=frame_stack)
         self.strategic_features_history = deque(maxlen=frame_stack)
+
+        # Initialize model components
         self.cnn_extractor = None
         self.cross_attention_transformer = None
         self.vision_ready = False
+
+        # Initialize stats dictionary
         self.stats = {
             "predictions_made": 0,
             "total_combos": 0,
@@ -993,10 +1382,20 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             "cross_attention_ready": False,
             "visual_attention_weight": 0.0,
             "strategy_attention_weight": 0.0,
+            "oscillation_attention_weight": 0.0,
             "button_attention_weight": 0.0,
+            # NEW: Oscillation-specific stats
+            "player_oscillation_frequency": 0.0,
+            "space_control_score": 0.0,
+            "neutral_game_duration": 0.0,
+            "whiff_bait_attempts": 0,
         }
+
+        # Logging intervals
         self.log_interval = 1000
         self.save_interval_steps = 100000
+
+        # UPDATED: Feature names to include oscillation features
         self.strategic_feature_names = [
             "player_in_danger",
             "opponent_in_danger",
@@ -1010,9 +1409,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             "opponent_near_corner",
             "center_control",
             "vertical_advantage",
-            "position_stability",
+            "space_control_from_oscillation",  # Updated
             "optimal_spacing",
-            "forward_pressure",
+            "forward_pressure_from_oscillation",  # Updated
             "defensive_movement",
             "close_combat_frequency",
             "enhanced_score_momentum",
@@ -1020,54 +1419,53 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             "agent_victories",
             "enemy_victories",
         ]
+
+        self.oscillation_feature_names = [
+            "player_oscillation_frequency",
+            "opponent_oscillation_frequency",
+            "player_oscillation_amplitude",
+            "opponent_oscillation_amplitude",
+            "space_control_score",
+            "neutral_game_duration_ratio",
+            "movement_aggression_ratio",
+            "defensive_movement_ratio",
+            "neutral_dance_ratio",
+            "whiff_bait_frequency",
+            "advantage_transition_frequency",
+            "velocity_differential",
+        ]
+
         self.button_feature_names = [
             f"prev_{name}_pressed" for name in self.discrete_actions.button_names
         ]
 
         print(
-            f"🎮 ENHANCED Street Fighter Vision Wrapper with Cross-Attention initialized."
+            f"🎮 ENHANCED Street Fighter Vision Wrapper with Oscillation Analysis initialized."
         )
-
-    def inject_feature_extractor(self, feature_extractor):
-        if not self.enable_vision_transformer:
-            return
-        try:
-            self.cnn_extractor = feature_extractor.cnn
-            device = next(feature_extractor.parameters()).device
-            self.cross_attention_transformer = EnhancedCrossAttentionVisionTransformer(
-                visual_dim=512,
-                strategic_dim=len(self.strategic_feature_names),
-                button_dim=len(self.button_feature_names),
-                seq_length=self.frame_stack,
-            ).to(device)
-            if hasattr(feature_extractor, "inject_cross_attention_components"):
-                feature_extractor.inject_cross_attention_components(
-                    self.cross_attention_transformer, self
-                )
-            self.vision_ready = True
-            self.stats["cross_attention_ready"] = True
-            print(
-                "   ✅ Enhanced Cross-Attention Vision Transformer initialized and ready!"
-            )
-        except Exception as e:
-            logger.error(
-                f"Cross-Attention Vision Transformer injection failed: {e}",
-                exc_info=True,
-            )
-            self.vision_ready = False
+        print(f"   Traditional strategic features: {len(self.strategic_feature_names)}")
+        print(f"   Oscillation features: {len(self.oscillation_feature_names)}")
+        print(f"   Button history features: {len(self.button_feature_names)}")
+        print(
+            f"   Total features: {len(self.strategic_feature_names) + len(self.oscillation_feature_names) + len(self.button_feature_names)}"
+        )
 
     def reset(self, **kwargs):
         result = self.env.reset(**kwargs)
         observation, info = result if isinstance(result, tuple) else (result, {})
+
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
+
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.clear()
         for _ in range(self.frame_stack):
             self.frame_buffer.append(processed_frame)
+
+        # Clear feature histories
         self.visual_features_history.clear()
         self.strategic_features_history.clear()
+
         stacked_obs = self._get_stacked_observation()
         return stacked_obs, info
 
@@ -1076,6 +1474,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             discrete_action
         )
         observation, reward, done, truncated, info = self.env.step(multibinary_action)
+
         (
             curr_player_health,
             curr_opponent_health,
@@ -1115,9 +1514,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             opponent_victories,
             button_features,
         )
+
         self._update_enhanced_stats()
         self.episode_steps += 1
         info.update(self.stats)
+
         return stacked_obs, custom_reward, done, truncated, info
 
     def _calculate_enhanced_reward(
@@ -1125,6 +1526,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
     ):
         reward = 0.0
         done = False
+
         if curr_player_health <= 0 or curr_opponent_health <= 0:
             self.total_rounds += 1
             if curr_opponent_health <= 0 and curr_player_health > 0:
@@ -1139,15 +1541,35 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
         damage_received = max(0, self.prev_player_health - curr_player_health)
         reward += damage_dealt - damage_received
+
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
         self.prev_player_health = curr_player_health
         self.prev_opponent_health = curr_opponent_health
+
         return reward, done
 
     def _update_enhanced_stats(self):
-        # Simplified for brevity
-        pass
+        """Update stats including oscillation metrics"""
+        if hasattr(self.strategic_tracker, "oscillation_tracker"):
+            oscillation_stats = self.strategic_tracker.oscillation_tracker.get_stats()
+            self.stats.update(
+                {
+                    "player_oscillation_frequency": oscillation_stats.get(
+                        "player_direction_changes", 0
+                    )
+                    / max(1, self.strategic_tracker.current_frame / 60),
+                    "space_control_score": oscillation_stats.get(
+                        "space_control_score", 0.0
+                    ),
+                    "neutral_game_duration": oscillation_stats.get(
+                        "neutral_game_duration", 0
+                    ),
+                    "whiff_bait_attempts": oscillation_stats.get(
+                        "whiff_bait_attempts", 0
+                    ),
+                }
+            )
 
     def _extract_enhanced_state(self, info):
         return (
@@ -1195,6 +1617,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 opponent_victories,
                 button_features,
             )
+
             if self.cnn_extractor is not None:
                 with torch.no_grad():
                     device = next(self.cnn_extractor.parameters()).device
@@ -1217,12 +1640,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 processed_output = self._get_cross_attention_processed_output()
                 if processed_output is not None:
                     self.stats["predictions_made"] += 1
-                    # This is where the error was happening
                     self.stats["visual_attention_weight"] = np.mean(
                         processed_output["visual_attention"]
                     )
                     self.stats["strategy_attention_weight"] = np.mean(
                         processed_output["strategy_attention"]
+                    )
+                    self.stats["oscillation_attention_weight"] = np.mean(
+                        processed_output["oscillation_attention"]
                     )
                     self.stats["button_attention_weight"] = np.mean(
                         processed_output["button_attention"]
@@ -1245,10 +1670,23 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
             visual_seq = np.stack(list(self.visual_features_history))
             strategic_seq = np.stack(list(self.strategic_features_history))
+
+            # Split strategic features into traditional strategy, oscillation, and button features
             strategy_seq = strategic_seq[:, : len(self.strategic_feature_names)]
-            button_seq = strategic_seq[:, len(self.strategic_feature_names) :]
+            oscillation_seq = strategic_seq[
+                :,
+                len(self.strategic_feature_names) : len(self.strategic_feature_names)
+                + len(self.oscillation_feature_names),
+            ]
+            button_seq = strategic_seq[
+                :,
+                len(self.strategic_feature_names)
+                + len(self.oscillation_feature_names) :,
+            ]
+
+            # Combine all feature sequences
             combined_seq = np.concatenate(
-                [visual_seq, strategy_seq, button_seq], axis=1
+                [visual_seq, strategy_seq, oscillation_seq, button_seq], axis=1
             )
 
             device = next(self.cross_attention_transformer.parameters()).device
@@ -1259,16 +1697,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             with torch.no_grad():
                 output_dict = self.cross_attention_transformer(combined_tensor)
 
-            # More robust check
-            if not all(
-                k in output_dict
-                for k in [
-                    "processed_features",
-                    "visual_attention",
-                    "strategy_attention",
-                    "button_attention",
-                ]
-            ):
+            # Check for required keys including oscillation attention
+            required_keys = [
+                "processed_features",
+                "visual_attention",
+                "strategy_attention",
+                "oscillation_attention",
+                "button_attention",
+            ]
+            if not all(k in output_dict for k in required_keys):
                 logger.error(
                     f"Transformer output is malformed. Keys: {output_dict.keys()}"
                 )
@@ -1280,6 +1717,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 .numpy()[0],
                 "visual_attention": output_dict["visual_attention"].cpu().numpy(),
                 "strategy_attention": output_dict["strategy_attention"].cpu().numpy(),
+                "oscillation_attention": output_dict["oscillation_attention"]
+                .cpu()
+                .numpy(),
                 "button_attention": output_dict["button_attention"].cpu().numpy(),
             }
         except Exception as e:
@@ -1299,10 +1739,42 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         stacked = np.concatenate(list(self.frame_buffer), axis=2)
         return stacked.transpose(2, 0, 1)
 
+    def inject_feature_extractor(self, feature_extractor):
+        if not self.enable_vision_transformer:
+            return
+        try:
+            self.cnn_extractor = feature_extractor.cnn
+            device = next(feature_extractor.parameters()).device
+            self.cross_attention_transformer = EnhancedCrossAttentionVisionTransformer(
+                visual_dim=512,
+                strategic_dim=len(self.strategic_feature_names),
+                oscillation_dim=len(self.oscillation_feature_names),
+                button_dim=len(self.button_feature_names),
+                seq_length=self.frame_stack,
+            ).to(device)
+
+            if hasattr(feature_extractor, "inject_cross_attention_components"):
+                feature_extractor.inject_cross_attention_components(
+                    self.cross_attention_transformer, self
+                )
+
+            self.vision_ready = True
+            self.stats["cross_attention_ready"] = True
+            print(
+                "   ✅ Enhanced Cross-Attention Vision Transformer with Oscillation initialized and ready!"
+            )
+        except Exception as e:
+            logger.error(
+                f"Cross-Attention Vision Transformer injection failed: {e}",
+                exc_info=True,
+            )
+            self.vision_ready = False
+
 
 class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     """
-    Enhanced CNN feature extractor that integrates with the cross-attention pipeline.
+    Enhanced CNN feature extractor that integrates with the cross-attention pipeline
+    including oscillation analysis.
     """
 
     def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 256):
@@ -1313,7 +1785,9 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         self.cross_attention_transformer = None
         self.wrapper_env = None
         self.final_projection = nn.Linear(256, features_dim)
-        print(f"🎯 Street Fighter Cross-Attention CNN initialized for SB3.")
+        print(
+            f"🎯 Street Fighter Cross-Attention CNN with Oscillation initialized for SB3."
+        )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         """
@@ -1323,7 +1797,7 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         # Step 1: Visual features from CNN
         visual_features = self.cnn(observations.float() / 255.0)
 
-        # Step 2: Access wrapper to get strategic features (the necessary "hack")
+        # Step 2: Access wrapper to get strategic and oscillation features
         if (
             self.wrapper_env is not None
             and self.cross_attention_transformer is not None
@@ -1331,36 +1805,61 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
             batch_size = observations.shape[0]
             # This logic is simplified for DummyVecEnv. For SubprocVecEnv, IPC would be needed.
             if hasattr(self.wrapper_env, "envs"):
-                strategic_features_batch = [
-                    env.env.strategic_tracker.update(
-                        # NOTE: We can't get real-time health/pos here. This is a limitation.
-                        # We rely on the history stored in the tracker.
-                        # This makes the design brittle but is required by the user's architecture.
-                        *env.env._extract_enhanced_state(
-                            env.env.unwrapped.data.lookup_all()
-                        ),
-                        button_features=np.zeros(12),  # No previous action info here
-                    )
-                    for env in self.wrapper_env.envs
-                ]
+                strategic_features_batch = []
+                for env in self.wrapper_env.envs:
+                    try:
+                        # Get the actual wrapper environment
+                        wrapper = env.env if hasattr(env, "env") else env
+
+                        # Extract state from retro info
+                        info = wrapper.unwrapped.data.lookup_all()
+                        state_data = wrapper._extract_enhanced_state(info)
+
+                        strategic_features = wrapper.strategic_tracker.update(
+                            *state_data,
+                            button_features=np.zeros(
+                                12
+                            ),  # No previous action info here
+                        )
+                        strategic_features_batch.append(strategic_features)
+                    except Exception as e:
+                        # Fallback to zeros if extraction fails
+                        strategic_features_batch.append(np.zeros(45, dtype=np.float32))
 
                 strategic_seq = torch.tensor(
                     np.array(strategic_features_batch),
                     dtype=torch.float32,
-                    device=self.device,
+                    device=observations.device,
                 )
 
-                # We need a sequence of length 8, but only have 1 step here. We repeat it.
+                # Split into strategy, oscillation, and button features
+                wrapper = (
+                    self.wrapper_env.envs[0].env
+                    if hasattr(self.wrapper_env.envs[0], "env")
+                    else self.wrapper_env.envs[0]
+                )
+
                 strategy_features = (
+                    strategic_seq[:, : len(wrapper.strategic_feature_names)]
+                    .unsqueeze(1)
+                    .repeat(1, 8, 1)
+                )
+                oscillation_features = (
                     strategic_seq[
-                        :, : len(self.wrapper_env.envs[0].env.strategic_feature_names)
+                        :,
+                        len(wrapper.strategic_feature_names) : len(
+                            wrapper.strategic_feature_names
+                        )
+                        + len(wrapper.oscillation_feature_names),
                     ]
                     .unsqueeze(1)
                     .repeat(1, 8, 1)
                 )
                 button_features = (
                     strategic_seq[
-                        :, len(self.wrapper_env.envs[0].env.strategic_feature_names) :
+                        :,
+                        len(wrapper.strategic_feature_names)
+                        + len(wrapper.oscillation_feature_names) :,
                     ]
                     .unsqueeze(1)
                     .repeat(1, 8, 1)
@@ -1370,7 +1869,13 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
                 visual_seq = visual_features.unsqueeze(1).repeat(1, 8, 1)
 
                 combined_seq = torch.cat(
-                    [visual_seq, strategy_features, button_features], dim=-1
+                    [
+                        visual_seq,
+                        strategy_features,
+                        oscillation_features,
+                        button_features,
+                    ],
+                    dim=-1,
                 )
 
                 output_dict = self.cross_attention_transformer(combined_seq)
@@ -1385,4 +1890,4 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     ):
         self.cross_attention_transformer = cross_attention_transformer
         self.wrapper_env = wrapper_env
-        print("✅ Cross-attention components injected into SB3 CNN")
+        print("✅ Cross-attention components with Oscillation injected into SB3 CNN")
