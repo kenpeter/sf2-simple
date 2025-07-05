@@ -16,7 +16,11 @@ import retro
 import logging
 
 # Import fixed components
-from wrapper import FixedStreetFighterPolicy, verify_gradient_flow
+from wrapper import (
+    FixedStreetFighterPolicy,
+    verify_gradient_flow,
+    diagnose_vector_features,
+)
 
 # Import wrapper (assuming it's working correctly)
 from wrapper import StreetFighterVisionWrapper
@@ -64,9 +68,6 @@ class FixedTrainingCallback(BaseCallback):
         print(f"🚀 Training started at {self.training_start_time}")
         print(f"🔧 Using device: {self.device}")
 
-        # Initial gradient flow verification with proper device handling
-        print("\n🔬 Initial Gradient Flow Verification")
-
         # Get the environment from the training environment
         env = None
         if hasattr(self.training_env, "envs"):
@@ -76,12 +77,37 @@ class FixedTrainingCallback(BaseCallback):
         else:
             env = self.training_env
 
+        # Diagnose vector features first
+        print("\n🔍 Vector Feature Quality Check")
+        try:
+            vector_stats = diagnose_vector_features(env, num_steps=30)
+
+            if vector_stats["std"] < 1e-3:
+                print("   ⚠️  WARNING: Very low vector feature variation!")
+                print("   This WILL cause gradient blocking in vector components")
+                print("   Consider checking your feature engineering")
+            elif vector_stats["active_features"] < vector_stats["total_features"] * 0.5:
+                print("   ⚠️  WARNING: Many inactive features detected")
+                print("   Vector processing may be suboptimal")
+            else:
+                print("   ✅ Vector features look healthy for gradient flow")
+
+        except Exception as e:
+            print(f"   ❌ Vector diagnostic failed: {e}")
+
+        # Initial gradient flow verification with proper device handling
+        print("\n🔬 Initial Gradient Flow Verification (with Vector Focus)")
+
         gradient_ok = verify_gradient_flow(self.model, env, self.device)
 
         if gradient_ok:
             print("   ✅ Gradient flow verified - training can proceed")
+            print("   ✅ Vector components confirmed flowing")
         else:
             print("   ❌ Gradient flow issues detected!")
+            print(
+                "   🚨 Vector components may be blocked - strategic learning impaired!"
+            )
             print("   🛑 Consider stopping training to fix architecture")
 
     def _on_step(self) -> bool:
