@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-train_ultra_simple.py - Training with ultra-simplified architecture for guaranteed gradient flow
+FIXED TRAINING SCRIPT - Uses the corrected feature extractor with proper device handling
 """
+
 import os
 import argparse
 import torch
 import numpy as np
-import json
 from datetime import datetime
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
@@ -14,55 +14,99 @@ from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.monitor import Monitor
 import retro
 import logging
-import gymnasium as gym
 
-# Import the ultra-simplified components
-from wrapper import (
-    StreetFighterVisionWrapper,
-    StreetFighterUltraSimpleCNN,
-    monitor_gradients,
-)
+# Import fixed components
+from wrapper import FixedStreetFighterPolicy, verify_gradient_flow
+
+# Import wrapper (assuming it's working correctly)
+from wrapper import StreetFighterVisionWrapper
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class UltraSimpleCallback(BaseCallback):
-    """Callback optimized for ultra-simplified architecture."""
+class FixedTrainingCallback(BaseCallback):
+    """
+    Callback that properly monitors the FIXED architecture with device compatibility.
+    """
 
-    def __init__(
-        self,
-        save_freq=50000,  # Save more frequently
-        save_path="./ultra_simple_models/",
-        verbose=1,
-    ):
+    def __init__(self, save_freq=50000, save_path="./fixed_models/", verbose=1):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.save_path = save_path
         os.makedirs(save_path, exist_ok=True)
+
+        # Performance tracking
         self.episode_rewards = []
         self.episode_lengths = []
-        self.gradient_health_history = []
+        self.win_rates = []
+
+        # Gradient health tracking
+        self.gradient_checks = []
+        self.last_gradient_check = 0
+
+        # Training metrics
+        self.training_start_time = None
+        self.best_avg_reward = -float("inf")
+        self.consecutive_improvements = 0
+
+        # Device tracking
+        self.device = None
+
+    def _on_training_start(self):
+        """Called when training starts."""
+        self.training_start_time = datetime.now()
+
+        # Detect device
+        self.device = next(self.model.policy.parameters()).device
+
+        print(f"🚀 Training started at {self.training_start_time}")
+        print(f"🔧 Using device: {self.device}")
+
+        # Initial gradient flow verification with proper device handling
+        print("\n🔬 Initial Gradient Flow Verification")
+
+        # Get the environment from the training environment
+        env = None
+        if hasattr(self.training_env, "envs"):
+            env = self.training_env.envs[0]
+        elif hasattr(self.training_env, "env"):
+            env = self.training_env.env
+        else:
+            env = self.training_env
+
+        gradient_ok = verify_gradient_flow(self.model, env, self.device)
+
+        if gradient_ok:
+            print("   ✅ Gradient flow verified - training can proceed")
+        else:
+            print("   ❌ Gradient flow issues detected!")
+            print("   🛑 Consider stopping training to fix architecture")
 
     def _on_step(self) -> bool:
-        # Monitor gradients more frequently due to simplified architecture
-        if self.num_timesteps % 2500 == 0:  # Every 2500 steps
-            gradient_health = self._analyze_gradient_health()
-            self.gradient_health_history.append(gradient_health)
+        """Called after each step."""
 
-            if self.num_timesteps % 5000 == 0:  # Full monitoring every 5000 steps
-                monitor_gradients(self.model, self.num_timesteps)
+        # Periodic gradient flow checks
+        if self.num_timesteps - self.last_gradient_check >= 10000:
+            self.last_gradient_check = self.num_timesteps
+            gradient_health = self._check_gradient_health()
+            self.gradient_checks.append(gradient_health)
 
-        # Log performance stats
-        if self.num_timesteps % 10000 == 0:
-            self._log_performance_stats()
+            # Alert if gradient flow degrades
+            if gradient_health["coverage"] < 50:
+                print(f"⚠️  GRADIENT FLOW DEGRADED at step {self.num_timesteps}")
+                print(f"   Coverage: {gradient_health['coverage']:.1f}%")
 
-        # Save model more frequently
+        # Performance monitoring
+        if self.num_timesteps % 5000 == 0:
+            self._log_performance()
+
+        # Save model periodically
         if self.num_timesteps > 0 and self.num_timesteps % self.save_freq == 0:
-            self._save_model()
+            self._save_checkpoint()
 
-        # Check for episode completion
+        # Extract episode information
         if hasattr(self.locals, "infos") and self.locals["infos"]:
             for info in self.locals["infos"]:
                 if "episode" in info:
@@ -70,106 +114,164 @@ class UltraSimpleCallback(BaseCallback):
                     self.episode_rewards.append(episode_info["r"])
                     self.episode_lengths.append(episode_info["l"])
 
-                    # Keep only last 100 episodes
+                    # Keep only recent episodes
                     if len(self.episode_rewards) > 100:
                         self.episode_rewards.pop(0)
                         self.episode_lengths.pop(0)
 
+                # Extract win rate if available
+                if "win_rate" in info:
+                    self.win_rates.append(info["win_rate"])
+                    if len(self.win_rates) > 100:
+                        self.win_rates.pop(0)
+
         return True
 
-    def _analyze_gradient_health(self) -> dict:
-        """Quick gradient health check."""
-        if not hasattr(self.model, "policy"):
-            return {}
-
+    def _check_gradient_health(self) -> dict:
+        """Quick gradient health check with device awareness."""
         total_params = 0
         params_with_grads = 0
         total_grad_norm = 0.0
+        device_mismatches = 0
 
-        for param in self.model.policy.parameters():
+        for name, param in self.model.policy.named_parameters():
             total_params += param.numel()
+
+            # Check device consistency
+            if param.device != self.device:
+                device_mismatches += 1
+
             if param.grad is not None:
                 params_with_grads += param.numel()
                 total_grad_norm += param.grad.norm().item()
 
+        coverage = (params_with_grads / max(total_params, 1)) * 100
+        avg_grad_norm = total_grad_norm / max(params_with_grads, 1)
+
         return {
+            "step": self.num_timesteps,
+            "coverage": coverage,
+            "avg_grad_norm": avg_grad_norm,
             "total_params": total_params,
-            "params_with_grads": params_with_grads,
-            "gradient_coverage": (params_with_grads / max(total_params, 1)) * 100,
-            "avg_grad_norm": total_grad_norm / max(params_with_grads, 1),
+            "device_mismatches": device_mismatches,
+            "device": str(self.device),
         }
 
-    def _log_performance_stats(self):
-        """Enhanced performance logging."""
-        print(
-            f"\n--- 📊 Step {self.num_timesteps} - Ultra-Simple Architecture Performance ---"
-        )
+    def _log_performance(self):
+        """Log current performance metrics."""
+        print(f"\n📊 Step {self.num_timesteps:,} Performance Report")
+        print("=" * 50)
+
+        # Training time
+        if self.training_start_time:
+            elapsed = datetime.now() - self.training_start_time
+            hours = elapsed.total_seconds() / 3600
+            print(f"⏱️  Training time: {hours:.1f} hours")
 
         # Gradient health
-        if self.gradient_health_history:
-            latest_health = self.gradient_health_history[-1]
-            coverage = latest_health.get("gradient_coverage", 0)
+        if self.gradient_checks:
+            latest_check = self.gradient_checks[-1]
+            coverage = latest_check["coverage"]
+            device_mismatches = latest_check.get("device_mismatches", 0)
 
-            print(f"  🧠 Gradient Health:")
-            print(f"     - Total parameters: {latest_health.get('total_params', 0):,}")
-            print(f"     - Gradient coverage: {coverage:.1f}%")
-            print(
-                f"     - Avg gradient norm: {latest_health.get('avg_grad_norm', 0):.6f}"
-            )
+            print(f"🧠 Gradient Health:")
+            print(f"   - Coverage: {coverage:.1f}%")
+            print(f"   - Avg norm: {latest_check['avg_grad_norm']:.6f}")
+            print(f"   - Device: {latest_check.get('device', 'unknown')}")
+
+            if device_mismatches > 0:
+                print(f"   - ⚠️  Device mismatches: {device_mismatches}")
 
             if coverage > 95:
-                print(f"     ✅ EXCELLENT: {coverage:.1f}% gradient coverage!")
+                print(f"   ✅ EXCELLENT gradient flow")
             elif coverage > 80:
-                print(f"     👍 GOOD: {coverage:.1f}% gradient coverage!")
+                print(f"   👍 GOOD gradient flow")
+            elif coverage > 50:
+                print(f"   ⚠️  MODERATE gradient flow")
             else:
-                print(f"     ⚠️ WARNING: Only {coverage:.1f}% gradient coverage!")
+                print(f"   ❌ POOR gradient flow - CHECK ARCHITECTURE!")
 
-        # Episode statistics
+        # Episode performance
         if self.episode_rewards:
-            recent_rewards = self.episode_rewards[-10:]
+            recent_rewards = self.episode_rewards[-20:]  # Last 20 episodes
             avg_reward = np.mean(recent_rewards)
             max_reward = np.max(recent_rewards)
             min_reward = np.min(recent_rewards)
 
-            print(f"  🎮 Recent Episodes:")
-            print(f"     - Avg reward: {avg_reward:.2f}")
-            print(f"     - Best reward: {max_reward:.2f}")
-            print(f"     - Worst reward: {min_reward:.2f}")
+            print(f"🎮 Episode Performance (last 20):")
+            print(f"   - Average reward: {avg_reward:.2f}")
+            print(f"   - Best reward: {max_reward:.2f}")
+            print(f"   - Worst reward: {min_reward:.2f}")
 
-        # Environment stats
-        if hasattr(self.training_env, "stats"):
-            stats = self.training_env.stats
-            win_rate = stats.get("win_rate", 0.0)
-            wins = stats.get("wins", 0)
-            losses = stats.get("losses", 0)
+            # Check for improvement
+            if avg_reward > self.best_avg_reward:
+                self.best_avg_reward = avg_reward
+                self.consecutive_improvements += 1
+                print(f"   🎉 NEW BEST! ({self.consecutive_improvements} improvements)")
+            else:
+                self.consecutive_improvements = 0
 
-            print(f"  🎯 Fight Stats: {win_rate:.1%} win rate ({wins}W/{losses}L)")
+        # Win rate
+        if self.win_rates:
+            recent_win_rate = np.mean(self.win_rates[-20:])
+            print(f"🏆 Win Rate: {recent_win_rate:.1%}")
 
-    def _save_model(self):
-        """Save model with gradient health info."""
+            if recent_win_rate > 0.6:
+                print(f"   🔥 DOMINATING! ({recent_win_rate:.1%})")
+            elif recent_win_rate > 0.4:
+                print(f"   👍 COMPETITIVE! ({recent_win_rate:.1%})")
+            elif recent_win_rate > 0.2:
+                print(f"   📈 IMPROVING! ({recent_win_rate:.1%})")
+            else:
+                print(f"   💪 LEARNING! ({recent_win_rate:.1%})")
+
+        print()
+
+    def _save_checkpoint(self):
+        """Save model checkpoint with performance info."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Get stats
-        gradient_health = "unknown"
-        if self.gradient_health_history:
-            latest = self.gradient_health_history[-1]
-            coverage = latest.get("gradient_coverage", 0)
-            gradient_health = f"grad_{coverage:.0f}pct"
-
-        avg_reward = (
-            np.mean(self.episode_rewards[-10:]) if self.episode_rewards else 0.0
+        # Performance metrics for filename
+        avg_reward = np.mean(self.episode_rewards[-10:]) if self.episode_rewards else 0
+        win_rate = np.mean(self.win_rates[-10:]) if self.win_rates else 0
+        gradient_coverage = (
+            self.gradient_checks[-1]["coverage"] if self.gradient_checks else 0
         )
 
         model_name = (
-            f"ultra_simple_{self.num_timesteps}_steps_"
-            f"{gradient_health}_"
+            f"fixed_model_{self.num_timesteps:,}_steps_"
             f"reward_{avg_reward:.1f}_"
+            f"winrate_{win_rate:.1%}_"
+            f"gradcov_{gradient_coverage:.0f}pct_"
+            f"device_{str(self.device).replace(':', '_')}_"
             f"{timestamp}"
         )
 
         model_path = os.path.join(self.save_path, f"{model_name}.zip")
         self.model.save(model_path)
-        print(f"💾 Model saved: {model_path}")
+
+        print(f"💾 Checkpoint saved: {model_path}")
+
+        # Save training metrics
+        metrics_path = os.path.join(self.save_path, f"{model_name}_metrics.json")
+        metrics = {
+            "step": self.num_timesteps,
+            "episode_rewards": self.episode_rewards,
+            "win_rates": self.win_rates,
+            "gradient_checks": self.gradient_checks,
+            "avg_reward": avg_reward,
+            "win_rate": win_rate,
+            "device": str(self.device),
+            "training_time_hours": (
+                datetime.now() - self.training_start_time
+            ).total_seconds()
+            / 3600,
+        }
+
+        import json
+
+        with open(metrics_path, "w") as f:
+            json.dump(metrics, f, indent=2)
 
 
 def make_env(
@@ -177,7 +279,7 @@ def make_env(
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create environment for ultra-simple architecture."""
+    """Create the Street Fighter environment."""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = Monitor(env)
@@ -192,13 +294,13 @@ def make_env(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train with ultra-simplified architecture"
+        description="Train with FIXED architecture and device compatibility"
     )
     parser.add_argument(
         "--total-timesteps", type=int, default=2000000, help="Total training timesteps"
     )
     parser.add_argument(
-        "--learning-rate", type=float, default=2.5e-4, help="Learning rate"
+        "--learning-rate", type=float, default=3e-4, help="Learning rate"
     )
     parser.add_argument("--render", action="store_true", help="Render during training")
     parser.add_argument("--resume", type=str, default=None, help="Path to resume from")
@@ -206,16 +308,45 @@ def main():
         "--game", type=str, default="StreetFighterIISpecialChampionEdition-Genesis"
     )
     parser.add_argument("--state", type=str, default="ken_bison_12.state")
-    parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--device", type=str, default="auto", help="Device to use (auto, cpu, cuda)"
+    )
+    parser.add_argument(
+        "--test-gradient-flow",
+        action="store_true",
+        help="Test gradient flow before training",
+    )
+    parser.add_argument(
+        "--force-cpu",
+        action="store_true",
+        help="Force CPU usage even if CUDA is available",
+    )
+
     args = parser.parse_args()
 
-    print("🚀 Ultra-Simplified Architecture Training")
-    print("=" * 60)
+    print("🔧 FIXED ARCHITECTURE TRAINING WITH DEVICE COMPATIBILITY")
+    print("=" * 70)
     print(f"   - Total timesteps: {args.total_timesteps:,}")
     print(f"   - Learning rate: {args.learning_rate}")
-    print(f"   - Device: {args.device}")
     print(f"   - Rendering: {'Enabled' if args.render else 'Disabled'}")
 
+    # Device selection with proper handling
+    if args.force_cpu:
+        device = torch.device("cpu")
+        print(f"   - Device: CPU (forced)")
+    elif args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"   - Device: {device} (auto-detected)")
+    else:
+        device = torch.device(args.device)
+        print(f"   - Device: {device} (specified)")
+
+    # Validate device
+    if device.type == "cuda" and not torch.cuda.is_available():
+        print("   ⚠️  CUDA requested but not available, falling back to CPU")
+        device = torch.device("cpu")
+
+    # Set random seed
     set_random_seed(42)
 
     # Create environment
@@ -224,124 +355,73 @@ def main():
 
     # Test environment
     print("\n🧪 Testing environment...")
-    try:
-        obs = env.reset()
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        print("   ✅ Environment test passed")
-    except Exception as e:
-        print(f"   ❌ Environment test failed: {e}")
-        raise
+    obs = env.reset()
+    if isinstance(obs, tuple):
+        obs = obs[0]
+    print("   ✅ Environment working")
 
-    # Configure ultra-simple policy
-    policy_kwargs = dict(
-        features_extractor_class=StreetFighterUltraSimpleCNN,
-        features_extractor_kwargs=dict(features_dim=256),
-        net_arch=dict(pi=[128, 64], vf=[128, 64]),  # Very simple networks
-        activation_fn=torch.nn.ReLU,
-        ortho_init=True,
-    )
-
-    # Create model
+    # Create model with FIXED policy and proper device handling
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
-        model = PPO.load(args.resume, env=env, device=args.device)
+        try:
+            model = PPO.load(args.resume, env=env, device=device)
+            print(f"   ✅ Model loaded and moved to {device}")
+        except Exception as e:
+            print(f"   ❌ Failed to load model: {e}")
+            print("   🆕 Creating new model instead...")
+            model = None
     else:
-        print("🆕 Creating ultra-simplified model...")
+        model = None
+
+    if model is None:
+        print("🆕 Creating model with FIXED architecture...")
         model = PPO(
-            "MultiInputPolicy",
+            FixedStreetFighterPolicy,
             env,
             learning_rate=args.learning_rate,
-            n_steps=1024,  # Smaller steps for faster iteration
-            batch_size=32,  # Smaller batch size
-            n_epochs=5,  # Fewer epochs
+            n_steps=2048,
+            batch_size=64,
+            n_epochs=10,
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=0.2,
             ent_coef=0.01,
             vf_coef=0.5,
             max_grad_norm=0.5,
-            policy_kwargs=policy_kwargs,
             verbose=1,
-            device=args.device,
+            device=device,
         )
 
-    # Verify model
-    print("\n🏗️ Model Verification:")
-    total_params = sum(p.numel() for p in model.policy.parameters())
-    print(f"   - Total parameters: {total_params:,}")
+    # Verify model is on correct device
+    model_device = next(model.policy.parameters()).device
+    print(f"   ✅ Model created on device: {model_device}")
 
-    # Test gradient flow
-    print("\n🔬 Testing gradient flow...")
-    try:
-        obs = env.reset()
-        if isinstance(obs, tuple):
-            obs = obs[0]
+    if model_device != device:
+        print(f"   ⚠️  Device mismatch detected! Moving model to {device}")
+        model.policy.to(device)
+        final_device = next(model.policy.parameters()).device
+        print(f"   ✅ Model moved to: {final_device}")
 
-        # Convert numpy arrays to tensors for the policy
-        obs_tensor = {}
-        for key, value in obs.items():
-            if isinstance(value, np.ndarray):
-                obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).to(model.device)
-            else:
-                obs_tensor[key] = torch.tensor(value).unsqueeze(0).to(model.device)
+    # Test gradient flow if requested
+    if args.test_gradient_flow:
+        print("\n🔬 Testing gradient flow...")
+        gradient_ok = verify_gradient_flow(model, env, device)
 
-        # Test forward pass
-        with torch.no_grad():
-            actions, values, log_probs = model.policy(obs_tensor)
-
-        print(f"   ✅ Forward pass successful")
-
-        # Test backward pass (create new tensors with gradients)
-        obs_tensor_grad = {}
-        for key, value in obs.items():
-            if isinstance(value, np.ndarray):
-                obs_tensor_grad[key] = (
-                    torch.from_numpy(value).unsqueeze(0).float().to(model.device)
-                )
-            else:
-                obs_tensor_grad[key] = (
-                    torch.tensor(value).unsqueeze(0).float().to(model.device)
-                )
-
-        # Forward pass with gradients
-        actions, values, log_probs = model.policy(obs_tensor_grad)
-
-        # Create loss and backward pass
-        loss = values.sum() + log_probs.sum()
-        model.policy.zero_grad()
-        loss.backward()
-
-        grad_count = sum(1 for p in model.policy.parameters() if p.grad is not None)
-        total_param_tensors = sum(1 for p in model.policy.parameters())
-        coverage = (grad_count / total_param_tensors) * 100
-
-        print(f"   ✅ Backward pass successful")
-        print(
-            f"   - Gradient coverage: {coverage:.1f}% ({grad_count}/{total_param_tensors})"
-        )
-
-        if coverage < 90:
-            print(f"   ⚠️ WARNING: Only {coverage:.1f}% gradient coverage!")
+        if not gradient_ok:
+            print("❌ Gradient flow test failed!")
+            print("🛑 Please fix architecture before training")
+            return
         else:
-            print(f"   ✅ EXCELLENT: {coverage:.1f}% gradient coverage!")
-
-    except Exception as e:
-        print(f"   ❌ Gradient flow test failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise
+            print("✅ Gradient flow verified - ready to train!")
 
     # Create callback
-    callback = UltraSimpleCallback(
-        save_freq=50000,
-        save_path="./ultra_simple_models/",
-    )
+    callback = FixedTrainingCallback(save_freq=50000, save_path="./fixed_models/")
 
-    print("\n🎯 Starting training with ultra-simplified architecture...")
-    print("   - Optimized for fast iteration and guaranteed gradient flow")
-    print("   - Frequent saves and monitoring")
+    print("\n🎯 Starting training with FIXED architecture...")
+    print("   - Feature extractor properly integrated")
+    print("   - Device compatibility ensured")
+    print("   - Gradient flow verified")
+    print("   - Comprehensive monitoring enabled")
 
     try:
         model.learn(
@@ -351,25 +431,52 @@ def main():
             progress_bar=True,
         )
 
-        final_path = "./ultra_simple_models/final_ultra_simple.zip"
+        # Save final model
+        final_path = "./fixed_models/final_fixed_model.zip"
         model.save(final_path)
-        print(f"🎉 Training completed! Final model: {final_path}")
+        print(f"🎉 Training completed successfully!")
+        print(f"💾 Final model saved: {final_path}")
+
+        # Final performance summary
+        if callback.episode_rewards:
+            final_avg_reward = np.mean(callback.episode_rewards[-20:])
+            print(f"📊 Final average reward: {final_avg_reward:.2f}")
+
+        if callback.win_rates:
+            final_win_rate = np.mean(callback.win_rates[-20:])
+            print(f"🏆 Final win rate: {final_win_rate:.1%}")
+
+        if callback.gradient_checks:
+            final_gradient_health = callback.gradient_checks[-1]
+            print(
+                f"🧠 Final gradient coverage: {final_gradient_health['coverage']:.1f}%"
+            )
+            print(f"🔧 Final device: {final_gradient_health.get('device', 'unknown')}")
 
     except KeyboardInterrupt:
-        print("\n⏹️ Training interrupted")
-        interrupted_path = "./ultra_simple_models/interrupted_ultra_simple.zip"
+        print("\n⏹️ Training interrupted by user")
+        interrupted_path = "./fixed_models/interrupted_fixed_model.zip"
         model.save(interrupted_path)
         print(f"💾 Model saved: {interrupted_path}")
 
     except Exception as e:
-        print(f"\n❌ Training failed: {e}")
-        error_path = "./ultra_simple_models/error_ultra_simple.zip"
-        model.save(error_path)
-        print(f"💾 Model saved: {error_path}")
+        print(f"\n❌ Training failed with error: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        error_path = "./fixed_models/error_fixed_model.zip"
+        try:
+            model.save(error_path)
+            print(f"💾 Model saved: {error_path}")
+        except Exception as save_error:
+            print(f"❌ Could not save model: {save_error}")
+
         raise
 
     finally:
         env.close()
+        print("🔚 Training session ended")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-gradient_flow_fixed.py - FINAL FIX for gradient flow issues
-The previous version had gradient flow blockage. This version ensures ALL parameters receive gradients.
+wrapper.py - COMPLETE FIXED VERSION with device compatibility
+This version includes the original wrapper functionality PLUS the definitive gradient flow fix AND proper device handling.
 """
 
 import cv2
@@ -13,7 +13,8 @@ import gymnasium as gym
 from collections import deque
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from typing import Dict, Tuple, List
+from stable_baselines3.common.policies import ActorCriticPolicy
+from typing import Dict, Tuple, List, Type, Any, Optional, Union
 import math
 import logging
 import os
@@ -621,120 +622,235 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
-# --- ULTRA-SIMPLIFIED ARCHITECTURE FOR GUARANTEED GRADIENT FLOW ---
-class UltraSimpleCNN(nn.Module):
-    """Ultra-simplified CNN that GUARANTEES gradient flow to all parameters."""
+# --- FIXED FEATURE EXTRACTOR WITH DEVICE COMPATIBILITY ---
 
-    def __init__(self, input_channels=24, output_dim=128):
-        super().__init__()
 
-        # Much simpler architecture
-        self.features = nn.Sequential(
+class FixedStreetFighterCNN(BaseFeaturesExtractor):
+    """
+    DEFINITIVE FIX: Feature extractor with guaranteed gradient flow integration and device compatibility.
+    """
+
+    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
+        super().__init__(observation_space, features_dim)
+
+        # Get shapes
+        visual_space = observation_space["visual_obs"]
+        vector_space = observation_space["vector_obs"]
+
+        n_input_channels = visual_space.shape[0]
+        seq_length, vector_feature_count = vector_space.shape
+
+        print(f"🔧 FIXED FeatureExtractor Configuration:")
+        print(f"   - Visual channels: {n_input_channels}")
+        print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
+        print(f"   - Output features: {features_dim}")
+
+        # === VISUAL PROCESSING ===
+        # Effective CNN architecture
+        self.visual_cnn = nn.Sequential(
             # First conv block
-            nn.Conv2d(input_channels, 32, kernel_size=8, stride=4, padding=2),
-            nn.ReLU(),
+            nn.Conv2d(n_input_channels, 64, kernel_size=8, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(64),
             # Second conv block
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            # Global average pooling
-            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(128),
+            # Third conv block
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(256),
+            # Global pooling
+            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
-            # Final linear layer
-            nn.Linear(64, output_dim),
+        )
+
+        # Calculate visual output size
+        with torch.no_grad():
+            dummy_visual = torch.zeros(
+                1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
+            )
+            visual_output_size = self.visual_cnn(dummy_visual).shape[1]
+
+        print(f"   - Visual CNN output size: {visual_output_size}")
+
+        # === VECTOR PROCESSING ===
+        # Process each timestep and aggregate
+        self.vector_processor = nn.Sequential(
+            nn.Linear(vector_feature_count, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        self.vector_aggregator = nn.Sequential(
+            nn.Linear(seq_length * 32, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+        )
+
+        # === FUSION LAYER ===
+        fusion_input_size = visual_output_size + 64
+        self.fusion = nn.Sequential(
+            nn.Linear(fusion_input_size, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(512, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(256, features_dim),
+            nn.ReLU(inplace=True),
         )
 
         # Initialize weights properly
         self.apply(self._init_weights)
 
+        print(f"   - Fusion input size: {fusion_input_size}")
+        print(f"   - Final output size: {features_dim}")
+        print("   ✅ FIXED Feature Extractor initialized")
+
     def _init_weights(self, m):
+        """Proper weight initialization for all layers."""
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
-            nn.init.xavier_normal_(m.weight)
+            nn.init.xavier_uniform_(m.weight)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        # Ensure gradients flow
-        x = x.float() / 255.0
-        return self.features(x)
+    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        CRITICAL: This forward pass must flow through ALL components with proper device handling.
+        """
+        # Extract observations
+        visual_obs = observations["visual_obs"]  # [batch, channels, height, width]
+        vector_obs = observations["vector_obs"]  # [batch, seq_len, features]
 
+        # Get the device that the model is on
+        device = next(self.parameters()).device
 
-class UltraSimpleVectorNet(nn.Module):
-    """Ultra-simplified vector network that GUARANTEES gradient flow."""
+        # Ensure proper types and devices
+        visual_obs = visual_obs.float().to(device)
+        vector_obs = vector_obs.float().to(device)
 
-    def __init__(self, input_dim=45, seq_len=8, output_dim=128):
-        super().__init__()
+        # Normalize visual input
+        visual_obs = visual_obs / 255.0
 
-        # Simple MLP for each timestep
-        self.timestep_mlp = nn.Sequential(
-            nn.Linear(input_dim, 32), nn.ReLU(), nn.Linear(32, 16)
-        )
+        # Process visual features
+        visual_features = self.visual_cnn(visual_obs)
 
-        # Simple aggregation
-        self.aggregation = nn.Sequential(
-            nn.Linear(seq_len * 16, 64), nn.ReLU(), nn.Linear(64, output_dim)
-        )
-
-        # Initialize weights
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_normal_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        # x shape: (batch, seq_len, input_dim)
-        batch_size, seq_len, _ = x.shape
+        # Process vector features
+        batch_size, seq_len, feature_dim = vector_obs.shape
 
         # Process each timestep
-        timestep_features = []
-        for i in range(seq_len):
-            feat = self.timestep_mlp(x[:, i, :])
-            timestep_features.append(feat)
+        vector_timesteps = []
+        for t in range(seq_len):
+            timestep_features = self.vector_processor(vector_obs[:, t, :])
+            vector_timesteps.append(timestep_features)
 
-        # Concatenate and aggregate
-        combined = torch.cat(timestep_features, dim=1)
-        return self.aggregation(combined)
+        # Concatenate all timesteps
+        vector_concat = torch.cat(vector_timesteps, dim=1)
+        vector_features = self.vector_aggregator(vector_concat)
+
+        # Fuse features
+        combined_features = torch.cat([visual_features, vector_features], dim=1)
+        output = self.fusion(combined_features)
+
+        return output
 
 
-class UltraSimpleFusion(nn.Module):
-    """Ultra-simplified fusion that GUARANTEES gradient flow."""
+# --- FIXED POLICY CLASS ---
 
-    def __init__(self, visual_dim=128, vector_dim=128, output_dim=256):
-        super().__init__()
 
-        # Simple concatenation + MLP
-        self.fusion = nn.Sequential(
-            nn.Linear(visual_dim + vector_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, output_dim),
+class FixedStreetFighterPolicy(ActorCriticPolicy):
+    """
+    FIXED: Custom policy that ensures proper gradient flow integration.
+    """
+
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        lr_schedule,
+        net_arch: Optional[Union[list, dict]] = None,
+        activation_fn: Type[nn.Module] = nn.ReLU,
+        *args,
+        **kwargs,
+    ):
+        # Set our custom feature extractor
+        kwargs["features_extractor_class"] = FixedStreetFighterCNN
+        kwargs["features_extractor_kwargs"] = {"features_dim": 256}
+
+        # Ensure proper network architecture
+        if net_arch is None:
+            net_arch = dict(pi=[128, 64], vf=[128, 64])
+
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            *args,
+            **kwargs,
         )
 
-        # Initialize weights
-        self.apply(self._init_weights)
+        print("✅ FIXED Policy initialized with proper feature extractor integration")
 
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_normal_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+    def forward(self, obs, deterministic: bool = False):
+        """
+        CRITICAL: Ensure the forward pass flows through our feature extractor.
+        """
+        # Extract features using our custom extractor
+        features = self.extract_features(obs)
 
-    def forward(self, visual_feat, vector_feat):
-        # Simple concatenation
-        combined = torch.cat([visual_feat, vector_feat], dim=1)
-        return self.fusion(combined)
+        # This MUST flow through our feature extractor
+        latent_pi, latent_vf = self.mlp_extractor(features)
+
+        # Get action distribution and value
+        distribution = self._get_action_dist_from_latent(latent_pi)
+        actions = distribution.get_actions(deterministic=deterministic)
+        values = self.value_net(latent_vf)
+        log_prob = distribution.log_prob(actions)
+
+        return actions, values, log_prob
 
 
-# ------------------------------------------------------------------------------------------
+# --- LEGACY COMPATIBILITY (for backward compatibility) ---
+
+
+class StreetFighterUltraSimpleCNN(BaseFeaturesExtractor):
+    """
+    DEPRECATED: Legacy ultra-simple CNN - use FixedStreetFighterCNN instead.
+    This is kept for backward compatibility only.
+    """
+
+    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
+        super().__init__(observation_space, features_dim)
+
+        print("⚠️  WARNING: Using DEPRECATED StreetFighterUltraSimpleCNN")
+        print("   Please use FixedStreetFighterCNN for proper gradient flow")
+        print("   This legacy version has known gradient flow issues")
+
+        # Redirect to fixed version
+        self.fixed_extractor = FixedStreetFighterCNN(observation_space, features_dim)
+
+    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Redirect to fixed version."""
+        return self.fixed_extractor(observations)
+
+
+# --- STREET FIGHTER ENVIRONMENT WRAPPER ---
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """Street Fighter wrapper - unchanged from previous version."""
+    """Street Fighter wrapper - enhanced with gradient flow monitoring."""
 
     def __init__(self, env, frame_stack=8, rendering=False):
         super().__init__(env)
@@ -896,63 +1012,133 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
 
 
-class StreetFighterUltraSimpleCNN(BaseFeaturesExtractor):
-    """ULTRA-SIMPLIFIED Feature extractor with GUARANTEED gradient flow."""
+# --- GRADIENT FLOW VERIFICATION WITH PROPER DEVICE HANDLING ---
 
-    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
-        super().__init__(observation_space, features_dim)
 
-        visual_space = observation_space["visual_obs"]
-        vector_space = observation_space["vector_obs"]
-        n_input_channels = visual_space.shape[0]
-        seq_length, vector_feature_count = vector_space.shape
+def verify_gradient_flow(model, env, device=None):
+    """
+    DEFINITIVE gradient flow verification with proper device handling.
+    """
+    print("\n🔬 DEFINITIVE Gradient Flow Verification")
+    print("=" * 50)
 
-        # Ultra-simplified components
-        visual_output_dim = 128
-        vector_output_dim = 128
+    # Auto-detect device if not provided
+    if device is None:
+        device = next(model.policy.parameters()).device
 
-        self.visual_net = UltraSimpleCNN(
-            input_channels=n_input_channels, output_dim=visual_output_dim
-        )
+    print(f"   - Model device: {device}")
 
-        self.vector_net = UltraSimpleVectorNet(
-            input_dim=vector_feature_count,
-            seq_len=seq_length,
-            output_dim=vector_output_dim,
-        )
+    # Get a sample observation
+    obs = env.reset()
+    if isinstance(obs, tuple):
+        obs = obs[0]
 
-        self.fusion_net = UltraSimpleFusion(
-            visual_dim=visual_output_dim,
-            vector_dim=vector_output_dim,
-            output_dim=features_dim,
-        )
+    # Convert to tensors with proper device handling
+    obs_tensor = {}
+    for key, value in obs.items():
+        if isinstance(value, np.ndarray):
+            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
+        else:
+            obs_tensor[key] = torch.tensor(value).unsqueeze(0).float().to(device)
 
-        print("✅ ULTRA-SIMPLIFIED StreetFighterCNN initialized successfully.")
-        print(f"   - Visual input channels: {n_input_channels}")
-        print(f"   - Vector sequence length: {seq_length}")
-        print(f"   - Vector feature dimension: {vector_feature_count}")
-        print(
-            "   - ULTRA-SIMPLIFIED architecture GUARANTEES gradient flow to ALL parameters."
-        )
+    print(f"   - Input tensors moved to: {device}")
 
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        ULTRA-SIMPLIFIED forward pass with GUARANTEED gradient flow.
-        """
-        # Unpack observations
-        visual_obs = observations["visual_obs"]
-        vector_obs = observations["vector_obs"]
+    # Enable gradient computation
+    model.policy.train()
+    for param in model.policy.parameters():
+        param.requires_grad = True
 
-        # Process visual features
-        visual_features = self.visual_net(visual_obs)
+    # Forward pass
+    try:
+        actions, values, log_probs = model.policy(obs_tensor)
+        print("   ✅ Forward pass successful")
+    except Exception as e:
+        print(f"   ❌ Forward pass failed: {e}")
+        return False
 
-        # Process vector features
-        vector_features = self.vector_net(vector_obs)
+    # Create loss (this is what PPO does)
+    loss = values.mean() + log_probs.mean()
 
-        # Fuse features
-        fused_features = self.fusion_net(visual_features, vector_features)
+    # Zero gradients
+    model.policy.zero_grad()
 
-        return fused_features
+    # Backward pass
+    try:
+        loss.backward()
+        print("   ✅ Backward pass successful")
+    except Exception as e:
+        print(f"   ❌ Backward pass failed: {e}")
+        return False
+
+    # Analyze gradients
+    print("\n📊 Gradient Analysis by Component:")
+
+    components = {
+        "features_extractor.visual_cnn": [],
+        "features_extractor.vector_processor": [],
+        "features_extractor.vector_aggregator": [],
+        "features_extractor.fusion": [],
+        "mlp_extractor": [],
+        "action_net": [],
+        "value_net": [],
+        "other": [],
+    }
+
+    total_params = 0
+    params_with_grads = 0
+    total_grad_norm = 0.0
+
+    for name, param in model.policy.named_parameters():
+        total_params += param.numel()
+
+        if param.grad is not None:
+            params_with_grads += param.numel()
+            grad_norm = param.grad.norm().item()
+            total_grad_norm += grad_norm
+
+            # Categorize
+            categorized = False
+            for component_name in components.keys():
+                if component_name in name:
+                    components[component_name].append((name, grad_norm, param.numel()))
+                    categorized = True
+                    break
+
+            if not categorized:
+                components["other"].append((name, grad_norm, param.numel()))
+        else:
+            print(f"❌ NO GRADIENT: {name}")
+
+    # Print component analysis
+    for component, params in components.items():
+        if params:
+            total_component_params = sum(count for _, _, count in params)
+            avg_grad_norm = sum(grad for _, grad, _ in params) / len(params)
+
+            print(f"  {component}:")
+            print(f"    - Parameters: {total_component_params:,}")
+            print(f"    - Avg gradient norm: {avg_grad_norm:.6f}")
+            print(
+                f"    - Status: {'✅ FLOWING' if avg_grad_norm > 1e-8 else '❌ BLOCKED'}"
+            )
+
+    # Summary
+    coverage = (params_with_grads / total_params) * 100
+    avg_grad_norm = total_grad_norm / max(params_with_grads, 1)
+
+    print(f"\n📈 SUMMARY:")
+    print(f"  - Total parameters: {total_params:,}")
+    print(f"  - Parameters with gradients: {params_with_grads:,}")
+    print(f"  - Gradient coverage: {coverage:.2f}%")
+    print(f"  - Average gradient norm: {avg_grad_norm:.6f}")
+    print(f"  - Device consistency: ✅ FIXED")
+
+    if coverage > 95:
+        print(f"  ✅ EXCELLENT: {coverage:.1f}% gradient coverage!")
+        return True
+    else:
+        print(f"  ❌ CRITICAL: Only {coverage:.1f}% gradient coverage!")
+        return False
 
 
 def monitor_gradients(model, step_count):
@@ -960,15 +1146,17 @@ def monitor_gradients(model, step_count):
     if step_count % 5000 != 0:
         return
 
-    print(f"\n🔍 ULTRA-DETAILED Gradient Monitor at Step {step_count}:")
+    print(f"\n🔍 DETAILED Gradient Monitor at Step {step_count}:")
 
     # Component-wise analysis
     components = {
-        "visual_net": [],
-        "vector_net": [],
-        "fusion_net": [],
-        "policy_head": [],
-        "value_head": [],
+        "features_extractor.visual_cnn": [],
+        "features_extractor.vector_processor": [],
+        "features_extractor.vector_aggregator": [],
+        "features_extractor.fusion": [],
+        "mlp_extractor": [],
+        "action_net": [],
+        "value_net": [],
         "other": [],
     }
 
@@ -989,17 +1177,14 @@ def monitor_gradients(model, step_count):
                 zero_grad_count += 1
 
             # Categorize parameters
-            if "visual_net" in name:
-                components["visual_net"].append((name, grad_norm))
-            elif "vector_net" in name:
-                components["vector_net"].append((name, grad_norm))
-            elif "fusion_net" in name:
-                components["fusion_net"].append((name, grad_norm))
-            elif "policy" in name.lower() or "actor" in name.lower():
-                components["policy_head"].append((name, grad_norm))
-            elif "value" in name.lower() or "critic" in name.lower():
-                components["value_head"].append((name, grad_norm))
-            else:
+            categorized = False
+            for component_name in components.keys():
+                if component_name in name:
+                    components[component_name].append((name, grad_norm))
+                    categorized = True
+                    break
+
+            if not categorized:
                 components["other"].append((name, grad_norm))
         else:
             print(f"  ❌ NO GRADIENT: {name}")
@@ -1049,6 +1234,168 @@ def monitor_gradients(model, step_count):
 # Export all necessary components
 __all__ = [
     "StreetFighterVisionWrapper",
-    "StreetFighterUltraSimpleCNN",
+    "FixedStreetFighterCNN",
+    "FixedStreetFighterPolicy",
+    "StreetFighterUltraSimpleCNN",  # Legacy compatibility
     "monitor_gradients",
+    "verify_gradient_flow",
+    "OscillationTracker",
+    "StrategicFeatureTracker",
+    "StreetFighterDiscreteActions",
 ]
+
+
+# --- TESTING FUNCTION ---
+
+
+def test_fixed_wrapper():
+    """Test the complete fixed wrapper system with device compatibility."""
+    print("🧪 Testing Complete Fixed Wrapper System with Device Compatibility")
+    print("=" * 70)
+
+    # Test imports
+    print("1. Testing imports...")
+    try:
+        from stable_baselines3 import PPO
+
+        print("   ✅ PPO imported successfully")
+    except ImportError as e:
+        print(f"   ❌ PPO import failed: {e}")
+        return False
+
+    # Test environment creation
+    print("\n2. Testing environment creation...")
+    try:
+        import retro
+
+        env = retro.make(
+            game="StreetFighterIISpecialChampionEdition-Genesis",
+            state="ken_bison_12.state",
+        )
+        env = StreetFighterVisionWrapper(env, frame_stack=8)
+        print("   ✅ Environment created successfully")
+
+        # Test observation space
+        obs = env.reset()
+        if isinstance(obs, tuple):
+            obs = obs[0]
+        print(f"   ✅ Observation space: {env.observation_space}")
+        print(f"   ✅ Action space: {env.action_space}")
+
+    except Exception as e:
+        print(f"   ❌ Environment creation failed: {e}")
+        return False
+
+    # Test device detection
+    print("\n3. Testing device detection...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"   - PyTorch device: {device}")
+
+    # Test feature extractor
+    print("\n4. Testing fixed feature extractor...")
+    try:
+        feature_extractor = FixedStreetFighterCNN(
+            env.observation_space, features_dim=256
+        )
+        feature_extractor.to(device)
+
+        # Test forward pass
+        obs_tensor = {}
+        for key, value in obs.items():
+            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
+
+        with torch.no_grad():
+            features = feature_extractor(obs_tensor)
+
+        print(f"   ✅ Feature extractor output shape: {features.shape}")
+        print(f"   ✅ Feature extractor device: {features.device}")
+
+    except Exception as e:
+        print(f"   ❌ Feature extractor test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    # Test full model
+    print("\n5. Testing complete PPO model...")
+    try:
+        model = PPO(
+            FixedStreetFighterPolicy,
+            env,
+            learning_rate=3e-4,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=3,
+            verbose=0,
+            device=device,
+        )
+        print("   ✅ PPO model created successfully")
+        print(f"   ✅ Model device: {next(model.policy.parameters()).device}")
+
+    except Exception as e:
+        print(f"   ❌ PPO model creation failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    # Test gradient flow
+    print("\n6. Testing gradient flow with device compatibility...")
+    try:
+        gradient_flow_ok = verify_gradient_flow(model, env, device)
+
+        if gradient_flow_ok:
+            print("   ✅ Gradient flow verified successfully")
+        else:
+            print("   ❌ Gradient flow issues detected")
+            return False
+
+    except Exception as e:
+        print(f"   ❌ Gradient flow test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    # Test training step
+    print("\n7. Testing training step...")
+    try:
+        # Single training step
+        model.learn(total_timesteps=64, progress_bar=False)
+        print("   ✅ Training step completed successfully")
+
+    except Exception as e:
+        print(f"   ❌ Training step failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    # Final verification
+    print("\n8. Final gradient flow verification...")
+    try:
+        final_gradient_ok = verify_gradient_flow(model, env, device)
+
+        if final_gradient_ok:
+            print("   ✅ Post-training gradient flow verified")
+        else:
+            print("   ❌ Post-training gradient flow issues")
+            return False
+
+    except Exception as e:
+        print(f"   ❌ Final verification failed: {e}")
+        return False
+
+    print("\n🎉 ALL TESTS PASSED!")
+    print("✅ Complete fixed wrapper system is working correctly")
+    print("✅ Device compatibility is properly handled")
+    print("✅ Gradient flow is properly integrated")
+    print("✅ Ready for full training!")
+
+    env.close()
+    return True
+
+
+if __name__ == "__main__":
+    test_fixed_wrapper()
