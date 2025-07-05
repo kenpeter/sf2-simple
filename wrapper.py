@@ -9,6 +9,8 @@ FIXES APPLIED:
 5. Fixed attention weight initialization and gradient propagation
 6. Enhanced oscillation detection sensitivity
 7. **FIXED TypeError by patching retro.make with user-specified state file**
+8. **FIXED WIN RATE CALCULATION - Added comprehensive performance metrics**
+9. **FIXED MISSING METHODS - Added all required wrapper methods**
 """
 
 import cv2
@@ -1371,7 +1373,7 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """FIXED Street Fighter wrapper with proper frequency calculation"""
+    """FIXED Street Fighter wrapper with proper frequency calculation and WIN RATE"""
 
     def __init__(
         self,
@@ -1394,7 +1396,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.max_episode_steps = max_episode_steps
         self.episode_steps = 0
         self.reset_round = reset_round
-        self.rendering = rendering  # FIXED: Store rendering flag
+        self.rendering = rendering
         self.full_hp = 176
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
@@ -1514,7 +1516,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
         observation, reward, done, truncated, info = self.env.step(multibinary_action)
 
-        # FIXED: Handle rendering if enabled
+        # Handle rendering if enabled
         if self.rendering and hasattr(self.env, "render"):
             try:
                 self.env.render()
@@ -1573,7 +1575,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
     def _calculate_enhanced_reward_with_oscillation(
         self, curr_player_health, curr_opponent_health, score, action
     ):
-        """Enhanced reward calculation with oscillation bonuses"""
+        """Enhanced reward calculation with oscillation bonuses and WIN/LOSS logging"""
         reward = 0.0
         done = False
 
@@ -1584,8 +1586,16 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 health_bonus = (curr_player_health / self.full_hp) * 50
                 self.wins += 1
                 reward += 100 + health_bonus
+                # DEBUG: Print win information
+                print(
+                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
             else:
                 self.losses += 1
+                # DEBUG: Print loss information
+                print(
+                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
             if self.reset_round:
                 done = True
 
@@ -1594,7 +1604,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         damage_received = max(0, self.prev_player_health - curr_player_health)
         reward += damage_dealt - damage_received
 
-        # FIXED: Oscillation-specific rewards
+        # Oscillation-specific rewards
         if hasattr(self.strategic_tracker, "oscillation_tracker"):
             osc_tracker = self.strategic_tracker.oscillation_tracker
             rolling_freq = osc_tracker.get_rolling_window_frequency()
@@ -1628,14 +1638,16 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return reward, done
 
     def _update_enhanced_stats(self):
-        """FIXED: Update stats with win rate calculation"""
-        # Calculate win rate
+        """FIXED: Update stats with win rate calculation AND proper rolling window frequency calculation"""
+
+        # Calculate win rate and performance metrics
         total_games = self.wins + self.losses
         win_rate = self.wins / total_games if total_games > 0 else 0.0
 
-        # Calculate other performance metrics
+        # Calculate average damage per round
         avg_damage_per_round = self.total_damage_dealt / max(1, self.total_rounds)
 
+        # Calculate defensive efficiency (damage dealt vs damage received)
         defensive_efficiency = 0.0
         if self.total_damage_received > 0:
             defensive_efficiency = self.total_damage_dealt / (
@@ -1644,30 +1656,86 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         elif self.total_damage_dealt > 0:
             defensive_efficiency = 1.0
 
-        # Get combo stats
+        # Calculate damage ratio
+        damage_ratio = self.total_damage_dealt / max(1, self.total_damage_received)
+
+        # Calculate rounds per game
+        rounds_per_game = self.total_rounds / max(1, total_games)
+
+        # Get combo stats from strategic tracker
         combo_stats = self.strategic_tracker.get_combo_stats()
 
-        # Update stats dictionary with win rate
+        # Update all performance stats in the stats dictionary
         self.stats.update(
             {
+                # Core performance metrics
                 "wins": self.wins,
                 "losses": self.losses,
                 "total_rounds": self.total_rounds,
-                "win_rate": win_rate,  # ✅ NOW INCLUDED
+                "win_rate": win_rate,  # ✅ NOW INCLUDED!
+                "total_games": total_games,
+                "rounds_per_game": rounds_per_game,
+                # Damage and combat metrics
                 "avg_damage_per_round": avg_damage_per_round,
+                "total_damage_dealt": self.total_damage_dealt,
+                "total_damage_received": self.total_damage_received,
+                "damage_ratio": damage_ratio,
                 "defensive_efficiency": defensive_efficiency,
+                # Combo metrics
                 "total_combos": combo_stats.get("current_combo", 0),
                 "max_combo": combo_stats.get("max_combo_this_round", 0),
+                "recent_hits": combo_stats.get("recent_hits", 0),
+                # Keep existing technical stats
+                "predictions_made": self.stats.get("predictions_made", 0),
+                "cross_attention_ready": self.stats.get("cross_attention_ready", False),
+                "visual_attention_weight": self.stats.get(
+                    "visual_attention_weight", 0.0
+                ),
+                "strategy_attention_weight": self.stats.get(
+                    "strategy_attention_weight", 0.0
+                ),
+                "oscillation_attention_weight": self.stats.get(
+                    "oscillation_attention_weight", 0.0
+                ),
+                "button_attention_weight": self.stats.get(
+                    "button_attention_weight", 0.0
+                ),
             }
         )
 
-    def get_debug_info(self):
-        """Get debug information for validation"""
+        # Update oscillation stats if available (keep all existing functionality)
         if hasattr(self.strategic_tracker, "oscillation_tracker"):
-            return self.strategic_tracker.oscillation_tracker.get_debug_info()
-        return {}
+            oscillation_stats = self.strategic_tracker.oscillation_tracker.get_stats()
+
+            # Use rolling window frequency instead of total time calculation
+            rolling_freq = (
+                self.strategic_tracker.oscillation_tracker.get_rolling_window_frequency()
+            )
+
+            # Update oscillation-specific stats
+            self.stats.update(
+                {
+                    "player_oscillation_frequency": rolling_freq,
+                    "space_control_score": oscillation_stats.get(
+                        "space_control_score", 0.0
+                    ),
+                    "neutral_game_duration": oscillation_stats.get(
+                        "neutral_game_duration", 0
+                    ),
+                    "whiff_bait_attempts": oscillation_stats.get(
+                        "whiff_bait_attempts", 0
+                    ),
+                    "advantage_transitions": oscillation_stats.get(
+                        "advantage_transitions", 0
+                    ),
+                    "oscillation_amplitude": oscillation_stats.get(
+                        "player_oscillation_amplitude", 0.0
+                    ),
+                }
+            )
 
     def _extract_enhanced_state(self, info):
+        """Extract state information from environment info"""
         return (
             info.get("agent_hp", self.full_hp),
             info.get("enemy_hp", self.full_hp),
@@ -1698,6 +1766,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         opponent_victories,
         button_features,
     ):
+        """Process cross-attention vision pipeline"""
         try:
             strategic_features = self.strategic_tracker.update(
                 player_health,
@@ -1755,6 +1824,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return None
 
     def _get_cross_attention_processed_output(self):
+        """Get processed output from cross-attention transformer"""
         try:
             if (
                 not self.vision_ready
@@ -1821,17 +1891,20 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return None
 
     def _preprocess_frame(self, frame):
+        """Preprocess frame to target size"""
         if frame is None:
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
         return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
 
     def _get_stacked_observation(self):
+        """Get stacked observation from frame buffer"""
         if len(self.frame_buffer) == 0:
             return np.zeros(self.observation_space.shape, dtype=np.uint8)
         stacked = np.concatenate(list(self.frame_buffer), axis=2)
         return stacked.transpose(2, 0, 1)
 
     def inject_feature_extractor(self, feature_extractor):
+        """Inject feature extractor and initialize cross-attention components"""
         if not self.enable_vision_transformer:
             return
         try:
@@ -1862,6 +1935,56 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             )
             self.vision_ready = False
 
+    def get_debug_info(self):
+        """Get debug information for validation"""
+        if hasattr(self.strategic_tracker, "oscillation_tracker"):
+            return self.strategic_tracker.oscillation_tracker.get_debug_info()
+        return {}
+
+    def get_detailed_stats(self):
+        """Get detailed statistics for analysis and debugging"""
+        return {
+            **self.stats,
+            "episode_steps": self.episode_steps,
+            "max_episode_steps": self.max_episode_steps,
+            "vision_ready": self.vision_ready,
+            "frame_stack": self.frame_stack,
+            # Additional calculated metrics
+            "win_percentage": self.stats.get("win_rate", 0.0) * 100,
+            "games_played": self.stats.get("total_games", 0),
+            "average_episode_length": self.episode_steps
+            / max(1, self.stats.get("total_games", 1)),
+            "damage_per_game": self.stats.get("total_damage_dealt", 0)
+            / max(1, self.stats.get("total_games", 1)),
+            "survivability": 1.0
+            - (
+                self.stats.get("total_damage_received", 0)
+                / max(1, self.stats.get("total_rounds", 1) * self.full_hp)
+            ),
+        }
+
+    def reset_performance_stats(self):
+        """Reset performance statistics (useful for evaluation phases)"""
+        self.wins = 0
+        self.losses = 0
+        self.total_rounds = 0
+        self.total_damage_dealt = 0
+        self.total_damage_received = 0
+
+        # Reset combo stats
+        if hasattr(self.strategic_tracker, "combo_counter"):
+            self.strategic_tracker.combo_counter = 0
+            self.strategic_tracker.max_combo_this_round = 0
+
+        # Reset oscillation stats
+        if hasattr(self.strategic_tracker, "oscillation_tracker"):
+            self.strategic_tracker.oscillation_tracker.player_direction_changes = 0
+            self.strategic_tracker.oscillation_tracker.opponent_direction_changes = 0
+            self.strategic_tracker.oscillation_tracker.whiff_bait_attempts = 0
+            self.strategic_tracker.oscillation_tracker.advantage_transitions = 0
+
+        print("📊 Performance statistics reset for new evaluation period")
+
 
 class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     """FIXED Enhanced CNN feature extractor with proper gradient flow"""
@@ -1875,12 +1998,12 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         self.wrapper_env = None
         self.final_projection = nn.Linear(256, features_dim)
 
-        # FIXED: Initialize final projection properly
+        # Initialize final projection properly
         nn.init.xavier_uniform_(self.final_projection.weight)
         nn.init.constant_(self.final_projection.bias, 0)
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        """FIXED Forward pass with enhanced feature pipeline"""
+        """Forward pass with enhanced feature pipeline"""
         # Step 1: Visual features from CNN
         visual_features = self.cnn(observations.float() / 255.0)
 
@@ -1972,6 +2095,7 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     def inject_cross_attention_components(
         self, cross_attention_transformer, wrapper_env
     ):
+        """Inject cross-attention components"""
         self.cross_attention_transformer = cross_attention_transformer
         self.wrapper_env = wrapper_env
         print(
@@ -1980,7 +2104,7 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
 
 
 def monitor_gradients(model, step_count):
-    """FIXED: Monitor gradient flow in cross-attention components"""
+    """Monitor gradient flow in cross-attention components"""
     if step_count % 5000 == 0:
         print(f"\n🔍 Gradient Monitor at Step {step_count}:")
 
@@ -2005,7 +2129,7 @@ def monitor_gradients(model, step_count):
         print(f"  Total parameters with gradients: {param_count}")
 
 
-# FIXED: Export all necessary components
+# Export all necessary components
 __all__ = [
     "StreetFighterVisionWrapper",
     "StreetFighterCrossAttentionCNN",
