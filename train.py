@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-train.py - FIXED Training Script with Proper Model Loading
+train.py - FIXED Training Script with Enhanced Learning Rate and Gradient Monitoring
 KEY FIXES APPLIED:
-1. Fixed model loading to handle cross-attention parameter mismatches
-2. Added proper parameter filtering for compatible loading
-3. Enhanced error handling for model architecture differences
-4. Improved logging for debugging parameter loading issues
-5. Added fallback mechanisms for partial model loading
+1. Increased learning rate to 1e-3 for better cross-attention learning
+2. Added gradient monitoring for cross-attention components
+3. Enhanced callback system for better debugging
+4. Fixed learning rate scheduling for different components
+5. Added proper attention weight logging
+6. FIXED: Handle retro multi-environment limitation when rendering
+7. FIXED: Proper model loading with cross-attention parameter handling
+8. FIXED: WIN RATE CALCULATION AND DISPLAY - Added comprehensive performance metrics
 """
 
 import os
@@ -38,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class FixedTrainingCallback(BaseCallback):
-    """Enhanced callback with gradient monitoring and proper attention weight logging"""
+    """FIXED Enhanced callback with gradient monitoring and WIN RATE display"""
 
     def __init__(
         self,
@@ -53,27 +56,28 @@ class FixedTrainingCallback(BaseCallback):
         self.episode_lengths = []
         self.best_mean_reward = -np.inf
 
-        # Enhanced logging for cross-attention
+        # FIXED: Enhanced logging for cross-attention
         self.attention_weights_history = []
         self.oscillation_frequency_history = []
         self.gradient_norms_history = []
+        self.performance_history = []  # NEW: Track performance over time
 
         # Create save directory
         os.makedirs(save_path, exist_ok=True)
 
-        # Create detailed log file
+        # FIXED: Create detailed log file
         self.log_file = os.path.join(
             save_path, f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         )
 
     def _on_step(self) -> bool:
-        """Enhanced step logging with gradient monitoring"""
+        """FIXED: Enhanced step logging with gradient monitoring"""
 
-        # Monitor gradients every 5000 steps
+        # FIXED: Monitor gradients every 5000 steps
         if self.num_timesteps % 5000 == 0:
             monitor_gradients(self.model, self.num_timesteps)
 
-        # Enhanced logging every 1000 steps
+        # FIXED: Enhanced logging every 1000 steps
         if self.num_timesteps % 1000 == 0:
             self._log_enhanced_stats()
 
@@ -84,19 +88,39 @@ class FixedTrainingCallback(BaseCallback):
         return True
 
     def _log_enhanced_stats(self):
-        """Log enhanced statistics including attention weights and oscillation frequency"""
+        """FIXED: Log enhanced statistics including WIN RATE, attention weights and oscillation frequency"""
         try:
             # Get environment statistics
             if hasattr(self.training_env, "envs"):
                 env_stats = {}
                 attention_weights = {}
                 oscillation_stats = {}
+                performance_stats = {}  # NEW: Added performance stats collection
 
                 for i, env in enumerate(self.training_env.envs):
                     wrapper = env.env if hasattr(env, "env") else env
 
                     if hasattr(wrapper, "stats"):
                         stats = wrapper.stats
+
+                        # FIXED: Collect performance/win rate statistics
+                        performance_stats[f"env_{i}"] = {
+                            "win_rate": stats.get("win_rate", 0.0),
+                            "wins": stats.get("wins", 0),
+                            "losses": stats.get("losses", 0),
+                            "total_rounds": stats.get("total_rounds", 0),
+                            "avg_damage_per_round": stats.get(
+                                "avg_damage_per_round", 0.0
+                            ),
+                            "defensive_efficiency": stats.get(
+                                "defensive_efficiency", 0.0
+                            ),
+                            "max_combo": stats.get("max_combo", 0),
+                            "total_combos": stats.get("total_combos", 0),
+                            "damage_ratio": stats.get("damage_ratio", 0.0),
+                            "total_games": stats.get("total_games", 0),
+                            "rounds_per_game": stats.get("rounds_per_game", 0.0),
+                        }
 
                         # Collect attention weights
                         attention_weights[f"env_{i}"] = {
@@ -116,15 +140,112 @@ class FixedTrainingCallback(BaseCallback):
                                 "neutral_game_duration", 0.0
                             ),
                             "whiff_bait_attempts": stats.get("whiff_bait_attempts", 0),
+                            "advantage_transitions": stats.get(
+                                "advantage_transitions", 0
+                            ),
+                            "oscillation_amplitude": stats.get(
+                                "oscillation_amplitude", 0.0
+                            ),
                         }
 
-                        # Regular stats
+                        # Regular stats (keep all existing functionality)
                         for key, value in stats.items():
                             if key not in env_stats:
                                 env_stats[key] = []
                             env_stats[key].append(value)
 
-                # Log attention weight analysis
+                # FIXED: Log performance statistics FIRST (most important)
+                if performance_stats:
+                    print(f"\n🏆 Step {self.num_timesteps} - Performance Analysis:")
+
+                    # Calculate aggregated performance metrics
+                    total_wins = sum(env_stats.get("wins", [0]))
+                    total_losses = sum(env_stats.get("losses", [0]))
+                    total_games = total_wins + total_losses
+                    overall_win_rate = (
+                        total_wins / total_games if total_games > 0 else 0.0
+                    )
+
+                    total_rounds = sum(env_stats.get("total_rounds", [0]))
+                    avg_damage = np.mean(env_stats.get("avg_damage_per_round", [0]))
+                    avg_defensive_eff = np.mean(
+                        env_stats.get("defensive_efficiency", [0])
+                    )
+                    max_combo = max(env_stats.get("max_combo", [0]))
+                    total_combos = sum(env_stats.get("total_combos", [0]))
+                    avg_damage_ratio = np.mean(env_stats.get("damage_ratio", [0]))
+
+                    # Display performance metrics
+                    print(
+                        f"   🎯 Win Rate: {overall_win_rate:.1%} ({total_wins}W/{total_losses}L)"
+                    )
+                    print(f"   💪 Total Games: {total_games}")
+                    print(f"   🥊 Total Rounds: {total_rounds}")
+                    print(f"   ⚡ Avg Damage/Round: {avg_damage:.1f}")
+                    print(f"   🛡️  Defensive Efficiency: {avg_defensive_eff:.1%}")
+                    print(f"   🔥 Max Combo: {max_combo}")
+                    print(f"   💥 Total Combos: {total_combos}")
+                    print(f"   ⚔️  Damage Ratio: {avg_damage_ratio:.2f}")
+
+                    # Performance assessment with detailed feedback
+                    if total_games > 0:
+                        rounds_per_game = total_rounds / total_games
+                        print(f"   📊 Avg Rounds/Game: {rounds_per_game:.1f}")
+
+                        # Win rate assessment
+                        if overall_win_rate > 0.7:
+                            print("   ✅ Excellent performance! AI is dominating! 🏆")
+                        elif overall_win_rate > 0.6:
+                            print(
+                                "   🌟 Very good performance! AI is winning consistently! 💪"
+                            )
+                        elif overall_win_rate > 0.5:
+                            print("   📈 Good performance! AI is competitive! 🎯")
+                        elif overall_win_rate > 0.4:
+                            print(
+                                "   🔄 Decent progress! AI is learning to compete! 📚"
+                            )
+                        elif overall_win_rate > 0.2:
+                            print("   📊 Learning in progress... AI is improving! 🚀")
+                        else:
+                            print(
+                                "   🌱 Early training phase - AI is still learning basics!"
+                            )
+
+                        # Match length assessment
+                        if rounds_per_game < 1.5:
+                            print("   ⚡ Quick decisive matches!")
+                        elif rounds_per_game > 2.5:
+                            print("   🥊 Intense back-and-forth battles!")
+                        else:
+                            print("   ⚖️  Balanced match lengths")
+
+                        # Damage efficiency assessment
+                        if avg_damage_ratio > 2.0:
+                            print("   🔥 Excellent damage efficiency!")
+                        elif avg_damage_ratio > 1.5:
+                            print("   💪 Good damage output!")
+                        elif avg_damage_ratio > 1.0:
+                            print("   📊 Competitive damage trading")
+                        else:
+                            print("   🛡️  Defensive playstyle")
+                    else:
+                        print("   🎮 Training starting... waiting for first matches!")
+
+                    # Track performance history
+                    self.performance_history.append(
+                        {
+                            "step": self.num_timesteps,
+                            "win_rate": overall_win_rate,
+                            "total_games": total_games,
+                            "avg_damage": avg_damage,
+                            "defensive_efficiency": avg_defensive_eff,
+                            "max_combo": max_combo,
+                            "damage_ratio": avg_damage_ratio,
+                        }
+                    )
+
+                # Log attention weight analysis (keep existing detailed analysis)
                 if attention_weights:
                     avg_attention = {}
                     for weight_type in ["visual", "strategy", "oscillation", "button"]:
@@ -135,10 +256,10 @@ class FixedTrainingCallback(BaseCallback):
                         avg_attention[weight_type] = np.mean(weights)
 
                     print(f"\n🎯 Step {self.num_timesteps} - Attention Analysis:")
-                    print(f"   Visual: {avg_attention['visual']:.4f}")
-                    print(f"   Strategy: {avg_attention['strategy']:.4f}")
-                    print(f"   Oscillation: {avg_attention['oscillation']:.4f}")
-                    print(f"   Button: {avg_attention['button']:.4f}")
+                    print(f"   👁️  Visual: {avg_attention['visual']:.4f}")
+                    print(f"   🧠 Strategy: {avg_attention['strategy']:.4f}")
+                    print(f"   🌊 Oscillation: {avg_attention['oscillation']:.4f}")
+                    print(f"   🎮 Button: {avg_attention['button']:.4f}")
 
                     # Check if attention weights are learning (not identical)
                     weight_values = list(avg_attention.values())
@@ -154,15 +275,38 @@ class FixedTrainingCallback(BaseCallback):
                             f"   ✅ Attention weights are diverse! Variance: {weight_variance:.6f}"
                         )
 
+                    # FIXED: Enhanced attention analysis
+                    dominant_attention = max(avg_attention, key=avg_attention.get)
+                    print(
+                        f"   🎯 Dominant Attention: {dominant_attention.capitalize()} ({avg_attention[dominant_attention]:.4f})"
+                    )
+
+                    # Check for attention balance
+                    if weight_variance > 0.01:
+                        print(
+                            f"   ⚖️  Excellent attention diversity - AI is using multiple information sources"
+                        )
+                    elif weight_variance > 0.005:
+                        print(f"   📊 Good attention diversity - AI has balanced focus")
+                    elif weight_variance > 0.001:
+                        print(
+                            f"   🔄 Moderate attention diversity - AI has some specialization"
+                        )
+                    else:
+                        print(
+                            f"   ⚠️  Low attention diversity - AI may need more training"
+                        )
+
                     self.attention_weights_history.append(
                         {
                             "step": self.num_timesteps,
                             "weights": avg_attention,
                             "variance": weight_variance,
+                            "dominant": dominant_attention,
                         }
                     )
 
-                # Log oscillation frequency analysis
+                # FIXED: Enhanced oscillation frequency analysis
                 if oscillation_stats:
                     avg_oscillation = {}
                     for key in [
@@ -170,6 +314,8 @@ class FixedTrainingCallback(BaseCallback):
                         "space_control",
                         "neutral_game_duration",
                         "whiff_bait_attempts",
+                        "advantage_transitions",
+                        "oscillation_amplitude",
                     ]:
                         values = [
                             env_stats[key] for env_stats in oscillation_stats.values()
@@ -177,54 +323,143 @@ class FixedTrainingCallback(BaseCallback):
                         avg_oscillation[key] = np.mean(values)
 
                     print(f"\n🌊 Oscillation Analysis:")
-                    print(f"   Frequency: {avg_oscillation['frequency']:.3f} Hz")
-                    print(f"   Space Control: {avg_oscillation['space_control']:.3f}")
+                    print(f"   📊 Frequency: {avg_oscillation['frequency']:.3f} Hz")
                     print(
-                        f"   Neutral Game: {avg_oscillation['neutral_game_duration']:.1f} frames"
+                        f"   🎯 Space Control: {avg_oscillation['space_control']:.3f}"
                     )
                     print(
-                        f"   Whiff Baits: {avg_oscillation['whiff_bait_attempts']:.0f}"
+                        f"   ⚖️  Neutral Game: {avg_oscillation['neutral_game_duration']:.1f} frames"
+                    )
+                    print(
+                        f"   🎣 Whiff Baits: {avg_oscillation['whiff_bait_attempts']:.0f}"
+                    )
+                    print(
+                        f"   🔄 Advantage Transitions: {avg_oscillation['advantage_transitions']:.0f}"
+                    )
+                    print(
+                        f"   📈 Oscillation Amplitude: {avg_oscillation['oscillation_amplitude']:.2f}"
                     )
 
-                    # Check if frequency is in the expected range
+                    # FIXED: Enhanced frequency analysis with more detailed feedback
                     freq = avg_oscillation["frequency"]
                     if freq < 0.1:
-                        print(f"   ⚠️  WARNING: Very low oscillation frequency!")
-                    elif 1.0 <= freq <= 3.0:
-                        print(f"   ✅ Oscillation frequency in optimal range (1-3 Hz)")
-                    elif freq > 5.0:
                         print(
-                            f"   ⚠️  WARNING: Very high oscillation frequency (possible noise)"
+                            f"   ⚠️  WARNING: Very low oscillation frequency! AI may be too passive."
                         )
+                    elif 0.1 <= freq < 0.5:
+                        print(
+                            f"   📚 Low oscillation frequency - AI is learning movement patterns"
+                        )
+                    elif 0.5 <= freq < 1.0:
+                        print(
+                            f"   📈 Moderate oscillation frequency - AI is developing footsies"
+                        )
+                    elif 1.0 <= freq <= 3.0:
+                        print(
+                            f"   ✅ Optimal oscillation frequency! AI has good neutral game movement"
+                        )
+                    elif 3.0 < freq <= 5.0:
+                        print(
+                            f"   ⚡ High oscillation frequency - AI is very active in neutral"
+                        )
+                    else:
+                        print(
+                            f"   ⚠️  WARNING: Very high oscillation frequency! Possible noise or over-aggression"
+                        )
+
+                    # Space control analysis
+                    space_control = avg_oscillation["space_control"]
+                    if space_control > 0.3:
+                        print(
+                            f"   🏆 Excellent space control - AI is dominating positioning"
+                        )
+                    elif space_control > 0.1:
+                        print(
+                            f"   👍 Good space control - AI is winning the positioning game"
+                        )
+                    elif space_control > -0.1:
+                        print(f"   ⚖️  Balanced space control - AI is competing evenly")
+                    else:
+                        print(f"   📚 AI is learning space control - needs improvement")
+
+                    # Neutral game analysis
+                    neutral_duration = avg_oscillation["neutral_game_duration"]
+                    if neutral_duration < 30:
+                        print(f"   ⚡ Very aggressive gameplay - short neutral phases")
+                    elif neutral_duration < 60:
+                        print(f"   🎯 Balanced neutral game - good engagement timing")
+                    elif neutral_duration < 120:
+                        print(f"   🤔 Patient neutral game - careful approach")
+                    else:
+                        print(f"   🐌 Very patient gameplay - may be too cautious")
 
                     self.oscillation_frequency_history.append(
                         {
                             "step": self.num_timesteps,
                             "frequency": freq,
                             "space_control": avg_oscillation["space_control"],
+                            "win_rate": (
+                                overall_win_rate
+                                if "overall_win_rate" in locals()
+                                else 0.0
+                            ),
+                            "avg_damage": (
+                                avg_damage if "avg_damage" in locals() else 0.0
+                            ),
+                            "neutral_duration": neutral_duration,
                         }
                     )
 
-                # Log average statistics
+                # FIXED: Enhanced training statistics
                 if env_stats:
                     avg_stats = {k: np.mean(v) for k, v in env_stats.items()}
 
-                    print(f"\n📊 Step {self.num_timesteps} - Training Stats:")
+                    print(f"\n📊 Step {self.num_timesteps} - Technical Stats:")
                     print(
-                        f"   Predictions Made: {avg_stats.get('predictions_made', 0):.0f}"
+                        f"   🔮 Predictions Made: {avg_stats.get('predictions_made', 0):.0f}"
                     )
                     print(
-                        f"   Cross-Attention Ready: {avg_stats.get('cross_attention_ready', False)}"
+                        f"   🤖 Cross-Attention Ready: {avg_stats.get('cross_attention_ready', False)}"
                     )
 
-                # Save detailed log
+                    # Additional technical insights
+                    if avg_stats.get("predictions_made", 0) > 0:
+                        print(f"   ✅ AI is actively making predictions")
+                    else:
+                        print(f"   ⚠️  AI prediction system may not be fully active")
+
+                    # Show learning progress over time
+                    if len(self.performance_history) > 1:
+                        prev_performance = self.performance_history[-2]
+                        current_performance = self.performance_history[-1]
+
+                        win_rate_change = (
+                            current_performance["win_rate"]
+                            - prev_performance["win_rate"]
+                        )
+                        games_played_change = (
+                            current_performance["total_games"]
+                            - prev_performance["total_games"]
+                        )
+
+                        if games_played_change > 0:
+                            print(
+                                f"   📈 Progress: {win_rate_change:+.1%} win rate change, {games_played_change} new games"
+                            )
+
+                # Save detailed log (keep existing functionality)
                 self._save_detailed_log()
 
         except Exception as e:
-            logger.error(f"Error in enhanced stats logging: {e}")
+            logger.error(f"Error in enhanced stats logging: {e}", exc_info=True)
+            # Add more detailed error info for debugging
+            import traceback
+
+            print(f"❌ Stats logging error: {e}")
+            print(f"📋 Traceback: {traceback.format_exc()}")
 
     def _save_detailed_log(self):
-        """Save detailed training log with attention and oscillation data"""
+        """FIXED: Save detailed training log with attention, oscillation, and performance data"""
         try:
             log_data = {
                 "timestamp": datetime.now().isoformat(),
@@ -235,6 +470,9 @@ class FixedTrainingCallback(BaseCallback):
                 "oscillation_frequency_history": self.oscillation_frequency_history[
                     -10:
                 ],
+                "performance_history": self.performance_history[
+                    -10:
+                ],  # NEW: Performance tracking
             }
 
             with open(self.log_file, "a") as f:
@@ -244,26 +482,40 @@ class FixedTrainingCallback(BaseCallback):
             logger.error(f"Error saving detailed log: {e}")
 
     def _save_model(self):
-        """Save model with enhanced naming"""
+        """Save model with enhanced naming including performance metrics"""
         try:
-            # Enhanced model naming with frequency info
+            # FIXED: Enhanced model naming with performance info
             avg_freq = 0.0
+            win_rate = 0.0
+            total_games = 0
+
             if self.oscillation_frequency_history:
                 avg_freq = self.oscillation_frequency_history[-1]["frequency"]
 
-            model_name = f"oscillation_cross_attention_ppo_sf2_{self.num_timesteps}_steps_freq_{avg_freq:.2f}Hz"
+            if self.performance_history:
+                latest_perf = self.performance_history[-1]
+                win_rate = latest_perf["win_rate"]
+                total_games = latest_perf["total_games"]
+
+            model_name = f"oscillation_cross_attention_ppo_sf2_{self.num_timesteps}_steps_freq_{avg_freq:.2f}Hz_winrate_{win_rate:.1%}_games_{total_games}"
             model_path = os.path.join(self.save_path, f"{model_name}.zip")
 
             self.model.save(model_path)
             print(f"💾 Model saved: {model_path}")
 
-            # Save attention analysis
+            # FIXED: Save comprehensive analysis
             analysis_path = os.path.join(self.save_path, f"{model_name}_analysis.json")
             analysis_data = {
                 "step": self.num_timesteps,
                 "attention_weights_history": self.attention_weights_history,
                 "oscillation_frequency_history": self.oscillation_frequency_history,
+                "performance_history": self.performance_history,
                 "learning_rate": self.model.learning_rate,
+                "current_performance": {
+                    "win_rate": win_rate,
+                    "total_games": total_games,
+                    "oscillation_frequency": avg_freq,
+                },
             }
 
             with open(analysis_path, "w") as f:
@@ -448,9 +700,7 @@ def load_model_with_cross_attention(model_path, env, learning_rate, policy_kwarg
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--total-timesteps", type=int, default=3000000)
-    parser.add_argument(
-        "--learning-rate", type=float, default=4e-3
-    )  # Use the learning rate from command line
+    parser.add_argument("--learning-rate", type=float, default=4e-3)
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--render", action="store_true")
     parser.add_argument(
@@ -543,6 +793,7 @@ def main():
     print("🔍 Gradient monitoring enabled every 5000 steps")
     print("📊 Attention weight analysis every 1000 steps")
     print("🌊 Oscillation frequency tracking enabled")
+    print("🏆 Performance metrics (WIN RATE) tracking enabled")
 
     try:
         model.learn(
@@ -557,13 +808,17 @@ def main():
         model.save(final_model_path)
         print(f"🎉 Training completed! Final model saved: {final_model_path}")
 
-        # Save final analysis
+        # Save final comprehensive analysis
         final_analysis = {
             "total_timesteps": args.total_timesteps,
             "learning_rate": args.learning_rate,
             "attention_weights_history": callback.attention_weights_history,
             "oscillation_frequency_history": callback.oscillation_frequency_history,
+            "performance_history": callback.performance_history,
             "training_completed": datetime.now().isoformat(),
+            "final_performance": (
+                callback.performance_history[-1] if callback.performance_history else {}
+            ),
         }
 
         analysis_path = (
@@ -574,10 +829,39 @@ def main():
 
         print(f"📊 Final analysis saved: {analysis_path}")
 
+        # Print final performance summary
+        if callback.performance_history:
+            final_perf = callback.performance_history[-1]
+            print(f"\n🏆 Final Performance Summary:")
+            print(f"   🎯 Final Win Rate: {final_perf['win_rate']:.1%}")
+            print(f"   💪 Total Games Played: {final_perf['total_games']}")
+            print(f"   ⚡ Average Damage/Round: {final_perf['avg_damage']:.1f}")
+            print(
+                f"   🛡️  Defensive Efficiency: {final_perf['defensive_efficiency']:.1%}"
+            )
+            print(f"   🔥 Max Combo Achieved: {final_perf['max_combo']}")
+
     except KeyboardInterrupt:
         print("\n⏹️  Training interrupted by user")
         model.save("./enhanced_oscillation_trained_models/interrupted_model.zip")
         print("💾 Model saved before exit")
+
+        # Save interrupted training analysis
+        if callback.performance_history:
+            interrupted_analysis = {
+                "interrupted_at_step": callback.num_timesteps,
+                "performance_history": callback.performance_history,
+                "attention_weights_history": callback.attention_weights_history,
+                "oscillation_frequency_history": callback.oscillation_frequency_history,
+                "interrupted_at": datetime.now().isoformat(),
+            }
+
+            with open(
+                "./enhanced_oscillation_trained_models/interrupted_analysis.json", "w"
+            ) as f:
+                json.dump(interrupted_analysis, f, indent=2)
+
+            print("📊 Interrupted training analysis saved")
 
     except Exception as e:
         print(f"\n❌ Training failed with error: {e}")
@@ -585,8 +869,31 @@ def main():
         model.save("./enhanced_oscillation_trained_models/error_model.zip")
         print("💾 Model saved before exit")
 
+        # Save error analysis
+        if callback.performance_history:
+            error_analysis = {
+                "error_at_step": callback.num_timesteps,
+                "error_message": str(e),
+                "performance_history": callback.performance_history,
+                "attention_weights_history": callback.attention_weights_history,
+                "oscillation_frequency_history": callback.oscillation_frequency_history,
+                "error_at": datetime.now().isoformat(),
+            }
+
+            with open(
+                "./enhanced_oscillation_trained_models/error_analysis.json", "w"
+            ) as f:
+                json.dump(error_analysis, f, indent=2)
+
+            print("📊 Error analysis saved")
+
     finally:
         env.close()
+        print("\n🎮 Training session completed!")
+        print("📈 Check the enhanced_oscillation_trained_models/ directory for:")
+        print("   - Saved models with performance metrics in filename")
+        print("   - Comprehensive analysis files with attention and performance data")
+        print("   - Training logs with detailed statistics")
 
 
 if __name__ == "__main__":

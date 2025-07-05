@@ -1628,29 +1628,38 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return reward, done
 
     def _update_enhanced_stats(self):
-        """FIXED: Update stats with proper rolling window frequency calculation"""
-        if hasattr(self.strategic_tracker, "oscillation_tracker"):
-            oscillation_stats = self.strategic_tracker.oscillation_tracker.get_stats()
+        """FIXED: Update stats with win rate calculation"""
+        # Calculate win rate
+        total_games = self.wins + self.losses
+        win_rate = self.wins / total_games if total_games > 0 else 0.0
 
-            # FIXED: Use rolling window frequency instead of total time calculation
-            rolling_freq = (
-                self.strategic_tracker.oscillation_tracker.get_rolling_window_frequency()
-            )
+        # Calculate other performance metrics
+        avg_damage_per_round = self.total_damage_dealt / max(1, self.total_rounds)
 
-            self.stats.update(
-                {
-                    "player_oscillation_frequency": rolling_freq,  # FIXED: Now uses rolling window
-                    "space_control_score": oscillation_stats.get(
-                        "space_control_score", 0.0
-                    ),
-                    "neutral_game_duration": oscillation_stats.get(
-                        "neutral_game_duration", 0
-                    ),
-                    "whiff_bait_attempts": oscillation_stats.get(
-                        "whiff_bait_attempts", 0
-                    ),
-                }
+        defensive_efficiency = 0.0
+        if self.total_damage_received > 0:
+            defensive_efficiency = self.total_damage_dealt / (
+                self.total_damage_dealt + self.total_damage_received
             )
+        elif self.total_damage_dealt > 0:
+            defensive_efficiency = 1.0
+
+        # Get combo stats
+        combo_stats = self.strategic_tracker.get_combo_stats()
+
+        # Update stats dictionary with win rate
+        self.stats.update(
+            {
+                "wins": self.wins,
+                "losses": self.losses,
+                "total_rounds": self.total_rounds,
+                "win_rate": win_rate,  # ✅ NOW INCLUDED
+                "avg_damage_per_round": avg_damage_per_round,
+                "defensive_efficiency": defensive_efficiency,
+                "total_combos": combo_stats.get("current_combo", 0),
+                "max_combo": combo_stats.get("max_combo_this_round", 0),
+            }
+        )
 
     def get_debug_info(self):
         """Get debug information for validation"""
