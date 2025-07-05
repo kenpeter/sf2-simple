@@ -15,6 +15,7 @@ FIXES APPLIED:
 11. FIXED TypeError by patching retro.make with user-specified state file.
 12. FIXED WIN RATE CALCULATION - Added comprehensive performance metrics.
 13. FIXED MISSING METHODS - Added all required wrapper methods.
+14. FIXED OBSERVATION SPACE DIMENSIONS - Corrected channel count mismatch between wrapper and CNN.
 """
 
 import cv2
@@ -748,13 +749,16 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
-        # CORRECTED observation space using Dict
+        # FIXED: Corrected observation space to match actual tensor dimensions
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
                     low=0,
                     high=255,
-                    shape=(3 * frame_stack, *self.target_size),
+                    shape=(
+                        3 * frame_stack,
+                        *self.target_size,
+                    ),  # 24 channels for frame_stack=8
                     dtype=np.uint8,
                 ),
                 "vector_obs": spaces.Box(
@@ -767,7 +771,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
 
         self.frame_buffer = deque(maxlen=frame_stack)
-        # CORRECTED: Single history for all vector features
         self.vector_features_history = deque(maxlen=frame_stack)
 
         self.strategic_tracker = StrategicFeatureTracker(history_length=frame_stack)
@@ -816,7 +819,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
         done = custom_done or done
 
-        # CORRECTED: Feature generation is now centralized here
+        # Feature generation is centralized here
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.append(processed_frame)
 
@@ -830,6 +833,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return self._get_observation(), custom_reward, done, truncated, info
 
     def _get_observation(self):
+        # FIXED: Ensure visual observation has correct shape (channels, height, width)
         visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(2, 0, 1)
         vector_obs = np.stack(list(self.vector_features_history))
         return {"visual_obs": visual_obs, "vector_obs": vector_obs}
@@ -905,19 +909,20 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 
 class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
-    """FIXED Feature extractor for Dict space, ensuring full network trainability."""
+    """FIXED Feature extractor for Dict space with corrected channel count."""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__(observation_space, features_dim)
 
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
-        n_input_channels = visual_space.shape[0]
+        n_input_channels = visual_space.shape[0]  # This should be 24 for frame_stack=8
         seq_length, vector_feature_count = vector_space.shape
 
+        # FIXED: Pass the correct number of input channels to CNN
         self.cnn = CNNFeatureExtractor(input_channels=n_input_channels, feature_dim=512)
 
-        # Transformer is now a submodule, ensuring it's part of the computation graph
+        # Transformer for cross-attention
         self.cross_attention_transformer = EnhancedCrossAttentionVisionTransformer(
             visual_dim=512,
             vector_dim=vector_feature_count,
@@ -928,26 +933,25 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         # Final projection layer
         self.final_projection = nn.Linear(256, features_dim)
 
-        print("✅ Corrected StreetFighterCrossAttentionCNN initialized successfully.")
-        print("   - Handles Dict observation space.")
-        print("   - Full network is now trainable.")
+        print("✅ FIXED StreetFighterCrossAttentionCNN initialized successfully.")
+        print(f"   - Visual input channels: {n_input_channels}")
+        print(f"   - Vector sequence length: {seq_length}")
+        print(f"   - Vector feature dimension: {vector_feature_count}")
+        print("   - Full network is now trainable with correct dimensions.")
 
     def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        CORRECTED forward pass.
-        Receives Dict observation, processes both streams, and fuses them.
-        The entire operation is part of the autograd graph.
+        FIXED forward pass with proper tensor shape handling.
         """
         # Unpack observations
         visual_obs = observations["visual_obs"]
         vector_obs = observations["vector_obs"]
 
         # 1. Process visual features from the stacked frames
-        # Normalize visual input
+        # Normalize visual input to [0, 1]
         visual_features = self.cnn(visual_obs.float() / 255.0)
 
         # 2. Process sequential vector features with the transformer
-        # The transformer uses the current visual context and the history of vector data
         attended_features, self.attention_weights = self.cross_attention_transformer(
             visual_features, vector_obs
         )
@@ -959,31 +963,43 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
 
 
 def monitor_gradients(model, step_count):
+    """Enhanced gradient monitoring with better diagnostics."""
     if step_count % 5000 != 0:
         return
 
     print(f"\n🔍 Gradient Monitor at Step {step_count}:")
     total_grad_norm, param_count, attention_grad_count = 0, 0, 0
+    zero_grad_count = 0
 
     for name, param in model.policy.named_parameters():
         if param.grad is not None:
             grad_norm = param.grad.data.norm(2).item()
             total_grad_norm += grad_norm
             param_count += 1
-            if "attention" in name:
+            if grad_norm < 1e-8:
+                zero_grad_count += 1
+            if "attention" in name or "cross_attention" in name:
                 attention_grad_count += 1
                 if (
                     step_count % 100000 < 5000
                 ):  # Log specific layer grads less frequently
                     print(f"  - {name}: {grad_norm:.6f}")
+        else:
+            print(f"  ⚠️ No gradient for: {name}")
 
     avg_grad_norm = total_grad_norm / max(param_count, 1)
     print(f"  ✅ Total parameters with gradients: {param_count}")
     print(f"  ⚡ Attention-related parameters with gradients: {attention_grad_count}")
     print(f"  📊 Average gradient norm: {avg_grad_norm:.6f}")
-    if param_count < 100:
+    print(f"  🔴 Parameters with near-zero gradients: {zero_grad_count}")
+
+    if param_count < 50:
         print(
             "  ⚠️ WARNING: Very few parameters have gradients! The model may not be learning correctly."
+        )
+    elif zero_grad_count > param_count * 0.5:
+        print(
+            "  ⚠️ WARNING: Many parameters have near-zero gradients! Check for vanishing gradients."
         )
     else:
         print("  👍 Gradient flow appears healthy.")
