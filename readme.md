@@ -6,13 +6,10 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 python train.py \
-    --resume enhanced_trained_models/cross_attention_ppo_sf2_1500000_steps.zip \
-    --total-timesteps 20000000 \
-    --learning-rate 1e-4 \
+    --resume enhanced_oscillation_trained_models/oscillation_cross_attention_ppo_sf2_5000000_steps.zip \
+    --total-timesteps 3000000 \
+    --learning-rate 1e-3 \
     --render
-    
-
-python train.py --total-timesteps 20000000 --learning-rate 2e-4 --render
 
 
 

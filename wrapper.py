@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-wrapper.py - Enhanced Street Fighter II Wrapper with Oscillation-Based Positioning
-Key improvements:
-1. Oscillation tracking and analysis - the back-and-forth movement in neutral game
-2. Spatial control features for footsies gameplay
-3. Threat bubble and range control analysis
-4. Whiff punishment detection and baiting mechanics
-5. Enhanced neutral game state tracking
+wrapper.py - FIXED Enhanced Street Fighter II Wrapper with Oscillation-Based Positioning
+KEY FIXES APPLIED:
+1. More sensitive oscillation detection (reduced thresholds)
+2. Velocity smoothing for better direction change detection
+3. Enhanced neutral game detection with realistic conditions
+4. Oscillation-specific reward shaping
+5. Improved debugging output and validation
+6. Better space control calculation
 """
 
 import cv2
@@ -49,8 +50,13 @@ SCREEN_HEIGHT = 128
 
 class OscillationTracker:
     """
-    Tracks oscillation patterns in fighting game neutral game
-    Oscillation = the back-and-forth movement players make when probing for openings
+    FIXED Oscillation Tracker with Enhanced Sensitivity
+    Key improvements:
+    1. Reduced movement thresholds for better detection
+    2. Added velocity smoothing to reduce noise
+    3. Better direction change detection
+    4. Enhanced neutral game detection
+    5. Improved space control calculation
     """
 
     def __init__(self, history_length=16):
@@ -61,6 +67,11 @@ class OscillationTracker:
         self.opponent_x_history = deque(maxlen=history_length)
         self.player_velocity_history = deque(maxlen=history_length)
         self.opponent_velocity_history = deque(maxlen=history_length)
+
+        # FIXED: More sensitive detection parameters
+        self.movement_threshold = 0.3  # Reduced from default (was too high)
+        self.direction_change_threshold = 0.1  # Added for better detection
+        self.velocity_smoothing_factor = 0.3  # Added smoothing
 
         # Oscillation pattern detection
         self.player_direction_changes = 0
@@ -95,6 +106,18 @@ class OscillationTracker:
         self.prev_player_velocity = 0.0
         self.prev_opponent_velocity = 0.0
 
+        # FIXED: Enhanced debugging data
+        self.debug_data = {
+            "recent_positions": deque(maxlen=10),
+            "recent_velocities": deque(maxlen=10),
+            "recent_direction_changes": deque(maxlen=10),
+            "detection_sensitivity": {
+                "movement_threshold": self.movement_threshold,
+                "direction_change_threshold": self.direction_change_threshold,
+                "velocity_smoothing_factor": self.velocity_smoothing_factor,
+            },
+        }
+
         # Frame counting
         self.frame_count = 0
 
@@ -105,17 +128,27 @@ class OscillationTracker:
         player_attacking: bool = False,
         opponent_attacking: bool = False,
     ) -> Dict:
-        """Update oscillation tracking with new position data"""
+        """FIXED Update oscillation tracking with enhanced detection"""
         self.frame_count += 1
 
-        # Calculate velocities
+        # FIXED: Enhanced velocity calculation with smoothing
         player_velocity = 0.0
         opponent_velocity = 0.0
 
         if self.prev_player_x is not None:
-            player_velocity = player_x - self.prev_player_x
+            raw_velocity = player_x - self.prev_player_x
+            # Apply velocity smoothing to reduce noise
+            player_velocity = (
+                self.velocity_smoothing_factor * raw_velocity
+                + (1 - self.velocity_smoothing_factor) * self.prev_player_velocity
+            )
+
         if self.prev_opponent_x is not None:
-            opponent_velocity = opponent_x - self.prev_opponent_x
+            raw_velocity = opponent_x - self.prev_opponent_x
+            opponent_velocity = (
+                self.velocity_smoothing_factor * raw_velocity
+                + (1 - self.velocity_smoothing_factor) * self.prev_opponent_velocity
+            )
 
         # Update histories
         self.player_x_history.append(player_x)
@@ -123,26 +156,42 @@ class OscillationTracker:
         self.player_velocity_history.append(player_velocity)
         self.opponent_velocity_history.append(opponent_velocity)
 
-        # Detect direction changes (oscillation)
+        # FIXED: Enhanced direction change detection
         if (
             len(self.player_velocity_history) >= 2
-            and self.prev_player_velocity != 0
-            and player_velocity != 0
+            and abs(self.prev_player_velocity) > self.direction_change_threshold
+            and abs(player_velocity) > self.direction_change_threshold
         ):
             if (self.prev_player_velocity > 0 and player_velocity < 0) or (
                 self.prev_player_velocity < 0 and player_velocity > 0
             ):
                 self.player_direction_changes += 1
+                self.debug_data["recent_direction_changes"].append(
+                    {
+                        "frame": self.frame_count,
+                        "prev_vel": self.prev_player_velocity,
+                        "curr_vel": player_velocity,
+                        "type": "player",
+                    }
+                )
 
         if (
             len(self.opponent_velocity_history) >= 2
-            and self.prev_opponent_velocity != 0
-            and opponent_velocity != 0
+            and abs(self.prev_opponent_velocity) > self.direction_change_threshold
+            and abs(opponent_velocity) > self.direction_change_threshold
         ):
             if (self.prev_opponent_velocity > 0 and opponent_velocity < 0) or (
                 self.prev_opponent_velocity < 0 and opponent_velocity > 0
             ):
                 self.opponent_direction_changes += 1
+
+        # Update debug data
+        self.debug_data["recent_positions"].append(
+            {"player_x": player_x, "opponent_x": opponent_x}
+        )
+        self.debug_data["recent_velocities"].append(
+            {"player_vel": player_velocity, "opponent_vel": opponent_velocity}
+        )
 
         # Calculate oscillation amplitude (range of movement)
         if len(self.player_x_history) >= 8:
@@ -187,7 +236,7 @@ class OscillationTracker:
         player_attacking: bool,
         opponent_attacking: bool,
     ) -> Dict:
-        """Analyze current movement patterns for oscillation features"""
+        """FIXED Analyze movement patterns with enhanced neutral game detection"""
 
         # Determine who is moving forward/backward
         player_moving_forward = (player_x < opponent_x and player_velocity > 0) or (
@@ -204,8 +253,15 @@ class OscillationTracker:
             opponent_x < player_x and opponent_velocity < 0
         ) or (opponent_x > player_x and opponent_velocity > 0)
 
-        # Detect neutral game state
-        neutral_game = not player_attacking and not opponent_attacking
+        # FIXED: Enhanced neutral game detection
+        neutral_game = (
+            not player_attacking
+            and not opponent_attacking
+            and distance > self.CLOSE_RANGE
+            and abs(player_velocity) < 2.0
+            and abs(opponent_velocity) < 2.0
+        )
+
         if neutral_game:
             self.neutral_game_duration += 1
         else:
@@ -219,7 +275,8 @@ class OscillationTracker:
         elif player_moving_backward and distance < self.MID_RANGE:
             self.defensive_backward_count += 1
         elif (
-            abs(player_velocity) > 0.5 and self.MID_RANGE <= distance <= self.FAR_RANGE
+            abs(player_velocity) > self.movement_threshold
+            and self.MID_RANGE <= distance <= self.FAR_RANGE
         ):
             self.neutral_dance_count += 1
 
@@ -232,8 +289,8 @@ class OscillationTracker:
         ):
             self.whiff_bait_attempts += 1
 
-        # Space control analysis
-        self.space_control_score = self._calculate_space_control(
+        # FIXED: Enhanced space control analysis
+        self.space_control_score = self._calculate_enhanced_space_control(
             player_x, opponent_x, player_velocity, opponent_velocity, distance
         )
 
@@ -247,7 +304,7 @@ class OscillationTracker:
             "space_control_score": self.space_control_score,
         }
 
-    def _calculate_space_control(
+    def _calculate_enhanced_space_control(
         self,
         player_x: float,
         opponent_x: float,
@@ -255,7 +312,7 @@ class OscillationTracker:
         opponent_velocity: float,
         distance: float,
     ) -> float:
-        """Calculate who has better space control based on positioning and movement"""
+        """FIXED Enhanced space control calculation with better scaling"""
 
         # Center control bonus
         screen_center = SCREEN_WIDTH / 2
@@ -265,34 +322,36 @@ class OscillationTracker:
             SCREEN_WIDTH / 2
         )
 
-        # Movement initiative (who's dictating the pace)
+        # FIXED: Enhanced movement initiative calculation
         movement_initiative = 0.0
-        if abs(player_velocity) > abs(opponent_velocity):
-            movement_initiative = 0.5 if player_velocity > 0 else -0.5
-        elif abs(opponent_velocity) > abs(player_velocity):
-            movement_initiative = -0.5 if opponent_velocity > 0 else 0.5
+        if abs(player_velocity) > abs(opponent_velocity) + 0.1:  # Small threshold
+            movement_initiative = 0.3 if player_velocity > 0 else -0.3
+        elif abs(opponent_velocity) > abs(player_velocity) + 0.1:
+            movement_initiative = -0.3 if opponent_velocity > 0 else 0.3
 
-        # Range control (being in your character's optimal range)
+        # FIXED: Better range control assessment
         range_control = 0.0
         if self.CLOSE_RANGE <= distance <= self.MID_RANGE:
-            range_control = 0.3  # Assume this is generally good for most characters
+            range_control = 0.4  # Increased from 0.3
         elif distance > self.FAR_RANGE:
-            range_control = -0.2  # Too far for most interactions
+            range_control = -0.3  # Increased penalty
+        elif self.MID_RANGE < distance <= self.FAR_RANGE:
+            range_control = 0.2  # Mid-range bonus
 
-        # Oscillation effectiveness (consistent movement patterns)
+        # FIXED: Enhanced oscillation effectiveness
         oscillation_effectiveness = 0.0
         if self.frame_count > 60:  # After 1 second
             player_oscillation_rate = self.player_direction_changes / (
                 self.frame_count / 60
             )
             if 1.0 <= player_oscillation_rate <= 3.0:  # Optimal oscillation rate
-                oscillation_effectiveness = 0.2
+                oscillation_effectiveness = 0.3  # Increased from 0.2
 
         total_control = (
-            center_control
-            + movement_initiative
-            + range_control
-            + oscillation_effectiveness
+            center_control * 0.3
+            + movement_initiative * 0.3
+            + range_control * 0.2
+            + oscillation_effectiveness * 0.2
         )
         return np.clip(total_control, -1.0, 1.0)
 
@@ -365,6 +424,18 @@ class OscillationTracker:
             features[11] = np.clip(velocity_diff / 5.0, -1.0, 1.0)
 
         return features
+
+    def get_debug_info(self) -> Dict:
+        """FIXED Get debug information for validation"""
+        return {
+            "recent_positions": list(self.debug_data["recent_positions"]),
+            "recent_velocities": list(self.debug_data["recent_velocities"]),
+            "recent_direction_changes": list(
+                self.debug_data["recent_direction_changes"]
+            ),
+            "detection_sensitivity": self.debug_data["detection_sensitivity"],
+            "current_stats": self.get_stats(),
+        }
 
     def get_stats(self) -> Dict:
         """Get current oscillation statistics for logging"""
@@ -610,7 +681,7 @@ class StrategicFeatureTracker:
         self.button_features_history = deque(maxlen=history_length)
         self.previous_button_features = np.zeros(12, dtype=np.float32)
 
-        # ENHANCED: Oscillation tracker
+        # ENHANCED: Oscillation tracker with fixes
         self.oscillation_tracker = OscillationTracker(history_length=16)
 
         # Combat state tracking
@@ -1316,7 +1387,7 @@ class EnhancedCrossAttentionVisionTransformer(nn.Module):
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    ENHANCED Street Fighter wrapper with Oscillation-Based Positioning Analysis
+    FIXED Enhanced Street Fighter wrapper with Oscillation-Based Positioning Analysis
     """
 
     def __init__(
@@ -1440,7 +1511,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         ]
 
         print(
-            f"🎮 ENHANCED Street Fighter Vision Wrapper with Oscillation Analysis initialized."
+            f"🎮 FIXED Street Fighter Vision Wrapper with Enhanced Oscillation Analysis initialized."
         )
         print(f"   Traditional strategic features: {len(self.strategic_feature_names)}")
         print(f"   Oscillation features: {len(self.oscillation_feature_names)}")
@@ -1489,7 +1560,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             opponent_victories,
         ) = self._extract_enhanced_state(info)
 
-        custom_reward, custom_done = self._calculate_enhanced_reward(
+        # FIXED: Enhanced reward calculation with oscillation bonuses
+        custom_reward, custom_done = self._calculate_enhanced_reward_with_oscillation(
             curr_player_health, curr_opponent_health, score, discrete_action
         )
         done = custom_done or done
@@ -1521,12 +1593,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         return stacked_obs, custom_reward, done, truncated, info
 
-    def _calculate_enhanced_reward(
+    def _calculate_enhanced_reward_with_oscillation(
         self, curr_player_health, curr_opponent_health, score, action
     ):
+        """FIXED Enhanced reward calculation with oscillation-specific bonuses"""
         reward = 0.0
         done = False
 
+        # Basic win/loss rewards
         if curr_player_health <= 0 or curr_opponent_health <= 0:
             self.total_rounds += 1
             if curr_opponent_health <= 0 and curr_player_health > 0:
@@ -1538,9 +1612,39 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             if self.reset_round:
                 done = True
 
+        # Damage rewards
         damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
         damage_received = max(0, self.prev_player_health - curr_player_health)
         reward += damage_dealt - damage_received
+
+        # FIXED: Oscillation-specific rewards
+        if hasattr(self.strategic_tracker, "oscillation_tracker"):
+            osc_tracker = self.strategic_tracker.oscillation_tracker
+
+            # Reward proper oscillation frequency (1-3 Hz is optimal)
+            if osc_tracker.frame_count > 60:  # After 1 second
+                freq = osc_tracker.player_direction_changes / (
+                    osc_tracker.frame_count / 60
+                )
+                if 1.0 <= freq <= 3.0:  # Optimal range
+                    reward += 0.1  # Small but consistent reward
+                elif freq > 5.0:  # Penalize excessive oscillation (likely noise)
+                    reward -= 0.05
+
+            # Reward positive space control
+            if osc_tracker.space_control_score > 0:
+                reward += osc_tracker.space_control_score * 0.05
+
+            # Reward neutral game engagement in optimal range
+            if osc_tracker.neutral_game_duration > 0:
+                if 30 <= osc_tracker.neutral_game_duration <= 90:
+                    reward += 0.05  # Reward optimal neutral game duration
+                elif osc_tracker.neutral_game_duration > 150:
+                    reward -= 0.02  # Slight penalty for excessive neutral game
+
+            # Reward whiff bait attempts (strategic movement)
+            if osc_tracker.whiff_bait_attempts > 0:
+                reward += 0.02  # Small reward for strategic positioning
 
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
@@ -1550,15 +1654,20 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return reward, done
 
     def _update_enhanced_stats(self):
-        """Update stats including oscillation metrics"""
+        """FIXED Update stats including oscillation metrics"""
         if hasattr(self.strategic_tracker, "oscillation_tracker"):
             oscillation_stats = self.strategic_tracker.oscillation_tracker.get_stats()
+
+            # Calculate oscillation frequency
+            freq = 0.0
+            if self.strategic_tracker.oscillation_tracker.frame_count > 0:
+                freq = oscillation_stats.get("player_direction_changes", 0) / max(
+                    1, self.strategic_tracker.oscillation_tracker.frame_count / 60
+                )
+
             self.stats.update(
                 {
-                    "player_oscillation_frequency": oscillation_stats.get(
-                        "player_direction_changes", 0
-                    )
-                    / max(1, self.strategic_tracker.current_frame / 60),
+                    "player_oscillation_frequency": freq,
                     "space_control_score": oscillation_stats.get(
                         "space_control_score", 0.0
                     ),
@@ -1570,6 +1679,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     ),
                 }
             )
+
+    def get_debug_info(self):
+        """FIXED Get debug information for validation"""
+        if hasattr(self.strategic_tracker, "oscillation_tracker"):
+            return self.strategic_tracker.oscillation_tracker.get_debug_info()
+        return {}
 
     def _extract_enhanced_state(self, info):
         return (
@@ -1761,7 +1876,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.vision_ready = True
             self.stats["cross_attention_ready"] = True
             print(
-                "   ✅ Enhanced Cross-Attention Vision Transformer with Oscillation initialized and ready!"
+                "   ✅ FIXED Enhanced Cross-Attention Vision Transformer with Oscillation initialized and ready!"
             )
         except Exception as e:
             logger.error(
@@ -1773,7 +1888,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     """
-    Enhanced CNN feature extractor that integrates with the cross-attention pipeline
+    FIXED Enhanced CNN feature extractor that integrates with the cross-attention pipeline
     including oscillation analysis.
     """
 
@@ -1786,13 +1901,12 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
         self.wrapper_env = None
         self.final_projection = nn.Linear(256, features_dim)
         print(
-            f"🎯 Street Fighter Cross-Attention CNN with Oscillation initialized for SB3."
+            f"🎯 FIXED Street Fighter Cross-Attention CNN with Oscillation initialized for SB3."
         )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         """
-        The forward pass called by the SB3 agent during policy updates.
-        It must re-create the feature pipeline based only on the observation tensor.
+        FIXED Forward pass with enhanced feature pipeline
         """
         # Step 1: Visual features from CNN
         visual_features = self.cnn(observations.float() / 255.0)
@@ -1890,4 +2004,6 @@ class StreetFighterCrossAttentionCNN(BaseFeaturesExtractor):
     ):
         self.cross_attention_transformer = cross_attention_transformer
         self.wrapper_env = wrapper_env
-        print("✅ Cross-attention components with Oscillation injected into SB3 CNN")
+        print(
+            "✅ FIXED Cross-attention components with Oscillation injected into SB3 CNN"
+        )
