@@ -6,9 +6,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python eval.py ./fixed_models/950000.zip --rounds 5
-
-
+python train.py --resume ./fixed_models/model_1150000.zip --total-timesteps 600000 --learning-rate 2e-4
 
 python train.py --total-timesteps 5000000 --learning-rate 4e-4 --render
 
