@@ -1005,7 +1005,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             if curr_opponent_health <= 0 < curr_player_health:
                 self.wins += 1
                 # STABILITY FIX: Much smaller win reward to prevent value function instability
-                win_bonus = 10.0 + (curr_player_health / self.full_hp) * 5.0
+                win_bonus = 25.0 + (curr_player_health / self.full_hp) * 10.0
                 reward += win_bonus
                 print(
                     f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
@@ -1013,7 +1013,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             else:
                 self.losses += 1
                 # STABILITY FIX: Small loss penalty instead of large negative reward
-                reward -= 5.0
+                reward -= 10.0
                 print(
                     f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
                 )

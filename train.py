@@ -543,7 +543,7 @@ def main():
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=args.clip_range,  # 0.1 (much lower for stability)
-            ent_coef=0.01,
+            ent_coef=0.02,  # inc
             vf_coef=args.vf_coef,  # 2.0 (higher for value stability)
             max_grad_norm=0.5,  # Conservative gradient clipping
             verbose=1,

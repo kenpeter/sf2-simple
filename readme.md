@@ -10,6 +10,17 @@ python train.py --resume ./fixed_models/model_1150000.zip --total-timesteps 6000
 
 python train.py --total-timesteps 5000000 --learning-rate 4e-4 --render
 
+
+
+python train.py \
+    --resume ./models/model_500000.zip \
+    --total-timesteps 1000000 \
+    --learning-rate 2e-4 \
+    --clip-range 0.15 \
+    --render
+
+
+
   ta.json 
 {
     "info": {
