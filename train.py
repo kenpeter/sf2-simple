@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 FIXED TRAINING SCRIPT - Uses the corrected feature extractor with proper device handling
+Fixed: Simplified checkpoint naming, removed JSON files
 """
 
 import os
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 class FixedTrainingCallback(BaseCallback):
     """
     Callback that properly monitors the FIXED architecture with device compatibility.
+    FIXED: Simplified checkpoint naming, removed JSON files
     """
 
     def __init__(self, save_freq=50000, save_path="./fixed_models/", verbose=1):
@@ -254,50 +256,29 @@ class FixedTrainingCallback(BaseCallback):
         print()
 
     def _save_checkpoint(self):
-        """Save model checkpoint with performance info."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Performance metrics for filename
-        avg_reward = np.mean(self.episode_rewards[-10:]) if self.episode_rewards else 0
-        win_rate = np.mean(self.win_rates[-10:]) if self.win_rates else 0
-        gradient_coverage = (
-            self.gradient_checks[-1]["coverage"] if self.gradient_checks else 0
-        )
-
-        model_name = (
-            f"fixed_model_{self.num_timesteps:,}_steps_"
-            f"reward_{avg_reward:.1f}_"
-            f"winrate_{win_rate:.1%}_"
-            f"gradcov_{gradient_coverage:.0f}pct_"
-            f"device_{str(self.device).replace(':', '_')}_"
-            f"{timestamp}"
-        )
-
+        """
+        Save model checkpoint with SIMPLIFIED naming.
+        FIXED: Short filename with just timesteps, no JSON files.
+        """
+        # Simple naming: just timesteps
+        model_name = f"model_{self.num_timesteps}"
         model_path = os.path.join(self.save_path, f"{model_name}.zip")
+
         self.model.save(model_path)
+        print(f"💾 Checkpoint saved: {model_name}.zip")
 
-        print(f"💾 Checkpoint saved: {model_path}")
+        # Log performance in console instead of JSON file
+        if self.episode_rewards:
+            avg_reward = np.mean(self.episode_rewards[-10:])
+            print(f"   📊 Current avg reward: {avg_reward:.1f}")
 
-        # Save training metrics
-        metrics_path = os.path.join(self.save_path, f"{model_name}_metrics.json")
-        metrics = {
-            "step": self.num_timesteps,
-            "episode_rewards": self.episode_rewards,
-            "win_rates": self.win_rates,
-            "gradient_checks": self.gradient_checks,
-            "avg_reward": avg_reward,
-            "win_rate": win_rate,
-            "device": str(self.device),
-            "training_time_hours": (
-                datetime.now() - self.training_start_time
-            ).total_seconds()
-            / 3600,
-        }
+        if self.win_rates:
+            win_rate = np.mean(self.win_rates[-10:])
+            print(f"   🏆 Current win rate: {win_rate:.1%}")
 
-        import json
-
-        with open(metrics_path, "w") as f:
-            json.dump(metrics, f, indent=2)
+        if self.gradient_checks:
+            gradient_coverage = self.gradient_checks[-1]["coverage"]
+            print(f"   🧠 Gradient coverage: {gradient_coverage:.0f}%")
 
 
 def make_env(
@@ -440,14 +421,15 @@ def main():
         else:
             print("✅ Gradient flow verified - ready to train!")
 
-    # Create callback
+    # Create callback with simplified naming
     callback = FixedTrainingCallback(save_freq=50000, save_path="./fixed_models/")
 
     print("\n🎯 Starting training with FIXED architecture...")
     print("   - Feature extractor properly integrated")
     print("   - Device compatibility ensured")
     print("   - Gradient flow verified")
-    print("   - Comprehensive monitoring enabled")
+    print("   - Simplified checkpoint naming")
+    print("   - No JSON files - performance logged to console")
 
     try:
         model.learn(
@@ -457,11 +439,11 @@ def main():
             progress_bar=True,
         )
 
-        # Save final model
-        final_path = "./fixed_models/final_fixed_model.zip"
+        # Save final model with simple name
+        final_path = "./fixed_models/final_model.zip"
         model.save(final_path)
         print(f"🎉 Training completed successfully!")
-        print(f"💾 Final model saved: {final_path}")
+        print(f"💾 Final model saved: final_model.zip")
 
         # Final performance summary
         if callback.episode_rewards:
@@ -481,9 +463,9 @@ def main():
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        interrupted_path = "./fixed_models/interrupted_fixed_model.zip"
+        interrupted_path = "./fixed_models/interrupted_model.zip"
         model.save(interrupted_path)
-        print(f"💾 Model saved: {interrupted_path}")
+        print(f"💾 Model saved: interrupted_model.zip")
 
     except Exception as e:
         print(f"\n❌ Training failed with error: {e}")
@@ -491,10 +473,10 @@ def main():
 
         traceback.print_exc()
 
-        error_path = "./fixed_models/error_fixed_model.zip"
+        error_path = "./fixed_models/error_model.zip"
         try:
             model.save(error_path)
-            print(f"💾 Model saved: {error_path}")
+            print(f"💾 Model saved: error_model.zip")
         except Exception as save_error:
             print(f"❌ Could not save model: {save_error}")
 
