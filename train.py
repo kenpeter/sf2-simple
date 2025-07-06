@@ -510,19 +510,22 @@ def main():
     # Create or load model
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
+        print("🔄 Applying new hyperparameters for continued training...")
         try:
-            model = PPO.load(args.resume, env=env, device=device)
-            print(f"   ✅ Model loaded on {device}")
-
-            # Update model with stabilized hyperparameters if resuming
-            print("🔄 Applying stabilized hyperparameters to loaded model...")
-            model.learning_rate = args.learning_rate
-            model.batch_size = args.batch_size
-            model.n_steps = args.n_steps
-            model.n_epochs = args.n_epochs
-            model.clip_range = args.clip_range
-            model.vf_coef = args.vf_coef
-            print("   ✅ Hyperparameters updated for stability")
+            # Pass hyperparameters directly into the .load() method.
+            # This allows SB3 to correctly initialize schedules and other internal components.
+            model = PPO.load(
+                args.resume,
+                env=env,
+                device=device,
+                learning_rate=args.learning_rate,
+                batch_size=args.batch_size,
+                n_steps=args.n_steps,
+                n_epochs=args.n_epochs,
+                clip_range=args.clip_range,
+                vf_coef=args.vf_coef,
+            )
+            print(f"   ✅ Model loaded on {device} with updated hyperparameters.")
 
         except Exception as e:
             print(f"   ❌ Failed to load model: {e}")
