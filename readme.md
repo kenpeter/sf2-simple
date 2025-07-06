@@ -10,7 +10,7 @@ python eval.py ./fixed_models/950000.zip --rounds 5
 
 
 
-python train.py --total-timesteps 5000000 --n-envs 1 --learning-rate 4e-4 --render
+python train.py --total-timesteps 5000000 --learning-rate 4e-4 --render
 
   ta.json 
 {
