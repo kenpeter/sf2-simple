@@ -1019,6 +1019,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 )
             done = True
 
+            combo_bonus = self.strategic_tracker.combo_counter * 0.02
+            reward += combo_bonus
+
         # Damage-based rewards - scaled down for stability
         damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
         damage_received = max(0, self.prev_player_health - curr_player_health)
