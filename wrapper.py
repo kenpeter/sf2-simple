@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-wrapper.py - STABILIZED VERSION with training instability fixes
-FIXES: Value loss normalization, reward scaling, feature stability, conservative architecture
-Addresses: High value loss (35+), Low explained variance (0.11), Low clip fraction (0.04)
+wrapper.py - STABILIZED VERSION with advanced tactics rewards
+FIXES: Addresses 50% win-rate plateau by rewarding advanced behaviors.
+NEW: Explicit rewards for blocking, baiting (whiff inducement), and punishing.
 """
 
 import cv2
@@ -872,8 +872,8 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    STABILIZED: Street Fighter wrapper with reward scaling and stability improvements.
-    FIXES: Reward scaling for value stability, episode length limits, normalized rewards.
+    STABILIZED: Street Fighter wrapper with advanced tactical rewards.
+    FIXES: 50% win-rate plateau by rewarding blocking, baiting, and punishing.
     """
 
     def __init__(self, env, frame_stack=8, rendering=False):
@@ -912,15 +912,22 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
         # STABILITY FIX: Reward scaling and episode management
-        self.reward_scale = 0.1  # Scale down rewards for value function stability
+        self.reward_scale = 0.1
         self.episode_steps = 0
-        self.max_episode_steps = 18000  # ~5 minutes at 60fps
+        self.max_episode_steps = 18000
         self.episode_rewards = deque(maxlen=100)
-
         self.stats = {}
 
+        # --- NEW: ADVANCED TACTICS TRACKING ---
+        self.punish_opportunity_timer = 0
+        self.punish_window_frames = 15  # 1/4 second window at 60fps
+        self.last_opponent_status = 0
+        self.successful_punishes = 0
+        self.induced_whiffs = 0
+        # Heuristic: Opponent status codes > 20 often indicate an attack/special move animation
+        self.OPPONENT_ATTACK_STATUS_THRESHOLD = 20
+
     def _create_initial_vector_features(self, info):
-        """STABILITY FIX: Create well-normalized initial vector features."""
         player_health = info.get("agent_hp", self.full_hp)
         opponent_health = info.get("enemy_hp", self.full_hp)
         player_x = info.get("agent_x", SCREEN_WIDTH / 2)
@@ -929,7 +936,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         initial_button_features = np.zeros(12, dtype=np.float32)
         initial_features = self.strategic_tracker.update(info, initial_button_features)
 
-        # STABILITY FIX: Ensure features are in reasonable range
         initial_features = np.clip(initial_features, -5.0, 5.0)
         return initial_features
 
@@ -939,6 +945,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
+
+        # --- NEW: Reset advanced tactics counters ---
+        self.punish_opportunity_timer = 0
+        self.last_opponent_status = info.get("enemy_status", 0)
+        self.successful_punishes = 0
+        self.induced_whiffs = 0
 
         processed_frame = self._preprocess_frame(obs)
         initial_vector_features = self._create_initial_vector_features(info)
@@ -973,13 +985,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         curr_opponent_health = info.get("enemy_hp", self.full_hp)
 
         custom_reward, custom_done = self._calculate_stabilized_reward(
-            curr_player_health, curr_opponent_health
+            info, curr_player_health, curr_opponent_health
         )
 
-        # STABILITY FIX: Episode length limit to prevent extremely long episodes
         if self.episode_steps >= self.max_episode_steps:
             truncated = True
-            print(f"Episode truncated at {self.episode_steps} steps")
 
         done = custom_done or done
 
@@ -993,18 +1003,56 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self._update_enhanced_stats()
         info.update(self.stats)
 
+        # --- NEW: Pass tactical counts to callback ---
+        info["successful_punishes"] = self.successful_punishes
+        info["induced_whiffs"] = self.induced_whiffs
+
         return self._get_observation(), custom_reward, done, truncated, info
 
-    def _calculate_stabilized_reward(self, curr_player_health, curr_opponent_health):
-        """STABILITY FIX: Properly scaled and normalized reward function to prevent value loss explosion."""
+    def _calculate_stabilized_reward(
+        self, info, curr_player_health, curr_opponent_health
+    ):
+        """STABILIZED reward with advanced tactical bonuses to break 50% win rate."""
         reward, done = 0.0, False
 
-        # Win/Loss rewards - scaled down for stability
+        # --- NEW: ADVANCED TACTICS REWARD LOGIC ---
+        tactical_bonus = 0.0
+
+        # Decrement punish timer
+        if self.punish_opportunity_timer > 0:
+            self.punish_opportunity_timer -= 1
+
+        # 1. Detect a Whiff or Block (Opportunity Creation)
+        was_opponent_attacking = (
+            self.last_opponent_status > self.OPPONENT_ATTACK_STATUS_THRESHOLD
+        )
+        damage_received = max(0, self.prev_player_health - curr_player_health)
+
+        if was_opponent_attacking and damage_received == 0:
+            # Agent successfully baited a whiff or blocked an attack
+            self.induced_whiffs += 1
+            tactical_bonus += 0.2  # Small reward for creating the opportunity
+            self.punish_opportunity_timer = (
+                self.punish_window_frames
+            )  # Open the punish window
+
+        # 2. Detect a Punish (Capitalizing on the Opportunity)
+        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
+        if damage_dealt > 0 and self.punish_opportunity_timer > 0:
+            # Agent landed a hit during the punish window
+            self.successful_punishes += 1
+            tactical_bonus += 0.8  # Large reward for punishing
+            self.punish_opportunity_timer = 0  # Prevent multiple rewards for one combo
+
+        reward += tactical_bonus
+        self.last_opponent_status = info.get("enemy_status", 0)
+        # --- END OF TACTICAL REWARD LOGIC ---
+
+        # Win/Loss rewards
         if curr_player_health <= 0 or curr_opponent_health <= 0:
             self.total_rounds += 1
             if curr_opponent_health <= 0 < curr_player_health:
                 self.wins += 1
-                # STABILITY FIX: Much smaller win reward to prevent value function instability
                 win_bonus = 25.0 + (curr_player_health / self.full_hp) * 10.0
                 reward += win_bonus
                 print(
@@ -1012,38 +1060,21 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 )
             else:
                 self.losses += 1
-                # STABILITY FIX: Small loss penalty instead of large negative reward
                 reward -= 10.0
                 print(
                     f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
                 )
             done = True
 
-            combo_bonus = self.strategic_tracker.combo_counter * 0.02
-            reward += combo_bonus
-
-        # Damage-based rewards - scaled down for stability
-        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
-        damage_received = max(0, self.prev_player_health - curr_player_health)
-
-        # STABILITY FIX: Much smaller damage rewards to prevent value explosion
+        # Damage-based rewards
         reward += (damage_dealt * 0.1) - (damage_received * 0.05)
-
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
 
-        # Strategic bonuses - very small for stability
-        osc_tracker = self.strategic_tracker.oscillation_tracker
-        rolling_freq = osc_tracker.get_rolling_window_frequency()
-        if 1.0 <= rolling_freq <= 3.0:
-            reward += 0.01
-        if osc_tracker.space_control_score > 0:
-            reward += osc_tracker.space_control_score * 0.005
-
-        # STABILITY FIX: Small step penalty to encourage efficiency
+        # Small step penalty to encourage efficiency
         reward -= 0.001
 
-        # STABILITY FIX: Apply reward scaling and clipping
+        # Apply reward scaling and clipping
         reward *= self.reward_scale
         reward = np.clip(reward, -2.0, 2.0)
 
