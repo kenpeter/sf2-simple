@@ -3,6 +3,7 @@
 test_ultra_simple.py - Test the ultra-simplified architecture for gradient flow
 """
 
+# torch, np, wrapper, space
 import torch
 import numpy as np
 from wrapper import StreetFighterUltraSimpleCNN
@@ -16,10 +17,13 @@ def test_ultra_simple_gradient_flow():
     print("=" * 70)
 
     # Create observation space
+
+    # frame stack, target size (screen), vector feature
     frame_stack = 8
     target_size = (128, 180)
     vector_feature_dim = 45
 
+    #
     obs_space = spaces.Dict(
         {
             "visual_obs": spaces.Box(

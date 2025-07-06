@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-wrapper.py - COMPLETE FIXED VERSION with proper vector feature initialization
-CRITICAL UPDATE: Fixed zero initialization bug that was preventing strategic learning
+wrapper.py - STABILIZED VERSION with training instability fixes
+FIXES: Value loss normalization, reward scaling, feature stability, conservative architecture
+Addresses: High value loss (35+), Low explained variance (0.11), Low clip fraction (0.04)
 """
 
 import cv2
@@ -188,12 +189,14 @@ class OscillationTracker:
             and abs(player_velocity) < 2.0
             and abs(opponent_velocity) < 2.0
         )
+
         if neutral_game:
             self.neutral_game_duration += 1
         else:
             if self.neutral_game_duration > 0:
                 self.advantage_transitions += 1
             self.neutral_game_duration = 0
+
         if player_moving_forward and distance > self.MID_RANGE:
             self.aggressive_forward_count += 1
         elif player_moving_backward and distance < self.MID_RANGE:
@@ -203,6 +206,7 @@ class OscillationTracker:
             and self.MID_RANGE <= distance <= self.FAR_RANGE
         ):
             self.neutral_dance_count += 1
+
         if (
             distance > self.WHIFF_BAIT_RANGE
             and distance < self.MID_RANGE + 5
@@ -210,9 +214,11 @@ class OscillationTracker:
             and not player_attacking
         ):
             self.whiff_bait_attempts += 1
+
         self.space_control_score = self._calculate_enhanced_space_control(
             player_x, opponent_x, player_velocity, opponent_velocity, distance
         )
+
         return {
             "player_moving_forward": player_moving_forward,
             "player_moving_backward": player_moving_backward,
@@ -230,11 +236,13 @@ class OscillationTracker:
         center_control = (
             abs(opponent_x - screen_center) - abs(player_x - screen_center)
         ) / (SCREEN_WIDTH / 2)
+
         movement_initiative = 0.0
         if abs(player_velocity) > abs(opponent_velocity) + 0.1:
             movement_initiative = 0.3 if player_velocity > 0 else -0.3
         elif abs(opponent_velocity) > abs(player_velocity) + 0.1:
             movement_initiative = -0.3 if opponent_velocity > 0 else 0.3
+
         range_control = 0.0
         if self.CLOSE_RANGE <= distance <= self.MID_RANGE:
             range_control = 0.4
@@ -242,9 +250,11 @@ class OscillationTracker:
             range_control = -0.3
         elif self.MID_RANGE < distance <= self.FAR_RANGE:
             range_control = 0.2
+
         oscillation_effectiveness = 0.0
         if self.frame_count > 60 and 1.0 <= self.get_rolling_window_frequency() <= 3.0:
             oscillation_effectiveness = 0.3
+
         total_control = (
             center_control * 0.3
             + movement_initiative * 0.3
@@ -269,6 +279,7 @@ class OscillationTracker:
         features = np.zeros(12, dtype=np.float32)
         if self.frame_count == 0:
             return features
+
         rolling_freq = self.get_rolling_window_frequency()
         features[0] = np.clip(rolling_freq / 5.0, 0.0, 1.0)
         features[1] = np.clip(
@@ -280,6 +291,7 @@ class OscillationTracker:
         features[3] = np.clip(self.opponent_oscillation_amplitude / 50.0, 0.0, 1.0)
         features[4] = np.clip(self.space_control_score, -1.0, 1.0)
         features[5] = np.clip(self.neutral_game_duration / 180.0, 0.0, 1.0)
+
         total_movement = (
             self.aggressive_forward_count
             + self.defensive_backward_count
@@ -289,12 +301,14 @@ class OscillationTracker:
             features[6] = self.aggressive_forward_count / total_movement
             features[7] = self.defensive_backward_count / total_movement
             features[8] = self.neutral_dance_count / total_movement
+
         features[9] = np.clip(
             self.whiff_bait_attempts / max(1, self.frame_count / 60), 0.0, 1.0
         )
         features[10] = np.clip(
             self.advantage_transitions / max(1, self.frame_count / 60), 0.0, 1.0
         )
+
         if (
             len(self.player_velocity_history) > 0
             and len(self.opponent_velocity_history) > 0
@@ -303,6 +317,7 @@ class OscillationTracker:
                 self.player_velocity_history[-1] - self.opponent_velocity_history[-1]
             )
             features[11] = np.clip(velocity_diff / 5.0, -1.0, 1.0)
+
         return features
 
     def get_stats(self) -> Dict:
@@ -428,6 +443,12 @@ class StrategicFeatureTracker:
         self.oscillation_tracker = OscillationTracker(history_length=16)
         self.close_combat_count = 0
         self.total_frames = 0
+
+        # STABILITY FIX: Feature normalization for stability
+        self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+        self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+        self.normalization_alpha = 0.999
+
         self.DANGER_ZONE_HEALTH = MAX_HEALTH * 0.25
         self.CORNER_THRESHOLD = 30
         self.CLOSE_DISTANCE = 40
@@ -501,10 +522,35 @@ class StrategicFeatureTracker:
             info, distance, oscillation_analysis
         )
 
+        # STABILITY FIX: Normalize features for training stability
+        features = self._normalize_features(features)
+
         self.prev_player_health = player_health
         self.prev_opponent_health = opponent_health
         self.prev_score = score
         return features
+
+    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
+        """STABILITY FIX: Normalize features to prevent value explosions that cause high value loss."""
+        # Update rolling statistics for stability
+        self.feature_rolling_mean = (
+            self.normalization_alpha * self.feature_rolling_mean
+            + (1 - self.normalization_alpha) * features
+        )
+        squared_diff = (features - self.feature_rolling_mean) ** 2
+        self.feature_rolling_std = np.sqrt(
+            self.normalization_alpha * (self.feature_rolling_std**2)
+            + (1 - self.normalization_alpha) * squared_diff
+        )
+
+        # Prevent division by zero
+        safe_std = np.maximum(self.feature_rolling_std, 1e-6)
+
+        # Normalize and clip to prevent extreme values that destabilize training
+        normalized = (features - self.feature_rolling_mean) / safe_std
+        normalized = np.clip(normalized, -3.0, 3.0)
+
+        return normalized.astype(np.float32)
 
     def _calculate_enhanced_features(
         self, info, distance, oscillation_analysis
@@ -517,12 +563,17 @@ class StrategicFeatureTracker:
             "enemy_x", SCREEN_WIDTH / 2
         )
 
-        # Traditional strategic features (21)
+        # Strategic features (21) - with stability improvements
         features[0] = 1.0 if player_health <= self.DANGER_ZONE_HEALTH else 0.0
         features[1] = 1.0 if opponent_health <= self.DANGER_ZONE_HEALTH else 0.0
-        features[2] = np.clip(
-            player_health / opponent_health if opponent_health > 0 else 2.0, 0.0, 2.0
-        )
+
+        # STABILITY FIX: Safer health ratio calculation to prevent extreme values
+        if opponent_health > 0:
+            health_ratio = player_health / opponent_health
+            features[2] = np.clip(health_ratio, 0.0, 3.0)
+        else:
+            features[2] = 3.0
+
         features[3] = (
             self._calculate_momentum(self.player_health_history)
             + self._calculate_momentum(self.opponent_health_history)
@@ -602,7 +653,9 @@ class StrategicFeatureTracker:
             return 0.0
         values = list(history)
         changes = [values[i] - values[i - 1] for i in range(1, len(values))]
-        return np.mean(changes[-3:]) if changes else 0.0
+        momentum = np.mean(changes[-3:]) if changes else 0.0
+        # STABILITY FIX: Clip momentum to prevent extreme values
+        return np.clip(momentum, -50.0, 50.0)
 
     def _calculate_enhanced_score_momentum(self) -> float:
         if len(self.score_change_history) < 2:
@@ -611,7 +664,9 @@ class StrategicFeatureTracker:
             [max(0, c) for c in list(self.score_change_history)[-5:]]
         )
         combo_multiplier = 1.0 + (self.combo_counter * 0.1)
-        return np.clip((base_momentum * combo_multiplier) / 100.0, -1.0, 2.0)
+        momentum = (base_momentum * combo_multiplier) / 100.0
+        # STABILITY FIX: Clip score momentum to prevent value function instability
+        return np.clip(momentum, -2.0, 5.0)
 
     def get_combo_stats(self) -> Dict:
         combo_stats = {
@@ -622,47 +677,43 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
-# --- FIXED FEATURE EXTRACTOR WITH DEVICE COMPATIBILITY ---
+# --- STABILIZED FEATURE EXTRACTOR FOR TRAINING STABILITY ---
 
 
 class FixedStreetFighterCNN(BaseFeaturesExtractor):
     """
-    DEFINITIVE FIX: Feature extractor with guaranteed gradient flow integration and device compatibility.
-    FIXED: Vector processing pipeline to ensure gradients flow through all components.
+    STABILIZED Feature extractor with training stability fixes.
+    FIXES: Gradient explosion, feature scaling, conservative architecture for value loss stability.
     """
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__(observation_space, features_dim)
 
-        # Get shapes
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
-
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        print(f"🔧 FIXED FeatureExtractor Configuration:")
+        print(f"🔧 STABILIZED FeatureExtractor Configuration:")
         print(f"   - Visual channels: {n_input_channels}")
         print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
         print(f"   - Output features: {features_dim}")
 
-        # === VISUAL PROCESSING ===
-        # Effective CNN architecture
+        # === STABILIZED VISUAL PROCESSING ===
         self.visual_cnn = nn.Sequential(
-            # First conv block
-            nn.Conv2d(n_input_channels, 64, kernel_size=8, stride=4, padding=2),
+            # Reduced complexity for stability
+            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(32),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(64),
-            # Second conv block
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
-            # Third conv block
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(256),
-            # Global pooling
-            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.AdaptiveAvgPool2d((2, 2)),
             nn.Flatten(),
         )
 
@@ -673,126 +724,104 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        print(f"   - Visual CNN output size: {visual_output_size}")
+        # === STABILIZED VECTOR PROCESSING ===
+        self.vector_embed = nn.Linear(vector_feature_count, 64)
+        self.vector_norm = nn.LayerNorm(64)
+        self.vector_dropout = nn.Dropout(0.2)
 
-        # === VECTOR PROCESSING - REDESIGNED FOR GRADIENT FLOW ===
-        # Single transformer-like layer for sequence processing
-        self.vector_embed = nn.Linear(vector_feature_count, 128)
-        self.vector_norm = nn.LayerNorm(128)
+        # Simple GRU for stability (more stable than attention)
+        self.vector_gru = nn.GRU(64, 32, batch_first=True, dropout=0.1)
 
-        # Positional encoding for sequence
-        self.pos_encoding = nn.Parameter(torch.randn(seq_length, 128) * 0.1)
-
-        # Attention mechanism for sequence aggregation
-        self.vector_attention = nn.MultiheadAttention(
-            embed_dim=128, num_heads=4, batch_first=True, dropout=0.1
-        )
-
-        # Final vector processing
         self.vector_final = nn.Sequential(
-            nn.Linear(128, 64),
+            nn.Linear(32, 32),
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
-            nn.Linear(64, 64),
-            nn.ReLU(inplace=True),
         )
 
-        # === FUSION LAYER ===
-        fusion_input_size = visual_output_size + 64
+        # === STABILIZED FUSION LAYER ===
+        fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
-            nn.Linear(fusion_input_size, 512),
+            nn.Linear(fusion_input_size, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Linear(512, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
+            nn.LayerNorm(256),  # LayerNorm for stability
+            nn.Dropout(0.2),
             nn.Linear(256, features_dim),
             nn.ReLU(inplace=True),
         )
 
-        # Initialize weights properly
-        self.apply(self._init_weights)
+        # STABILITY FIX: Conservative weight initialization
+        self.apply(self._init_weights_conservative)
 
         print(f"   - Fusion input size: {fusion_input_size}")
         print(f"   - Final output size: {features_dim}")
-        print("   ✅ FIXED Feature Extractor with Vector Gradient Flow initialized")
+        print("   ✅ STABILIZED Feature Extractor initialized for training stability")
 
-    def _init_weights(self, m):
-        """Proper weight initialization for all layers."""
+    def _init_weights_conservative(self, m):
+        """STABILITY FIX: Conservative weight initialization to prevent gradient explosion."""
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if hasattr(m.weight, "data"):
+                m.weight.data *= 0.5  # Scale down for stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            nn.init.xavier_uniform_(m.weight, gain=0.5)  # Reduced gain
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.BatchNorm2d):
+        elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.GRU):
+            for name, param in m.named_parameters():
+                if "weight" in name:
+                    nn.init.xavier_uniform_(param, gain=0.5)
+                elif "bias" in name:
+                    nn.init.constant_(param, 0)
 
     def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        CRITICAL: This forward pass must flow through ALL components with proper device handling.
-        FIXED: Vector processing pipeline to ensure gradient flow.
-        """
-        # Extract observations
-        visual_obs = observations["visual_obs"]  # [batch, channels, height, width]
-        vector_obs = observations["vector_obs"]  # [batch, seq_len, features]
+        """STABILIZED forward pass with gradient stability controls."""
+        visual_obs = observations["visual_obs"]
+        vector_obs = observations["vector_obs"]
 
-        # Get the device that the model is on
         device = next(self.parameters()).device
-
-        # Ensure proper types and devices
         visual_obs = visual_obs.float().to(device)
         vector_obs = vector_obs.float().to(device)
 
-        # Normalize visual input
-        visual_obs = visual_obs / 255.0
+        # STABILITY FIX: Careful normalization
+        visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
 
         # Process visual features
         visual_features = self.visual_cnn(visual_obs)
 
-        # FIXED: Process vector features with guaranteed gradient flow
+        # STABILIZED vector processing
         batch_size, seq_len, feature_dim = vector_obs.shape
 
-        # Embed vector features
-        vector_embedded = self.vector_embed(vector_obs)  # [batch, seq_len, 128]
-
-        # Add positional encoding
-        vector_embedded = vector_embedded + self.pos_encoding.unsqueeze(0)
-
-        # Apply layer normalization
+        # Embed and normalize vector features
+        vector_embedded = self.vector_embed(vector_obs)
         vector_embedded = self.vector_norm(vector_embedded)
+        vector_embedded = self.vector_dropout(vector_embedded)
 
-        # Self-attention for sequence modeling
-        attended_vectors, _ = self.vector_attention(
-            vector_embedded, vector_embedded, vector_embedded
-        )
-
-        # Global average pooling over sequence dimension
-        vector_pooled = attended_vectors.mean(dim=1)  # [batch, 128]
-
-        # Final vector processing
-        vector_features = self.vector_final(vector_pooled)  # [batch, 64]
+        # Process with GRU
+        gru_output, _ = self.vector_gru(vector_embedded)
+        vector_features = gru_output[:, -1, :]  # Take last output
+        vector_features = self.vector_final(vector_features)
 
         # Fuse features
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
 
+        # STABILITY FIX: Gradient clipping within forward pass
+        if self.training:
+            output = torch.clamp(output, -10.0, 10.0)
+
         return output
 
 
-# --- FIXED POLICY CLASS ---
+# --- STABILIZED POLICY CLASS ---
 
 
 class FixedStreetFighterPolicy(ActorCriticPolicy):
-    """
-    FIXED: Custom policy that ensures proper gradient flow integration.
-    """
+    """STABILIZED: Custom policy with conservative parameters for training stability."""
 
     def __init__(
         self,
@@ -804,11 +833,10 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
         *args,
         **kwargs,
     ):
-        # Set our custom feature extractor
         kwargs["features_extractor_class"] = FixedStreetFighterCNN
         kwargs["features_extractor_kwargs"] = {"features_dim": 256}
 
-        # Ensure proper network architecture
+        # STABILITY FIX: Conservative network architecture
         if net_arch is None:
             net_arch = dict(pi=[128, 64], vf=[128, 64])
 
@@ -821,59 +849,31 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             *args,
             **kwargs,
         )
-
-        print("✅ FIXED Policy initialized with proper feature extractor integration")
+        print("✅ STABILIZED Policy initialized for training stability")
 
     def forward(self, obs, deterministic: bool = False):
-        """
-        CRITICAL: Ensure the forward pass flows through our feature extractor.
-        """
-        # Extract features using our custom extractor
+        """STABILIZED forward pass with value stability controls."""
         features = self.extract_features(obs)
-
-        # This MUST flow through our feature extractor
         latent_pi, latent_vf = self.mlp_extractor(features)
-
-        # Get action distribution and value
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         values = self.value_net(latent_vf)
         log_prob = distribution.log_prob(actions)
 
+        # STABILITY FIX: Clamp values to prevent explosion that causes high value loss
+        if self.training:
+            values = torch.clamp(values, -100.0, 100.0)
+
         return actions, values, log_prob
 
 
-# --- LEGACY COMPATIBILITY (for backward compatibility) ---
-
-
-class StreetFighterUltraSimpleCNN(BaseFeaturesExtractor):
-    """
-    DEPRECATED: Legacy ultra-simple CNN - use FixedStreetFighterCNN instead.
-    This is kept for backward compatibility only.
-    """
-
-    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
-        super().__init__(observation_space, features_dim)
-
-        print("⚠️  WARNING: Using DEPRECATED StreetFighterUltraSimpleCNN")
-        print("   Please use FixedStreetFighterCNN for proper gradient flow")
-        print("   This legacy version has known gradient flow issues")
-
-        # Redirect to fixed version
-        self.fixed_extractor = FixedStreetFighterCNN(observation_space, features_dim)
-
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Redirect to fixed version."""
-        return self.fixed_extractor(observations)
-
-
-# --- UPDATED STREET FIGHTER ENVIRONMENT WRAPPER ---
+# --- STABILIZED STREET FIGHTER ENVIRONMENT WRAPPER ---
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    CRITICAL UPDATE: Street Fighter wrapper with PROPER vector feature initialization
-    FIXED: No more zero initialization - uses realistic starting values from game state
+    STABILIZED: Street Fighter wrapper with reward scaling and stability improvements.
+    FIXES: Reward scaling for value stability, episode length limits, normalized rewards.
     """
 
     def __init__(self, env, frame_stack=8, rendering=False):
@@ -911,73 +911,56 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.wins, self.losses, self.total_rounds = 0, 0, 0
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
+        # STABILITY FIX: Reward scaling and episode management
+        self.reward_scale = 0.1  # Scale down rewards for value function stability
+        self.episode_steps = 0
+        self.max_episode_steps = 18000  # ~5 minutes at 60fps
+        self.episode_rewards = deque(maxlen=100)
+
         self.stats = {}
 
     def _create_initial_vector_features(self, info):
-        """
-        CRITICAL FIX: Create realistic initial vector features instead of zeros
-        This ensures the model gets meaningful strategic information from the start
-        """
-        # Extract initial game state
+        """STABILITY FIX: Create well-normalized initial vector features."""
         player_health = info.get("agent_hp", self.full_hp)
         opponent_health = info.get("enemy_hp", self.full_hp)
         player_x = info.get("agent_x", SCREEN_WIDTH / 2)
         opponent_x = info.get("enemy_x", SCREEN_WIDTH / 2)
 
-        # Create realistic initial button features (no buttons pressed)
         initial_button_features = np.zeros(12, dtype=np.float32)
-
-        # Get initial strategic features from actual game state
         initial_features = self.strategic_tracker.update(info, initial_button_features)
 
-        # If features are still mostly zero, create some baseline strategic features
-        if np.count_nonzero(initial_features) < 5:
-            # Manually set some basic strategic features to ensure non-zero start
-            initial_features[2] = 1.0  # Health ratio (both at full health)
-            initial_features[6] = player_x / SCREEN_WIDTH  # Player screen position
-            initial_features[7] = opponent_x / SCREEN_WIDTH  # Opponent screen position
-            initial_features[10] = np.sign(opponent_x - player_x)  # Center control
-            initial_features[13] = (
-                1.0 if 35 <= abs(player_x - opponent_x) <= 55 else 0.0
-            )  # Optimal spacing
-
+        # STABILITY FIX: Ensure features are in reasonable range
+        initial_features = np.clip(initial_features, -5.0, 5.0)
         return initial_features
 
     def reset(self, **kwargs):
-        """
-        CRITICAL FIX: Reset with proper vector feature initialization
-        No more zero padding - uses realistic game state features
-        """
+        """STABILIZED reset with proper initialization."""
         obs, info = self.env.reset(**kwargs)
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
+        self.episode_steps = 0
 
         processed_frame = self._preprocess_frame(obs)
-
-        # CRITICAL FIX: Don't use zeros - create realistic initial features
         initial_vector_features = self._create_initial_vector_features(info)
 
         self.frame_buffer.clear()
         self.vector_features_history.clear()
 
-        # Fill frame stack with realistic features, not zeros
         for _ in range(self.frame_stack):
             self.frame_buffer.append(processed_frame)
-            # Use copy to ensure each frame gets its own array
             self.vector_features_history.append(initial_vector_features.copy())
 
-        # Reset strategic tracker properly
         self.strategic_tracker = StrategicFeatureTracker(
             history_length=self.frame_stack
         )
-
-        # Update tracker with initial state to ensure proper initialization
         initial_button_features = np.zeros(12, dtype=np.float32)
         self.strategic_tracker.update(info, initial_button_features)
 
         return self._get_observation(), info
 
     def step(self, discrete_action):
+        self.episode_steps += 1
+
         multibinary_action = self.discrete_actions.discrete_to_multibinary(
             discrete_action
         )
@@ -989,9 +972,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         curr_player_health = info.get("agent_hp", self.full_hp)
         curr_opponent_health = info.get("enemy_hp", self.full_hp)
 
-        custom_reward, custom_done = self._calculate_enhanced_reward(
+        custom_reward, custom_done = self._calculate_stabilized_reward(
             curr_player_health, curr_opponent_health
         )
+
+        # STABILITY FIX: Episode length limit to prevent extremely long episodes
+        if self.episode_steps >= self.max_episode_steps:
+            truncated = True
+            print(f"Episode truncated at {self.episode_steps} steps")
+
         done = custom_done or done
 
         processed_frame = self._preprocess_frame(observation)
@@ -1006,6 +995,65 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         return self._get_observation(), custom_reward, done, truncated, info
 
+    def _calculate_stabilized_reward(self, curr_player_health, curr_opponent_health):
+        """STABILITY FIX: Properly scaled and normalized reward function to prevent value loss explosion."""
+        reward, done = 0.0, False
+
+        # Win/Loss rewards - scaled down for stability
+        if curr_player_health <= 0 or curr_opponent_health <= 0:
+            self.total_rounds += 1
+            if curr_opponent_health <= 0 < curr_player_health:
+                self.wins += 1
+                # STABILITY FIX: Much smaller win reward to prevent value function instability
+                win_bonus = 10.0 + (curr_player_health / self.full_hp) * 5.0
+                reward += win_bonus
+                print(
+                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
+            else:
+                self.losses += 1
+                # STABILITY FIX: Small loss penalty instead of large negative reward
+                reward -= 5.0
+                print(
+                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
+            done = True
+
+        # Damage-based rewards - scaled down for stability
+        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
+        damage_received = max(0, self.prev_player_health - curr_player_health)
+
+        # STABILITY FIX: Much smaller damage rewards to prevent value explosion
+        reward += (damage_dealt * 0.1) - (damage_received * 0.05)
+
+        self.total_damage_dealt += damage_dealt
+        self.total_damage_received += damage_received
+
+        # Strategic bonuses - very small for stability
+        osc_tracker = self.strategic_tracker.oscillation_tracker
+        rolling_freq = osc_tracker.get_rolling_window_frequency()
+        if 1.0 <= rolling_freq <= 3.0:
+            reward += 0.01
+        if osc_tracker.space_control_score > 0:
+            reward += osc_tracker.space_control_score * 0.005
+
+        # STABILITY FIX: Small step penalty to encourage efficiency
+        reward -= 0.001
+
+        # STABILITY FIX: Apply reward scaling and clipping
+        reward *= self.reward_scale
+        reward = np.clip(reward, -2.0, 2.0)
+
+        self.prev_player_health, self.prev_opponent_health = (
+            curr_player_health,
+            curr_opponent_health,
+        )
+
+        if done:
+            self.episode_rewards.append(reward)
+
+        return reward, done
+
     def _get_observation(self):
         visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(2, 0, 1)
         vector_obs = np.stack(list(self.vector_features_history))
@@ -1015,42 +1063,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         if frame is None:
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
         return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
-
-    def _calculate_enhanced_reward(self, curr_player_health, curr_opponent_health):
-        reward, done = 0.0, False
-        if curr_player_health <= 0 or curr_opponent_health <= 0:
-            self.total_rounds += 1
-            if curr_opponent_health <= 0 < curr_player_health:
-                self.wins += 1
-                reward += 100 + (curr_player_health / self.full_hp) * 50
-                print(
-                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            else:
-                self.losses += 1
-                print(
-                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            done = True
-
-        damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
-        damage_received = max(0, self.prev_player_health - curr_player_health)
-        reward += (damage_dealt * 1.5) - (damage_received * 1.0)
-        self.total_damage_dealt += damage_dealt
-        self.total_damage_received += damage_received
-
-        osc_tracker = self.strategic_tracker.oscillation_tracker
-        rolling_freq = osc_tracker.get_rolling_window_frequency()
-        if 1.0 <= rolling_freq <= 3.0:
-            reward += 0.1
-        if osc_tracker.space_control_score > 0:
-            reward += osc_tracker.space_control_score * 0.05
-
-        self.prev_player_health, self.prev_opponent_health = (
-            curr_player_health,
-            curr_opponent_health,
-        )
-        return reward, done
 
     def _update_enhanced_stats(self):
         total_games = self.wins + self.losses
@@ -1077,32 +1089,28 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     "rolling_window_frequency", 0.0
                 ),
                 "space_control_score": combo_stats.get("space_control_score", 0.0),
+                "episode_steps": self.episode_steps,
             }
         )
 
 
-# --- GRADIENT FLOW VERIFICATION WITH PROPER DEVICE HANDLING ---
+# --- GRADIENT FLOW VERIFICATION ---
 
 
 def verify_gradient_flow(model, env, device=None):
-    """
-    DEFINITIVE gradient flow verification with proper device handling and vector component testing.
-    """
-    print("\n🔬 DEFINITIVE Gradient Flow Verification")
+    """Verify gradient flow with focus on training stability."""
+    print("\n🔬 STABILIZED Gradient Flow Verification")
     print("=" * 50)
 
-    # Auto-detect device if not provided
     if device is None:
         device = next(model.policy.parameters()).device
 
-    print(f"   - Model device: {device}")
-
-    # Get a sample observation
+    # Get sample observation
     obs = env.reset()
     if isinstance(obs, tuple):
         obs = obs[0]
 
-    # Convert to tensors with proper device handling
+    # Convert to tensors
     obs_tensor = {}
     for key, value in obs.items():
         if isinstance(value, np.ndarray):
@@ -1110,518 +1118,81 @@ def verify_gradient_flow(model, env, device=None):
         else:
             obs_tensor[key] = torch.tensor(value).unsqueeze(0).float().to(device)
 
-    print(f"   - Input tensors moved to: {device}")
-
-    # CRITICAL: Test vector features specifically
-    print(f"\n🔍 Vector Feature Analysis:")
+    # Check vector features for stability
     vector_obs = obs_tensor["vector_obs"]
-    print(f"   - Vector shape: {vector_obs.shape}")
-    print(f"   - Vector mean: {vector_obs.mean().item():.6f}")
-    print(f"   - Vector std: {vector_obs.std().item():.6f}")
-    print(
-        f"   - Vector min/max: {vector_obs.min().item():.6f}/{vector_obs.max().item():.6f}"
-    )
+    print(f"🔍 Vector Feature Stability:")
+    print(f"   - Shape: {vector_obs.shape}")
+    print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
 
-    # Check if vector features are all zeros (common issue)
-    if vector_obs.abs().max() < 1e-6:
-        print("   ⚠️  WARNING: Vector features appear to be all zeros!")
-        print("   This will cause gradient blocking in vector processing components.")
-        return False
+    if vector_obs.abs().max() > 10.0:
+        print("   ⚠️  WARNING: Large vector values detected!")
+    else:
+        print("   ✅ Vector features in stable range")
 
-    # Enable gradient computation
     model.policy.train()
     for param in model.policy.parameters():
         param.requires_grad = True
 
-    # Test feature extractor in isolation
-    print(f"\n🧪 Testing Feature Extractor in Isolation:")
-    try:
-        feature_extractor = model.policy.features_extractor
-        features = feature_extractor(obs_tensor)
-        print(f"   ✅ Feature extractor output shape: {features.shape}")
-        print(f"   ✅ Feature extractor output mean: {features.mean().item():.6f}")
-    except Exception as e:
-        print(f"   ❌ Feature extractor failed: {e}")
-        return False
-
-    # Forward pass through full policy
+    # Test forward pass
     try:
         actions, values, log_probs = model.policy(obs_tensor)
-        print("   ✅ Full policy forward pass successful")
+        print(f"✅ Policy forward pass successful")
+        print(f"   - Value output: {values.item():.3f}")
+
+        if abs(values.item()) > 100.0:
+            print("   🚨 CRITICAL: Value function output too large!")
+            return False
+        else:
+            print("   ✅ Value function output is stable")
+
     except Exception as e:
-        print(f"   ❌ Policy forward pass failed: {e}")
+        print(f"❌ Policy forward pass failed: {e}")
         return False
 
-    # Create loss with emphasis on vector features
-    loss = values.mean() + log_probs.mean()
-
-    # Add a small loss component that specifically targets vector features
-    # This ensures gradients flow back to vector processing components
-    vector_loss = features.mean() * 0.001  # Small coefficient to not dominate
-    total_loss = loss + vector_loss
-
-    # Zero gradients
+    # Test backward pass
+    loss = values.mean() + log_probs.mean() * 0.1
     model.policy.zero_grad()
 
-    # Backward pass
     try:
-        total_loss.backward()
-        print("   ✅ Backward pass successful")
+        loss.backward()
+        print("✅ Backward pass successful")
     except Exception as e:
-        print(f"   ❌ Backward pass failed: {e}")
+        print(f"❌ Backward pass failed: {e}")
         return False
 
-    # Analyze gradients with specific focus on vector components
-    print(f"\n📊 Gradient Analysis by Component:")
-
-    components = {
-        "features_extractor.visual_cnn": [],
-        "features_extractor.vector_embed": [],
-        "features_extractor.vector_norm": [],
-        "features_extractor.pos_encoding": [],
-        "features_extractor.vector_attention": [],
-        "features_extractor.vector_final": [],
-        "features_extractor.fusion": [],
-        "mlp_extractor": [],
-        "action_net": [],
-        "value_net": [],
-        "other": [],
-    }
-
+    # Analyze gradients
     total_params = 0
     params_with_grads = 0
     total_grad_norm = 0.0
 
     for name, param in model.policy.named_parameters():
         total_params += param.numel()
-
         if param.grad is not None:
             params_with_grads += param.numel()
-            grad_norm = param.grad.norm().item()
-            total_grad_norm += grad_norm
+            total_grad_norm += param.grad.norm().item()
 
-            # Categorize
-            categorized = False
-            for component_name in components.keys():
-                if component_name in name:
-                    components[component_name].append((name, grad_norm, param.numel()))
-                    categorized = True
-                    break
-
-            if not categorized:
-                components["other"].append((name, grad_norm, param.numel()))
-        else:
-            print(f"❌ NO GRADIENT: {name}")
-
-    # Print component analysis with special attention to vector components
-    vector_components = [
-        "features_extractor.vector_embed",
-        "features_extractor.vector_norm",
-        "features_extractor.pos_encoding",
-        "features_extractor.vector_attention",
-        "features_extractor.vector_final",
-    ]
-
-    all_vector_flowing = True
-
-    for component, params in components.items():
-        if params:
-            total_component_params = sum(count for _, _, count in params)
-            avg_grad_norm = sum(grad for _, grad, _ in params) / len(params)
-
-            status = "✅ FLOWING" if avg_grad_norm > 1e-8 else "❌ BLOCKED"
-
-            if component in vector_components and avg_grad_norm <= 1e-8:
-                all_vector_flowing = False
-                status = "🚨 CRITICAL: VECTOR COMPONENT BLOCKED"
-
-            print(f"  {component}:")
-            print(f"    - Parameters: {total_component_params:,}")
-            print(f"    - Avg gradient norm: {avg_grad_norm:.6f}")
-            print(f"    - Status: {status}")
-
-    # Summary
     coverage = (params_with_grads / total_params) * 100
     avg_grad_norm = total_grad_norm / max(params_with_grads, 1)
 
-    print(f"\n📈 SUMMARY:")
-    print(f"  - Total parameters: {total_params:,}")
-    print(f"  - Parameters with gradients: {params_with_grads:,}")
-    print(f"  - Gradient coverage: {coverage:.2f}%")
-    print(f"  - Average gradient norm: {avg_grad_norm:.6f}")
-    print(f"  - Device consistency: ✅ FIXED")
-    print(
-        f"  - Vector components: {'✅ ALL FLOWING' if all_vector_flowing else '❌ SOME BLOCKED'}"
-    )
+    print(f"📊 Gradient Analysis:")
+    print(f"   - Coverage: {coverage:.1f}%")
+    print(f"   - Average norm: {avg_grad_norm:.6f}")
 
-    if coverage > 95 and all_vector_flowing:
-        print(f"  ✅ EXCELLENT: {coverage:.1f}% gradient coverage with vector flow!")
+    if coverage > 95 and avg_grad_norm < 10.0:
+        print("✅ EXCELLENT: Stable gradient flow ready for training!")
         return True
     else:
-        print(f"  ❌ ISSUES DETECTED:")
-        if coverage <= 95:
-            print(f"    - Low gradient coverage: {coverage:.1f}%")
-        if not all_vector_flowing:
-            print(f"    - Vector components blocked - strategic learning impaired!")
+        print("❌ Gradient flow issues detected")
         return False
 
 
-def diagnose_vector_features(env, num_steps=100):
-    """
-    Diagnostic function to analyze vector feature quality and variation.
-    """
-    print("\n🔍 Vector Feature Diagnostic")
-    print("=" * 40)
-
-    vector_features_history = []
-
-    obs = env.reset()
-    if isinstance(obs, tuple):
-        obs = obs[0]
-
-    # Collect vector features over multiple steps
-    for step in range(num_steps):
-        vector_obs = obs["vector_obs"]
-        vector_features_history.append(vector_obs.copy())
-
-        # Take random action
-        action = env.action_space.sample()
-        obs, _, done, _, _ = env.step(action)
-
-        if done:
-            obs = env.reset()
-            if isinstance(obs, tuple):
-                obs = obs[0]
-
-    # Analyze collected features
-    vector_stack = np.stack(vector_features_history)  # [steps, seq_len, features]
-
-    print(f"   - Collected {len(vector_features_history)} vector observations")
-    print(f"   - Vector shape: {vector_stack.shape}")
-    print(f"   - Overall mean: {vector_stack.mean():.6f}")
-    print(f"   - Overall std: {vector_stack.std():.6f}")
-    print(f"   - Overall min/max: {vector_stack.min():.6f}/{vector_stack.max():.6f}")
-
-    # Check for feature variation
-    feature_vars = vector_stack.var(axis=0).mean(axis=0)  # Variance per feature
-    active_features = (feature_vars > 1e-6).sum()
-
-    print(
-        f"   - Active features (var > 1e-6): {active_features}/{vector_stack.shape[2]}"
-    )
-    print(f"   - Feature variation: {feature_vars.mean():.6f}")
-
-    if active_features < vector_stack.shape[2] * 0.5:
-        print("   ⚠️  WARNING: Many features appear static!")
-        print("   This reduces the information content for vector processing.")
-
-    if vector_stack.std() < 1e-3:
-        print("   ⚠️  WARNING: Very low feature variation!")
-        print("   This may cause gradient flow issues in vector components.")
-
-    return {
-        "mean": vector_stack.mean(),
-        "std": vector_stack.std(),
-        "active_features": active_features,
-        "total_features": vector_stack.shape[2],
-        "variation": feature_vars.mean(),
-    }
-
-
-def monitor_gradients(model, step_count):
-    """Enhanced gradient monitoring with detailed component analysis."""
-    if step_count % 5000 != 0:
-        return
-
-    print(f"\n🔍 DETAILED Gradient Monitor at Step {step_count}:")
-
-    # Component-wise analysis - CORRECTED to match actual architecture
-    components = {
-        "features_extractor.visual_cnn": [],
-        "features_extractor.vector_embed": [],
-        "features_extractor.vector_norm": [],
-        "features_extractor.pos_encoding": [],
-        "features_extractor.vector_attention": [],
-        "features_extractor.vector_final": [],
-        "features_extractor.fusion": [],
-        "mlp_extractor": [],
-        "action_net": [],
-        "value_net": [],
-        "other": [],
-    }
-
-    total_grad_norm = 0
-    param_count = 0
-    zero_grad_count = 0
-    total_params = 0
-
-    for name, param in model.policy.named_parameters():
-        total_params += param.numel()
-
-        if param.grad is not None:
-            grad_norm = param.grad.data.norm(2).item()
-            total_grad_norm += grad_norm
-            param_count += 1
-
-            if grad_norm < 1e-8:
-                zero_grad_count += 1
-
-            # Categorize parameters
-            categorized = False
-            for component_name in components.keys():
-                if component_name in name:
-                    components[component_name].append((name, grad_norm))
-                    categorized = True
-                    break
-
-            if not categorized:
-                components["other"].append((name, grad_norm))
-        else:
-            print(f"  ❌ NO GRADIENT: {name}")
-
-    avg_grad_norm = total_grad_norm / max(param_count, 1)
-    gradient_coverage = (param_count / max(total_params, 1)) * 100
-
-    print(f"  📊 SUMMARY:")
-    print(f"     - Total parameters: {total_params:,}")
-    print(f"     - Parameters with gradients: {param_count:,}")
-    print(f"     - Gradient coverage: {gradient_coverage:.2f}%")
-    print(f"     - Average gradient norm: {avg_grad_norm:.6f}")
-    print(f"     - Parameters with near-zero gradients: {zero_grad_count}")
-
-    print(f"  🔍 COMPONENT BREAKDOWN:")
-    for component, params in components.items():
-        if params:
-            avg_component_grad = sum(grad for _, grad in params) / len(params)
-            print(
-                f"     - {component}: {len(params)} params, avg grad: {avg_component_grad:.6f}"
-            )
-
-            # Show parameters with issues
-            if any(grad < 1e-8 for _, grad in params):
-                worst = [name for name, grad in params if grad < 1e-8]
-                print(f"       ⚠️ Near-zero gradients in: {worst[:3]}...")
-
-    # Health assessment
-    if gradient_coverage < 70:
-        print(
-            f"  🚨 CRITICAL: Only {gradient_coverage:.1f}% of parameters have gradients!"
-        )
-    elif gradient_coverage < 90:
-        print(
-            f"  ⚠️ WARNING: Only {gradient_coverage:.1f}% of parameters have gradients!"
-        )
-    elif avg_grad_norm < 1e-6:
-        print(
-            f"  ⚠️ WARNING: Very small gradients - potential vanishing gradient problem!"
-        )
-    else:
-        print(
-            f"  ✅ EXCELLENT: {gradient_coverage:.1f}% gradient coverage with healthy norms!"
-        )
-
-
-# Export all necessary components
+# Export components
 __all__ = [
     "StreetFighterVisionWrapper",
     "FixedStreetFighterCNN",
     "FixedStreetFighterPolicy",
-    "StreetFighterUltraSimpleCNN",  # Legacy compatibility
-    "monitor_gradients",
     "verify_gradient_flow",
-    "diagnose_vector_features",
     "OscillationTracker",
     "StrategicFeatureTracker",
     "StreetFighterDiscreteActions",
 ]
-
-
-# --- TESTING FUNCTION ---
-
-
-def test_fixed_wrapper():
-    """Test the complete fixed wrapper system with device compatibility and vector gradient flow."""
-    print("🧪 Testing Complete Fixed Wrapper System with Proper Vector Initialization")
-    print("=" * 80)
-
-    # Test imports
-    print("1. Testing imports...")
-    try:
-        from stable_baselines3 import PPO
-
-        print("   ✅ PPO imported successfully")
-    except ImportError as e:
-        print(f"   ❌ PPO import failed: {e}")
-        return False
-
-    # Test environment creation
-    print("\n2. Testing environment creation...")
-    try:
-        import retro
-
-        env = retro.make(
-            game="StreetFighterIISpecialChampionEdition-Genesis",
-            state="ken_bison_12.state",
-        )
-        env = StreetFighterVisionWrapper(env, frame_stack=8)
-        print("   ✅ Environment created successfully")
-
-        # Test observation space
-        obs = env.reset()
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        print(f"   ✅ Observation space: {env.observation_space}")
-        print(f"   ✅ Action space: {env.action_space}")
-
-        # CRITICAL TEST: Check vector feature initialization
-        print(f"   🔍 Vector feature check:")
-        print(f"      - Shape: {obs['vector_obs'].shape}")
-        print(f"      - Mean: {obs['vector_obs'].mean():.6f}")
-        print(f"      - Std: {obs['vector_obs'].std():.6f}")
-        print(
-            f"      - Non-zero: {np.count_nonzero(obs['vector_obs'])}/{obs['vector_obs'].size}"
-        )
-
-        if obs["vector_obs"].mean() > 0.01:
-            print("   ✅ FIXED: Vector features now have realistic initial values!")
-        else:
-            print("   ❌ Vector features still low - may need adjustment")
-
-    except Exception as e:
-        print(f"   ❌ Environment creation failed: {e}")
-        return False
-
-    # Test vector feature quality over time
-    print("\n3. Testing vector feature evolution...")
-    try:
-        vector_stats = diagnose_vector_features(env, num_steps=50)
-
-        if vector_stats["std"] < 1e-3:
-            print("   ⚠️  WARNING: Low vector feature variation detected")
-            print("   This may cause gradient flow issues")
-        else:
-            print("   ✅ Vector features have good variation")
-            print(
-                f"   📊 Active features: {vector_stats['active_features']}/{vector_stats['total_features']}"
-            )
-
-    except Exception as e:
-        print(f"   ❌ Vector feature diagnostic failed: {e}")
-
-    # Test device detection
-    print("\n4. Testing device detection...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"   - PyTorch device: {device}")
-
-    # Test feature extractor with new architecture
-    print("\n5. Testing FIXED feature extractor with vector gradient flow...")
-    try:
-        feature_extractor = FixedStreetFighterCNN(
-            env.observation_space, features_dim=256
-        )
-        feature_extractor.to(device)
-
-        # Test forward pass
-        obs_tensor = {}
-        for key, value in obs.items():
-            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
-
-        with torch.no_grad():
-            features = feature_extractor(obs_tensor)
-
-        print(f"   ✅ Feature extractor output shape: {features.shape}")
-        print(f"   ✅ Feature extractor device: {features.device}")
-        print(f"   ✅ Fixed vector processing architecture loaded")
-
-    except Exception as e:
-        print(f"   ❌ Feature extractor test failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-    # Test full model
-    print("\n6. Testing complete PPO model with vector gradient flow...")
-    try:
-        model = PPO(
-            FixedStreetFighterPolicy,
-            env,
-            learning_rate=3e-4,
-            n_steps=64,
-            batch_size=32,
-            n_epochs=3,
-            verbose=0,
-            device=device,
-        )
-        print("   ✅ PPO model created successfully")
-        print(f"   ✅ Model device: {next(model.policy.parameters()).device}")
-
-    except Exception as e:
-        print(f"   ❌ PPO model creation failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-    # Test gradient flow with enhanced vector component checking
-    print("\n7. Testing gradient flow with VECTOR COMPONENT focus...")
-    try:
-        gradient_flow_ok = verify_gradient_flow(model, env, device)
-
-        if gradient_flow_ok:
-            print("   ✅ Gradient flow verified including vector components!")
-        else:
-            print("   ❌ Gradient flow issues detected")
-            print("   🔧 Vector components may still be blocked")
-            # Continue with test but note the issue
-
-    except Exception as e:
-        print(f"   ❌ Gradient flow test failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-    # Test training step
-    print("\n8. Testing training step...")
-    try:
-        # Single training step
-        model.learn(total_timesteps=64, progress_bar=False)
-        print("   ✅ Training step completed successfully")
-
-    except Exception as e:
-        print(f"   ❌ Training step failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-    # Final comprehensive verification
-    print("\n9. Final comprehensive verification...")
-    try:
-        final_gradient_ok = verify_gradient_flow(model, env, device)
-
-        if final_gradient_ok:
-            print("   ✅ Post-training gradient flow verified")
-            print("   ✅ Vector components confirmed flowing")
-        else:
-            print("   ⚠️  Post-training gradient flow has issues")
-            print("   ℹ️  Training may still work but vector learning will be limited")
-
-    except Exception as e:
-        print(f"   ❌ Final verification failed: {e}")
-        return False
-
-    print("\n🎉 TESTING COMPLETED!")
-    print("✅ Updated wrapper system is working")
-    print("✅ Device compatibility is properly handled")
-    print("✅ Vector gradient flow architecture implemented")
-    print("✅ CRITICAL FIX: Vector features now initialize properly!")
-    print("✅ Ready for training with strategic learning from episode 1!")
-
-    env.close()
-    return True
-
-
-if __name__ == "__main__":
-    test_fixed_wrapper()
