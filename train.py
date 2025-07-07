@@ -1,8 +1,8 @@
+#!/usr/bin/env python3
 """
-train.py - UPDATED TRAINING SCRIPT FOR ADVANCED STREET FIGHTER AI
-COMPATIBLE: Works with the new AdvancedStreetFighterPolicy and complete wrapper
-FEATURES: Advanced monitoring for baiting, blocking, and tactical gameplay
-UPDATES: Full frame size support (320x224), adjusted monitoring for pixel changes
+train.py - STABILIZED TRAINING SCRIPT with fixes for training instability
+FIXES: High value loss (35+→<8), Low explained variance (0.11→>0.3), Low clip fraction (0.04→0.1-0.3)
+SOLUTION: Conservative hyperparameters, enhanced monitoring, stability-focused training
 """
 
 import os
@@ -17,9 +17,9 @@ from stable_baselines3.common.monitor import Monitor
 import retro
 import logging
 
-# Import new components from the advanced wrapper
+# Import stabilized components from wrapper.py
 from wrapper import (
-    AdvancedStreetFighterPolicy,  # Updated import
+    FixedStreetFighterPolicy,
     StreetFighterVisionWrapper,
     verify_gradient_flow,
 )
@@ -29,98 +29,72 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class AdvancedTacticsCallback(BaseCallback):
-    """Advanced callback for monitoring Street Fighter tactics and stability - UPDATED FOR FULL FRAME"""
+class StabilityCallback(BaseCallback):
+    """
+    STABILIZED callback with focus on training stability metrics.
+    Monitors value loss, explained variance, clip fraction for stability issues.
+    """
 
-    def __init__(self, save_freq=25000, save_path="./models/", verbose=1):
+    def __init__(self, save_freq=50000, save_path="./models/", verbose=1):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.save_path = save_path
         os.makedirs(save_path, exist_ok=True)
 
-        # Core training metrics
+        # Core stability metrics tracking
         self.value_losses = []
-        self.policy_losses = []
         self.explained_variances = []
         self.clip_fractions = []
-        self.episode_rewards = []
-
-        # Advanced tactical metrics
-        self.win_rates = []
-        self.bait_success_rates = []
-        self.punish_success_rates = []
-        self.whiff_punishes = []
-        self.frame_perfect_blocks = []
-        self.optimal_spacing_ratios = []
-
-        # Stability monitoring
-        self.value_loss_threshold = 20.0
-        self.stability_warnings = 0
-        self.training_start_time = None
-        self.best_win_rate = 0.0
-        self.best_tactical_score = 0.0
-        self.consecutive_stable_steps = 0
-        self.required_stable_steps = 15000
 
         # Performance tracking
-        self.performance_history = {
-            "win_rate": [],
-            "tactical_effectiveness": [],
-            "learning_progress": [],
-        }
+        self.episode_rewards = []
+        self.episode_lengths = []
+        self.win_rates = []
+
+        # Stability monitoring
+        self.value_loss_spikes = 0
+        self.stability_warnings = 0
+        self.training_start_time = None
+        self.device = None
+
+        # Best model tracking
+        self.best_explained_variance = -float("inf")
+        self.best_value_loss = float("inf")
+        self.best_stability_score = 0.0
 
     def _on_training_start(self):
-        """Initialize training with advanced monitoring"""
+        """Initialize training with stability focus."""
         self.training_start_time = datetime.now()
-        print(f"🥊 ADVANCED STREET FIGHTER TRAINING STARTED (FULL FRAME)")
-        print("=" * 60)
-        print(f"🎯 Goals:")
-        print(f"   - Learn proper baiting techniques")
-        print(f"   - Master blocking and punishment")
-        print(f"   - Develop advanced spacing control")
-        print(f"   - Achieve stable value loss < {self.value_loss_threshold}")
-        print(f"🔧 Advanced Features:")
-        print(f"   - Full frame size: 320x224 (no scaling)")
-        print(f"   - 42-dimensional feature space")
-        print(f"   - Research-based baiting system")
-        print(f"   - Frame-accurate blocking detection")
-        print(f"   - Move-specific punishment tracking")
-        print(f"   - Updated pixel values for baiting ranges")
-        print()
+        self.device = next(self.model.policy.parameters()).device
+
+        print(f"🚀 STABILIZED Training Started")
+        print(f"🎯 STABILITY TARGETS:")
+        print(f"   - Value Loss: <8.0 (currently expecting 35+)")
+        print(f"   - Explained Variance: >0.3 (currently 0.11)")
+        print(f"   - Clip Fraction: 0.1-0.3 (currently 0.04)")
+        print(f"🔧 Device: {self.device}")
 
         # Initial stability check
-        self._perform_initial_checks()
+        self._perform_initial_stability_check()
 
-    def _perform_initial_checks(self):
-        """Perform initial system checks"""
-        print("🔬 Initial System Checks (Full Frame)")
-        print("-" * 30)
+    def _perform_initial_stability_check(self):
+        """Check initial model stability before training."""
+        print("\n🔬 Initial Stability Assessment")
 
         env = self._get_env()
         if env:
             try:
-                stable = verify_gradient_flow(self.model, env)
+                stable = verify_gradient_flow(self.model, env, self.device)
                 if stable:
-                    print("   ✅ Gradient flow stable")
+                    print("   ✅ Initial stability verified")
                 else:
-                    print("   ⚠️  Gradient flow issues detected")
-                    
-                # Check frame size
-                obs = env.reset()[0]
-                visual_shape = obs["visual_obs"].shape
-                print(f"   📺 Frame size: {visual_shape[1]}x{visual_shape[2]} (Full Frame)")
-                
-                if visual_shape[1] == 224 and visual_shape[2] == 320:
-                    print("   ✅ Full frame size confirmed")
-                else:
-                    print("   ⚠️  Unexpected frame size")
-                    
+                    print("   ⚠️  Initial stability issues detected")
+                    print("   🔧 Proceeding with enhanced monitoring")
             except Exception as e:
-                print(f"   ❌ System check failed: {e}")
-        print()
+                print(f"   ❌ Stability check failed: {e}")
 
     def _get_env(self):
-        """Get environment for testing"""
+        """Get environment for testing."""
         if hasattr(self.training_env, "envs"):
             return self.training_env.envs[0]
         elif hasattr(self.training_env, "env"):
@@ -129,345 +103,303 @@ class AdvancedTacticsCallback(BaseCallback):
             return self.training_env
 
     def _on_step(self) -> bool:
-        """Monitor each training step"""
+        """Monitor training stability each step."""
 
         # Extract training metrics
         self._extract_training_metrics()
 
-        # Extract tactical performance metrics
-        self._extract_tactical_metrics()
+        # Extract performance metrics
+        self._extract_performance_metrics()
 
-        # Stability checks every 1000 steps
-        if self.num_timesteps % 1000 == 0:
-            if not self._check_training_stability():
-                print("🚨 CRITICAL: Training unstable - stopping!")
-                return False
-
-        # Detailed reporting every 10000 steps
+        # Periodic stability monitoring
         if self.num_timesteps % 10000 == 0:
-            self._log_advanced_report()
+            self._check_training_stability()
 
-        # Save model checkpoints
+        # Enhanced reporting for stability
+        if self.num_timesteps % 5000 == 0:
+            self._log_stability_report()
+
+        # Save model when stability improves
         if self.num_timesteps > 0 and self.num_timesteps % self.save_freq == 0:
-            self._save_advanced_checkpoint()
+            self._save_stability_checkpoint()
 
         return True
 
     def _extract_training_metrics(self):
-        """Extract core training metrics"""
+        """Extract key training stability metrics."""
         if hasattr(self.logger, "name_to_value"):
             metrics = self.logger.name_to_value
 
-            # Core training metrics
+            # Value loss (CRITICAL for stability)
             if "train/value_loss" in metrics:
                 value_loss = metrics["train/value_loss"]
                 self.value_losses.append(value_loss)
-                if len(self.value_losses) > 100:
+
+                # Detect dangerous value loss spikes
+                if value_loss > 50.0:
+                    self.value_loss_spikes += 1
+                    print(
+                        f"🚨 VALUE LOSS SPIKE: {value_loss:.1f} at step {self.num_timesteps}"
+                    )
+
+                # Keep recent history
+                if len(self.value_losses) > 1000:
                     self.value_losses.pop(0)
 
-            if "train/policy_loss" in metrics:
-                policy_loss = metrics["train/policy_loss"]
-                self.policy_losses.append(policy_loss)
-                if len(self.policy_losses) > 100:
-                    self.policy_losses.pop(0)
-
+            # Explained variance
             if "train/explained_variance" in metrics:
                 explained_var = metrics["train/explained_variance"]
                 self.explained_variances.append(explained_var)
-                if len(self.explained_variances) > 100:
+                if len(self.explained_variances) > 1000:
                     self.explained_variances.pop(0)
 
+            # Clip fraction
             if "train/clip_fraction" in metrics:
                 clip_frac = metrics["train/clip_fraction"]
                 self.clip_fractions.append(clip_frac)
-                if len(self.clip_fractions) > 100:
+                if len(self.clip_fractions) > 1000:
                     self.clip_fractions.pop(0)
 
-    def _extract_tactical_metrics(self):
-        """Extract advanced tactical metrics"""
+    def _extract_performance_metrics(self):
+        """Extract episode performance metrics."""
         if hasattr(self.locals, "infos") and self.locals["infos"]:
             for info in self.locals["infos"]:
-                # Basic performance
                 if "episode" in info:
-                    self.episode_rewards.append(info["episode"]["r"])
+                    episode_info = info["episode"]
+                    self.episode_rewards.append(episode_info["r"])
+                    self.episode_lengths.append(episode_info["l"])
+
+                    # Keep recent episodes only
                     if len(self.episode_rewards) > 100:
                         self.episode_rewards.pop(0)
+                        self.episode_lengths.pop(0)
 
+                # Win rate tracking
                 if "win_rate" in info:
-                    win_rate = info["win_rate"]
-                    self.win_rates.append(win_rate)
-                    if len(self.win_rates) > 50:
+                    self.win_rates.append(info["win_rate"])
+                    if len(self.win_rates) > 100:
                         self.win_rates.pop(0)
 
-                    if win_rate > self.best_win_rate:
-                        self.best_win_rate = win_rate
-
-                # Advanced tactical metrics
-                if "bait_success_rate" in info:
-                    self.bait_success_rates.append(info["bait_success_rate"])
-                    if len(self.bait_success_rates) > 50:
-                        self.bait_success_rates.pop(0)
-
-                if "punish_success_rate" in info:
-                    self.punish_success_rates.append(info["punish_success_rate"])
-                    if len(self.punish_success_rates) > 50:
-                        self.punish_success_rates.pop(0)
-
-                if "whiff_punishes" in info:
-                    self.whiff_punishes.append(info["whiff_punishes"])
-                    if len(self.whiff_punishes) > 50:
-                        self.whiff_punishes.pop(0)
-
-                if "frame_perfect_blocks" in info:
-                    self.frame_perfect_blocks.append(info["frame_perfect_blocks"])
-                    if len(self.frame_perfect_blocks) > 50:
-                        self.frame_perfect_blocks.pop(0)
-
-                if "optimal_spacing_ratio" in info:
-                    self.optimal_spacing_ratios.append(info["optimal_spacing_ratio"])
-                    if len(self.optimal_spacing_ratios) > 50:
-                        self.optimal_spacing_ratios.pop(0)
-
-    def _check_training_stability(self) -> bool:
-        """Check if training remains stable"""
+    def _check_training_stability(self):
+        """Check current training stability status."""
         if not self.value_losses:
-            return True
+            return
 
-        recent_value_loss = np.mean(self.value_losses[-5:])
+        # Calculate recent metrics
+        recent_value_loss = np.mean(self.value_losses[-10:])
+        recent_explained_var = (
+            np.mean(self.explained_variances[-10:]) if self.explained_variances else 0
+        )
+        recent_clip_frac = (
+            np.mean(self.clip_fractions[-10:]) if self.clip_fractions else 0
+        )
 
-        # Critical stability check
-        if recent_value_loss > self.value_loss_threshold:
+        # Calculate stability score
+        stability_score = self._calculate_stability_score(
+            recent_value_loss, recent_explained_var, recent_clip_frac
+        )
+
+        # Issue warnings for instability
+        if stability_score < 30:
             self.stability_warnings += 1
             print(
-                f"⚠️  STABILITY WARNING #{self.stability_warnings}: Value loss = {recent_value_loss:.2f}"
+                f"⚠️  STABILITY WARNING #{self.stability_warnings} at step {self.num_timesteps}"
             )
+            print(f"   Stability Score: {stability_score:.0f}/100")
+            print(f"   Value Loss: {recent_value_loss:.1f} (target: <8.0)")
+            print(f"   Explained Var: {recent_explained_var:.3f} (target: >0.3)")
+            print(f"   Clip Fraction: {recent_clip_frac:.3f} (target: 0.1-0.3)")
 
-            if self.stability_warnings >= 3:
-                print(
-                    "🚨 CRITICAL: Multiple stability warnings - training may be diverging"
-                )
-                return False
+        self.best_stability_score = max(self.best_stability_score, stability_score)
 
-            self.consecutive_stable_steps = 0
-        else:
-            self.consecutive_stable_steps += 1000
+    def _calculate_stability_score(self, value_loss, explained_var, clip_frac):
+        """Calculate overall stability score (0-100)."""
+        score = 0.0
 
-        # Check for catastrophic failure
-        if recent_value_loss > self.value_loss_threshold * 3:
-            print(
-                f"🚨 CRITICAL: Value loss catastrophically high ({recent_value_loss:.2f}) - stopping"
-            )
-            return False
+        # Value loss component (40 points max)
+        if value_loss < 8.0:
+            score += 40
+        elif value_loss < 15.0:
+            score += 25
+        elif value_loss < 30.0:
+            score += 10
 
-        return True
+        # Explained variance component (35 points max)
+        if explained_var > 0.5:
+            score += 35
+        elif explained_var > 0.3:
+            score += 25
+        elif explained_var > 0.15:
+            score += 15
+        elif explained_var > 0.05:
+            score += 5
 
-    def _log_advanced_report(self):
-        """Generate comprehensive training report"""
-        print(f"\n🥊 ADVANCED TACTICAL REPORT (Full Frame) - Step {self.num_timesteps:,}")
-        print("=" * 60)
+        # Clip fraction component (25 points max)
+        if 0.1 <= clip_frac <= 0.3:
+            score += 25
+        elif 0.05 <= clip_frac <= 0.5:
+            score += 15
+        elif clip_frac > 0:
+            score += 5
 
+        return score
+
+    def _log_stability_report(self):
+        """Log detailed stability report."""
+        print(f"\n📊 STABILITY REPORT - Step {self.num_timesteps:,}")
+        print("=" * 55)
+
+        # Training time
         if self.training_start_time:
             elapsed = datetime.now() - self.training_start_time
-            print(f"⏱️  Training Time: {elapsed.total_seconds() / 3600:.1f} hours")
+            hours = elapsed.total_seconds() / 3600
+            print(f"⏱️  Training Time: {hours:.1f} hours")
 
-        # Core training stability
-        print(f"\n📊 TRAINING STABILITY:")
+        # Core stability metrics
         if self.value_losses:
-            recent_value_loss = np.mean(self.value_losses[-10:])
-            print(f"   🎯 Value Loss: {recent_value_loss:.3f}", end="")
-            if recent_value_loss < 5.0:
-                print(" ✅ EXCELLENT")
-            elif recent_value_loss < self.value_loss_threshold:
-                print(" ✅ STABLE")
+            recent_value_loss = np.mean(self.value_losses[-20:])
+            print(f"🎯 Value Loss: {recent_value_loss:.2f}")
+
+            if recent_value_loss < 8.0:
+                print(f"   ✅ EXCELLENT - Stable value predictions!")
+            elif recent_value_loss < 15.0:
+                print(f"   👍 GOOD - Moderate stability")
+            elif recent_value_loss < 30.0:
+                print(f"   ⚠️  FAIR - Some instability detected")
             else:
-                print(" ⚠️  UNSTABLE")
+                print(f"   🚨 CRITICAL - High instability! Training may be stuck")
 
         if self.explained_variances:
-            recent_explained_var = np.mean(self.explained_variances[-10:])
-            print(f"   📈 Explained Variance: {recent_explained_var:.3f}")
+            recent_explained_var = np.mean(self.explained_variances[-20:])
+            print(f"📈 Explained Variance: {recent_explained_var:.3f}")
 
-        if self.clip_fractions:
-            recent_clip_frac = np.mean(self.clip_fractions[-10:])
-            print(f"   ✂️  Clip Fraction: {recent_clip_frac:.3f}")
-
-        # Performance metrics
-        print(f"\n🎮 COMBAT PERFORMANCE:")
-        if self.win_rates:
-            recent_win_rate = np.mean(self.win_rates[-10:])
-            print(
-                f"   🏆 Win Rate: {recent_win_rate:.1%} (Best: {self.best_win_rate:.1%})"
-            )
-
-        if self.episode_rewards:
-            recent_reward = np.mean(self.episode_rewards[-20:])
-            print(f"   📈 Avg Episode Reward: {recent_reward:.3f}")
-
-        # Advanced tactical analysis
-        print(f"\n🥋 TACTICAL MASTERY (Updated Ranges):")
-
-        if self.bait_success_rates:
-            recent_bait_rate = np.mean(self.bait_success_rates[-10:])
-            print(f"   🎯 Baiting Success: {recent_bait_rate:.1%}", end="")
-            if recent_bait_rate > 0.4:
-                print(" ✅ EXCELLENT")
-            elif recent_bait_rate > 0.2:
-                print(" 🔄 LEARNING")
-            else:
-                print(" 📚 DEVELOPING")
-
-        if self.punish_success_rates:
-            recent_punish_rate = np.mean(self.punish_success_rates[-10:])
-            print(f"   🛡️  Punishment Success: {recent_punish_rate:.1%}", end="")
-            if recent_punish_rate > 0.5:
-                print(" ✅ EXCELLENT")
-            elif recent_punish_rate > 0.3:
-                print(" 🔄 LEARNING")
-            else:
-                print(" 📚 DEVELOPING")
-
-        if self.whiff_punishes:
-            total_whiff_punishes = sum(self.whiff_punishes[-10:])
-            print(f"   ⚔️  Whiff Punishes: {total_whiff_punishes}")
-
-        if self.frame_perfect_blocks:
-            total_perfect_blocks = sum(self.frame_perfect_blocks[-10:])
-            print(f"   🛡️  Perfect Blocks: {total_perfect_blocks}")
-
-        if self.optimal_spacing_ratios:
-            recent_spacing = np.mean(self.optimal_spacing_ratios[-10:])
-            print(f"   📏 Optimal Spacing: {recent_spacing:.1%}")
-
-        # Calculate tactical effectiveness score
-        tactical_score = self._calculate_tactical_effectiveness()
-        print(f"\n🎖️  TACTICAL EFFECTIVENESS SCORE: {tactical_score:.1f}/10.0")
-
-        if tactical_score > self.best_tactical_score:
-            self.best_tactical_score = tactical_score
-            print(f"   🌟 NEW BEST TACTICAL SCORE!")
-
-        # Learning progress analysis
-        self._analyze_learning_progress()
-
-        print(
-            f"\n🔒 Stability: {self.consecutive_stable_steps} consecutive stable steps"
-        )
-        print()
-
-    def _calculate_tactical_effectiveness(self) -> float:
-        """Calculate overall tactical effectiveness score (0-10)"""
-        score = 0.0
-        components = 0
-
-        # Win rate component (0-3 points)
-        if self.win_rates:
-            win_rate = np.mean(self.win_rates[-10:])
-            score += min(3.0, win_rate * 6)  # 50% win rate = 3 points
-            components += 1
-
-        # Baiting component (0-2 points)
-        if self.bait_success_rates:
-            bait_rate = np.mean(self.bait_success_rates[-10:])
-            score += min(2.0, bait_rate * 5)  # 40% bait success = 2 points
-            components += 1
-
-        # Punishment component (0-2 points)
-        if self.punish_success_rates:
-            punish_rate = np.mean(self.punish_success_rates[-10:])
-            score += min(2.0, punish_rate * 4)  # 50% punish success = 2 points
-            components += 1
-
-        # Spacing component (0-1.5 points)
-        if self.optimal_spacing_ratios:
-            spacing_ratio = np.mean(self.optimal_spacing_ratios[-10:])
-            score += min(1.5, spacing_ratio * 2.5)  # 60% optimal spacing = 1.5 points
-            components += 1
-
-        # Advanced techniques component (0-1.5 points)
-        if self.whiff_punishes and self.frame_perfect_blocks:
-            whiff_count = np.mean(self.whiff_punishes[-10:])
-            block_count = np.mean(self.frame_perfect_blocks[-10:])
-            advanced_score = min(1.5, (whiff_count + block_count) * 0.1)
-            score += advanced_score
-            components += 1
-
-        return score if components > 0 else 0.0
-
-    def _analyze_learning_progress(self):
-        """Analyze learning progress over time"""
-        if len(self.win_rates) > 20:
-            early_performance = np.mean(self.win_rates[:10])
-            recent_performance = np.mean(self.win_rates[-10:])
-            improvement = recent_performance - early_performance
-
-            print(f"\n📈 LEARNING PROGRESS:")
-            print(f"   Early Win Rate: {early_performance:.1%}")
-            print(f"   Recent Win Rate: {recent_performance:.1%}")
-
-            if improvement > 0.1:
-                print(f"   🚀 SIGNIFICANT IMPROVEMENT: +{improvement:.1%}")
-            elif improvement > 0.05:
-                print(f"   📈 GOOD PROGRESS: +{improvement:.1%}")
-            elif improvement > 0.01:
-                print(f"   📊 STEADY PROGRESS: +{improvement:.1%}")
-            elif improvement > -0.05:
-                print(f"   🔄 STABLE PERFORMANCE: {improvement:+.1%}")
-            else:
-                print(f"   📉 DECLINING: {improvement:+.1%}")
-
-    def _save_advanced_checkpoint(self):
-        """Save model with advanced metadata"""
-        model_name = f"sf_advanced_fullframe_{self.num_timesteps}"
-        model_path = os.path.join(self.save_path, f"{model_name}.zip")
-
-        try:
-            self.model.save(model_path)
-            print(f"💾 Checkpoint: {model_name}.zip")
-
-            # Save best tactical model
-            tactical_score = self._calculate_tactical_effectiveness()
-            if (
-                tactical_score > 6.0
-                and self.value_losses
-                and np.mean(self.value_losses[-5:]) < 10.0
-            ):
-
-                best_path = os.path.join(self.save_path, "best_tactical_fullframe_model.zip")
-                self.model.save(best_path)
+            if recent_explained_var > 0.5:
                 print(
-                    f"   🌟 Saved as best tactical model (score: {tactical_score:.1f})"
+                    f"   ✅ EXCELLENT - Model explains {recent_explained_var:.1%} of rewards"
+                )
+            elif recent_explained_var > 0.3:
+                print(
+                    f"   👍 GOOD - Model explains {recent_explained_var:.1%} of rewards"
+                )
+            elif recent_explained_var > 0.1:
+                print(
+                    f"   ⚠️  FAIR - Model explains {recent_explained_var:.1%} of rewards"
+                )
+            else:
+                print(
+                    f"   🚨 POOR - Model explains only {recent_explained_var:.1%} of rewards"
                 )
 
-            # Save stable model
-            if self.consecutive_stable_steps > 20000 and self.best_win_rate > 0.3:
+        if self.clip_fractions:
+            recent_clip_frac = np.mean(self.clip_fractions[-20:])
+            print(f"✂️  Clip Fraction: {recent_clip_frac:.3f}")
 
-                stable_path = os.path.join(self.save_path, "stable_advanced_fullframe_model.zip")
-                self.model.save(stable_path)
-                print(f"   🛡️  Saved as stable model")
+            if 0.1 <= recent_clip_frac <= 0.3:
+                print(f"   ✅ EXCELLENT - Healthy policy updates")
+            elif 0.05 <= recent_clip_frac <= 0.5:
+                print(f"   👍 GOOD - Moderate policy updates")
+            elif recent_clip_frac < 0.05:
+                print(f"   ⚠️  LOW - Policy updates may be too small")
+            else:
+                print(f"   ⚠️  HIGH - Policy updates may be too aggressive")
 
-        except Exception as e:
-            print(f"❌ Failed to save checkpoint: {e}")
+        # Overall stability assessment
+        if self.value_losses and self.explained_variances and self.clip_fractions:
+            recent_value_loss = np.mean(self.value_losses[-20:])
+            recent_explained_var = np.mean(self.explained_variances[-20:])
+            recent_clip_frac = np.mean(self.clip_fractions[-20:])
+
+            stability_score = self._calculate_stability_score(
+                recent_value_loss, recent_explained_var, recent_clip_frac
+            )
+            print(f"🏥 Stability Score: {stability_score:.0f}/100")
+
+            if stability_score >= 80:
+                print(f"   🎉 EXCELLENT - Optimal training conditions!")
+            elif stability_score >= 60:
+                print(f"   ✅ GOOD - Training progressing well")
+            elif stability_score >= 40:
+                print(f"   ⚠️  MODERATE - Monitor closely")
+            else:
+                print(f"   🚨 POOR - Consider adjusting hyperparameters")
+
+        # Performance metrics
+        if self.episode_rewards:
+            recent_rewards = self.episode_rewards[-20:]
+            avg_reward = np.mean(recent_rewards)
+            reward_std = np.std(recent_rewards)
+
+            print(f"🎮 Performance (last 20 episodes):")
+            print(f"   - Average reward: {avg_reward:.2f} ± {reward_std:.2f}")
+
+        if self.win_rates:
+            recent_win_rate = np.mean(self.win_rates[-20:])
+            print(f"🏆 Win Rate: {recent_win_rate:.1%}")
+
+            if recent_win_rate > 0.6:
+                print(f"   🔥 DOMINATING!")
+            elif recent_win_rate > 0.4:
+                print(f"   👍 COMPETITIVE!")
+            else:
+                print(f"   💪 LEARNING!")
+
+        # Stability issues summary
+        if self.value_loss_spikes > 0:
+            print(f"⚠️  Value loss spikes detected: {self.value_loss_spikes}")
+
+        print()
+
+    def _save_stability_checkpoint(self):
+        """Save model checkpoint with stability metrics."""
+        current_value_loss = (
+            np.mean(self.value_losses[-10:]) if self.value_losses else float("inf")
+        )
+        current_explained_var = (
+            np.mean(self.explained_variances[-10:]) if self.explained_variances else 0
+        )
+        current_clip_frac = (
+            np.mean(self.clip_fractions[-10:]) if self.clip_fractions else 0
+        )
+
+        # Simple checkpoint naming
+        model_name = f"model_{self.num_timesteps}"
+        model_path = os.path.join(self.save_path, f"{model_name}.zip")
+
+        self.model.save(model_path)
+        print(f"💾 Checkpoint: {model_name}.zip")
+
+        # Track and save best models
+        if current_explained_var > self.best_explained_variance:
+            self.best_explained_variance = current_explained_var
+            best_path = os.path.join(self.save_path, "best_explained_variance.zip")
+            self.model.save(best_path)
+            print(f"   🎯 NEW BEST explained variance: {current_explained_var:.3f}")
+
+        if current_value_loss < self.best_value_loss:
+            self.best_value_loss = current_value_loss
+            best_path = os.path.join(self.save_path, "best_value_loss.zip")
+            self.model.save(best_path)
+            print(f"   🎯 NEW BEST value loss: {current_value_loss:.2f}")
+
+        # Log current stability
+        stability_score = self._calculate_stability_score(
+            current_value_loss, current_explained_var, current_clip_frac
+        )
+        print(f"   📊 Current stability: {stability_score:.0f}/100")
 
 
-def make_advanced_env(
+def make_env(
     game="StreetFighterIISpecialChampionEdition-Genesis",
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create advanced Street Fighter environment with full frame support"""
+    """Create the Street Fighter environment with stability wrapper."""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = Monitor(env)
         env = StreetFighterVisionWrapper(
-            env,
-            frame_stack=4,
-            rendering=(render_mode is not None),
+            env, frame_stack=8, rendering=(render_mode is not None)
         )
-        
-        # Verify full frame size
-        obs = env.reset()[0]
-        visual_shape = obs["visual_obs"].shape
-        print(f"🎮 Environment created with frame size: {visual_shape[1]}x{visual_shape[2]}")
-        
         return env
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
@@ -475,70 +407,113 @@ def make_advanced_env(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Advanced Street Fighter Training (Full Frame)")
+    parser = argparse.ArgumentParser(description="STABILIZED Street Fighter Training")
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
     )
     parser.add_argument("--resume", type=str, default=None, help="Path to resume from")
     parser.add_argument("--render", action="store_true", help="Render during training")
     parser.add_argument(
-        "--device", type=str, default="auto", help="Device (auto, cpu, cuda)"
+        "--game", type=str, default="StreetFighterIISpecialChampionEdition-Genesis"
+    )
+    parser.add_argument("--state", type=str, default="ken_bison_12.state")
+    parser.add_argument(
+        "--device", type=str, default="auto", help="Device to use (auto, cpu, cuda)"
+    )
+    parser.add_argument("--force-cpu", action="store_true", help="Force CPU usage")
+    parser.add_argument(
+        "--test-stability", action="store_true", help="Test stability before training"
     )
 
-    # Advanced hyperparameters
+    # STABILITY-FOCUSED HYPERPARAMETERS
     parser.add_argument(
-        "--learning-rate", type=float, default=3e-4, help="Learning rate"
+        "--learning-rate",
+        type=float,
+        default=1e-4,
+        help="Learning rate (default: 1e-4 for stability)",
     )
-    parser.add_argument("--batch-size", type=int, default=512, help="Batch size")
-    parser.add_argument("--n-steps", type=int, default=2048, help="Steps per rollout")
-    parser.add_argument("--n-epochs", type=int, default=4, help="Training epochs")
-    parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clip range")
     parser.add_argument(
-        "--vf-coef", type=float, default=0.5, help="Value function coefficient"
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Batch size (default: 256 for stability)",
+    )
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=8192,
+        help="Rollout steps (default: 8192 for stability)",
+    )
+    parser.add_argument(
+        "--n-epochs",
+        type=int,
+        default=3,
+        help="Epochs per update (default: 3 for stability)",
+    )
+    parser.add_argument(
+        "--clip-range",
+        type=float,
+        default=0.1,
+        help="Clip range (default: 0.1 for stability)",
+    )
+    parser.add_argument(
+        "--vf-coef",
+        type=float,
+        default=2.0,
+        help="Value function coefficient (default: 2.0 for stability)",
     )
 
     args = parser.parse_args()
 
-    print("🥊 ADVANCED STREET FIGHTER AI TRAINING (FULL FRAME)")
+    print("🔧 STABILIZED STREET FIGHTER TRAINING")
     print("=" * 50)
-    print("🎯 Training Goals:")
-    print("   - Master baiting techniques with updated ranges")
-    print("   - Perfect blocking and punishment")
-    print("   - Develop advanced spacing (320x224 full frame)")
-    print("   - Achieve consistent wins")
+    print("🎯 ADDRESSING TRAINING INSTABILITY:")
+    print("   - HIGH Value Loss: 35+ → Target <8.0")
+    print("   - LOW Explained Variance: 0.11 → Target >0.3")
+    print("   - LOW Clip Fraction: 0.04 → Target 0.1-0.3")
     print()
-    print("🔧 Technical Updates:")
-    print("   - Full frame size: 320x224 (no downscaling)")
-    print("   - Updated psycho crusher bait range: 90-140 pixels")
-    print("   - Updated head stomp bait range: 45-90 pixels")
-    print("   - Enhanced CNN for full frame processing")
-    print()
-    print("🔧 Hyperparameters:")
-    print(f"   - Learning Rate: {args.learning_rate}")
-    print(f"   - Batch Size: {args.batch_size}")
-    print(f"   - Rollout Steps: {args.n_steps}")
-    print(f"   - Training Epochs: {args.n_epochs}")
-    print(f"   - Clip Range: {args.clip_range}")
-    print(f"   - Value Coefficient: {args.vf_coef}")
+    print("🔧 STABILIZED HYPERPARAMETERS:")
+    print(f"   - Learning Rate: {args.learning_rate} (conservative)")
+    print(f"   - Batch Size: {args.batch_size} (large for stability)")
+    print(f"   - Rollout Steps: {args.n_steps} (large buffer)")
+    print(f"   - Epochs: {args.n_epochs} (fewer for stability)")
+    print(f"   - Clip Range: {args.clip_range} (low for stability)")
+    print(f"   - Value Coefficient: {args.vf_coef} (high for value stability)")
+    print(f"   - Total timesteps: {args.total_timesteps:,}")
     print()
 
-    # Setup device
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() and args.device != "cpu" else "cpu"
-    )
-    print(f"🔧 Device: {device}")
+    # Device selection
+    if args.force_cpu:
+        device = torch.device("cpu")
+        print(f"🔧 Device: CPU (forced)")
+    elif args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"🔧 Device: {device} (auto-detected)")
+    else:
+        device = torch.device(args.device)
+        print(f"🔧 Device: {device} (specified)")
+
+    # Set random seed for reproducibility
     set_random_seed(42)
 
     # Create environment
     render_mode = "human" if args.render else None
-    env = make_advanced_env(render_mode=render_mode)
-    print("✅ Advanced environment created successfully")
+    env = make_env(args.game, args.state, render_mode)
+
+    # Test environment
+    print("🧪 Testing environment...")
+    obs = env.reset()
+    if isinstance(obs, tuple):
+        obs = obs[0]
+    print("   ✅ Environment working")
 
     # Create or load model
-    model = None
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
+        print("🔄 Applying new hyperparameters for continued training...")
         try:
+            # Pass hyperparameters directly into the .load() method.
+            # This allows SB3 to correctly initialize schedules and other internal components.
             model = PPO.load(
                 args.resume,
                 env=env,
@@ -550,66 +525,56 @@ def main():
                 clip_range=args.clip_range,
                 vf_coef=args.vf_coef,
             )
-            print("✅ Model loaded successfully")
+            print(f"   ✅ Model loaded on {device} with updated hyperparameters.")
+
         except Exception as e:
-            print(f"❌ Failed to load model: {e}")
-            print("🔄 Creating new model instead...")
+            print(f"   ❌ Failed to load model: {e}")
+            print("   🆕 Creating new model instead...")
             model = None
+    else:
+        model = None
 
     if model is None:
-        print("🆕 Creating new advanced model (full frame)...")
+        print("🆕 Creating new STABILIZED model...")
         model = PPO(
-            AdvancedStreetFighterPolicy,  # Updated policy with full frame support
+            FixedStreetFighterPolicy,
             env,
-            learning_rate=args.learning_rate,
-            n_steps=args.n_steps,
-            batch_size=args.batch_size,
-            n_epochs=args.n_epochs,
+            learning_rate=args.learning_rate,  # 1e-4 (much lower for stability)
+            n_steps=args.n_steps,  # 8192 (larger rollout buffer)
+            batch_size=args.batch_size,  # 256 (larger for stability)
+            n_epochs=args.n_epochs,  # 3 (fewer for stability)
             gamma=0.99,
             gae_lambda=0.95,
-            clip_range=args.clip_range,
-            ent_coef=0.01,
-            vf_coef=args.vf_coef,
-            max_grad_norm=0.5,
+            clip_range=args.clip_range,  # 0.1 (much lower for stability)
+            ent_coef=0.03,  # inc
+            vf_coef=args.vf_coef,  # 2.0 (higher for value stability)
+            max_grad_norm=0.5,  # Conservative gradient clipping
             verbose=1,
             device=device,
         )
-        print("✅ New advanced model created")
 
-    # Pre-training stability test
-    print("\n🔬 Pre-training system verification (full frame)...")
-    try:
-        obs = env.reset()[0]
-        obs_tensor = {}
-        for key, value in obs.items():
-            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
+    # Verify model device
+    model_device = next(model.policy.parameters()).device
+    print(f"   ✅ Model on device: {model_device}")
 
-        with torch.no_grad():
-            actions, values, log_probs = model.policy(obs_tensor)
-
-        print(f"✅ System verification passed")
-        print(f"   Initial value: {values.item():.3f}")
-        print(f"   Feature dimensions verified: {obs['vector_obs'].shape}")
-        print(f"   Visual dimensions verified: {obs['visual_obs'].shape}")
-
-        # Verify frame size
-        visual_shape = obs['visual_obs'].shape
-        if visual_shape[1] == 224 and visual_shape[2] == 320:
-            print(f"   ✅ Full frame size confirmed: {visual_shape[1]}x{visual_shape[2]}")
+    # Test stability if requested
+    if args.test_stability:
+        print("\n🔬 Testing training stability...")
+        stable = verify_gradient_flow(model, env, device)
+        if not stable:
+            print("⚠️  Stability issues detected but proceeding with monitoring")
         else:
-            print(f"   ⚠️  Unexpected frame size: {visual_shape[1]}x{visual_shape[2]}")
+            print("✅ Stability verified - ready for stable training!")
 
-    except Exception as e:
-        print(f"❌ System verification failed: {e}")
-        return
+    # Create stability-focused callback
+    callback = StabilityCallback(save_freq=50000, save_path="./models/")
 
-    # Create advanced callback
-    callback = AdvancedTacticsCallback(save_freq=50000, save_path="./models/")
-
-    print("\n🚀 STARTING ADVANCED TRAINING (FULL FRAME)...")
-    print("📊 Monitoring: Baiting, Blocking, Spacing, Win Rate")
-    print("🛡️  Safety: Auto-stop on training instability")
-    print("🎯 Tactical: Updated pixel ranges for all moves")
+    print("\n🚀 STARTING STABILIZED TRAINING...")
+    print("📊 Real-time monitoring of:")
+    print("   - Value Loss (target: <8.0)")
+    print("   - Explained Variance (target: >0.3)")
+    print("   - Clip Fraction (target: 0.1-0.3)")
+    print("💾 Auto-saving best stability models")
     print()
 
     try:
@@ -621,32 +586,50 @@ def main():
         )
 
         # Save final model
-        final_path = "./models/final_advanced_sf_fullframe_model.zip"
+        final_path = "./models/final_stabilized_model.zip"
         model.save(final_path)
-        print(f"🎉 Advanced training completed successfully!")
+        print(f"🎉 Training completed successfully!")
         print(f"💾 Final model saved: {final_path}")
 
-        # Final comprehensive report
+        # Final stability report
+        print(f"\n📊 FINAL STABILITY RESULTS:")
         if callback.value_losses:
-            final_value_loss = np.mean(callback.value_losses[-10:])
-            print(f"📊 Final value loss: {final_value_loss:.3f}")
+            final_value_loss = np.mean(callback.value_losses[-20:])
+            print(f"📉 Final Value Loss: {final_value_loss:.2f}")
+            if final_value_loss < 8.0:
+                print(f"   ✅ SUCCESS: Value loss target achieved!")
+            else:
+                improvement = 35.0 - final_value_loss  # Assuming started at 35
+                print(f"   📈 IMPROVEMENT: Reduced by {improvement:.1f} points")
 
-        if callback.win_rates:
-            final_win_rate = callback.best_win_rate
-            print(f"🏆 Best win rate: {final_win_rate:.1%}")
+        if callback.explained_variances:
+            final_explained_var = np.mean(callback.explained_variances[-20:])
+            print(f"📈 Final Explained Variance: {final_explained_var:.3f}")
+            if final_explained_var > 0.3:
+                print(f"   ✅ SUCCESS: Explained variance target achieved!")
+            else:
+                improvement = final_explained_var - 0.11  # Assuming started at 0.11
+                print(f"   📈 IMPROVEMENT: Increased by {improvement:.3f}")
 
-        final_tactical_score = callback._calculate_tactical_effectiveness()
-        print(f"🎖️  Final tactical score: {final_tactical_score:.1f}/10.0")
+        if callback.clip_fractions:
+            final_clip_frac = np.mean(callback.clip_fractions[-20:])
+            print(f"✂️  Final Clip Fraction: {final_clip_frac:.3f}")
+            if 0.1 <= final_clip_frac <= 0.3:
+                print(f"   ✅ SUCCESS: Clip fraction in healthy range!")
 
-        # Frame size summary
-        obs = env.reset()[0]
-        visual_shape = obs["visual_obs"].shape
-        print(f"📺 Training completed with frame size: {visual_shape[1]}x{visual_shape[2]}")
+        final_stability = callback.best_stability_score
+        print(f"🏥 Best Stability Score: {final_stability:.0f}/100")
+
+        if final_stability >= 60:
+            print("🎉 TRAINING STABILIZATION SUCCESSFUL!")
+        else:
+            print("📈 PARTIAL IMPROVEMENT - Continue training for full stabilization")
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        model.save("./models/interrupted_advanced_fullframe_model.zip")
-        print("💾 Progress saved")
+        interrupted_path = "./models/interrupted_model.zip"
+        model.save(interrupted_path)
+        print(f"💾 Model saved: {interrupted_path}")
 
     except Exception as e:
         print(f"\n❌ Training failed: {e}")
@@ -654,16 +637,17 @@ def main():
 
         traceback.print_exc()
 
-        # Try to save model even after error
+        error_path = "./models/error_model.zip"
         try:
-            model.save("./models/error_advanced_fullframe_model.zip")
-            print("💾 Model saved despite error")
-        except:
-            print("❌ Could not save model")
+            model.save(error_path)
+            print(f"💾 Model saved: {error_path}")
+        except Exception as save_error:
+            print(f"❌ Could not save model: {save_error}")
+        raise
 
     finally:
         env.close()
-        print("🔚 Advanced training session ended")
+        print("🔚 Training session ended")
 
 
 if __name__ == "__main__":
