@@ -299,12 +299,18 @@ class OscillationTracker:
 
         rolling_freq = self.get_rolling_window_frequency()
         features[0] = np.clip(rolling_freq / 5.0, 0.0, 1.0)
-        features[1] = np.clip(
-            (self.opponent_direction_changes / max(1, self.frame_count / 60)) / 5.0,
-            0.0,
-            1.0,
-        )
-        # UPDATED: Scale oscillation amplitude for full-size frames
+
+        # Safe calculation to prevent division by zero
+        if self.frame_count > 0:
+            features[1] = np.clip(
+                (self.opponent_direction_changes / max(1, self.frame_count / 60)) / 5.0,
+                0.0,
+                1.0,
+            )
+        else:
+            features[1] = 0.0
+
+        # UPDATED: Scale oscillation amplitude for full-size frames with safety
         features[2] = np.clip(
             self.player_oscillation_amplitude / 90.0, 0.0, 1.0
         )  # Was /50.0
@@ -323,13 +329,19 @@ class OscillationTracker:
             features[6] = self.aggressive_forward_count / total_movement
             features[7] = self.defensive_backward_count / total_movement
             features[8] = self.neutral_dance_count / total_movement
+        else:
+            features[6] = features[7] = features[8] = 0.0
 
-        features[9] = np.clip(
-            self.whiff_bait_attempts / max(1, self.frame_count / 60), 0.0, 1.0
-        )
-        features[10] = np.clip(
-            self.advantage_transitions / max(1, self.frame_count / 60), 0.0, 1.0
-        )
+        # Safe frame count calculations
+        if self.frame_count > 0:
+            features[9] = np.clip(
+                self.whiff_bait_attempts / max(1, self.frame_count / 60), 0.0, 1.0
+            )
+            features[10] = np.clip(
+                self.advantage_transitions / max(1, self.frame_count / 60), 0.0, 1.0
+            )
+        else:
+            features[9] = features[10] = 0.0
 
         if (
             len(self.player_velocity_history) > 0
@@ -339,6 +351,13 @@ class OscillationTracker:
                 self.player_velocity_history[-1] - self.opponent_velocity_history[-1]
             )
             features[11] = np.clip(velocity_diff / 5.0, -1.0, 1.0)
+        else:
+            features[11] = 0.0
+
+        # CRITICAL: Final safety check for NaN values
+        if np.any(~np.isfinite(features)):
+            print(f"⚠️  WARNING: Non-finite values in oscillation features, cleaning...")
+            features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
 
         return features
 
@@ -489,6 +508,13 @@ class StrategicFeatureTracker:
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
         """STABILITY FIX: Normalize features to prevent value explosions that cause high value loss."""
+        # Check for NaN or infinite values first
+        if np.any(~np.isfinite(features)):
+            print(
+                f"⚠️  WARNING: Non-finite values detected in features, replacing with zeros"
+            )
+            features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+
         # Initialize on first call with correct feature dimension
         if self.feature_rolling_mean is None:
             self.feature_rolling_mean = np.zeros(features.shape[0], dtype=np.float32)
@@ -505,12 +531,15 @@ class StrategicFeatureTracker:
             + (1 - self.normalization_alpha) * squared_diff
         )
 
-        # Prevent division by zero
+        # Prevent division by zero and ensure stability
         safe_std = np.maximum(self.feature_rolling_std, 1e-6)
 
         # Normalize and clip to prevent extreme values that destabilize training
         normalized = (features - self.feature_rolling_mean) / safe_std
         normalized = np.clip(normalized, -3.0, 3.0)
+
+        # Final check for any remaining non-finite values
+        normalized = np.nan_to_num(normalized, nan=0.0, posinf=3.0, neginf=-3.0)
 
         return normalized.astype(np.float32)
 
@@ -682,7 +711,8 @@ class StrategicFeatureTracker:
         features[20] = min(info.get("enemy_victories", 0) / 10.0, 1.0)
 
         # Oscillation features (12)
-        features[21:33] = self.oscillation_tracker.get_oscillation_features()
+        oscillation_features = self.oscillation_tracker.get_oscillation_features()
+        features[21:33] = oscillation_features
 
         # Previous button state (12)
         features[33:45] = (
@@ -690,6 +720,11 @@ class StrategicFeatureTracker:
             if len(self.button_features_history) > 0
             else np.zeros(12)
         )
+
+        # CRITICAL: Check for NaN/inf values before returning
+        if np.any(~np.isfinite(features)):
+            print(f"⚠️  WARNING: Non-finite values in enhanced features, cleaning...")
+            features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
 
         return features
 
@@ -853,11 +888,24 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         visual_obs = visual_obs.float().to(device)
         vector_obs = vector_obs.float().to(device)
 
+        # CRITICAL: Check for NaN/inf values in input
+        if torch.any(~torch.isfinite(visual_obs)) or torch.any(
+            ~torch.isfinite(vector_obs)
+        ):
+            print("🚨 CRITICAL: Non-finite values detected in observations!")
+            visual_obs = torch.nan_to_num(visual_obs, nan=0.0, posinf=1.0, neginf=0.0)
+            vector_obs = torch.nan_to_num(vector_obs, nan=0.0, posinf=3.0, neginf=-3.0)
+
         # STABILITY FIX: Careful normalization
         visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
 
         # Process visual features
         visual_features = self.visual_cnn(visual_obs)
+
+        # Check for NaN after visual processing
+        if torch.any(~torch.isfinite(visual_features)):
+            print("🚨 CRITICAL: NaN detected after visual CNN!")
+            visual_features = torch.nan_to_num(visual_features, nan=0.0)
 
         # STABILIZED vector processing
         batch_size, seq_len, feature_dim = vector_obs.shape
@@ -867,18 +915,33 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_embedded = self.vector_norm(vector_embedded)
         vector_embedded = self.vector_dropout(vector_embedded)
 
+        # Check for NaN after vector embedding
+        if torch.any(~torch.isfinite(vector_embedded)):
+            print("🚨 CRITICAL: NaN detected after vector embedding!")
+            vector_embedded = torch.nan_to_num(vector_embedded, nan=0.0)
+
         # Process with GRU
         gru_output, _ = self.vector_gru(vector_embedded)
         vector_features = gru_output[:, -1, :]  # Take last output
         vector_features = self.vector_final(vector_features)
 
+        # Check for NaN after GRU
+        if torch.any(~torch.isfinite(vector_features)):
+            print("🚨 CRITICAL: NaN detected after GRU!")
+            vector_features = torch.nan_to_num(vector_features, nan=0.0)
+
         # Fuse features
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
 
-        # STABILITY FIX: Gradient clipping within forward pass
+        # Check for NaN after fusion
+        if torch.any(~torch.isfinite(output)):
+            print("🚨 CRITICAL: NaN detected after fusion!")
+            output = torch.nan_to_num(output, nan=0.0)
+
+        # STABILITY FIX: Aggressive gradient clipping
         if self.training:
-            output = torch.clamp(output, -10.0, 10.0)
+            output = torch.clamp(output, -5.0, 5.0)  # More aggressive clipping
 
         return output
 
@@ -920,7 +983,33 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
     def forward(self, obs, deterministic: bool = False):
         """STABILIZED forward pass with value stability controls."""
         features = self.extract_features(obs)
+
+        # CRITICAL: Check for NaN in extracted features
+        if torch.any(~torch.isfinite(features)):
+            print("🚨 CRITICAL: NaN detected in extracted features!")
+            features = torch.nan_to_num(features, nan=0.0)
+
         latent_pi, latent_vf = self.mlp_extractor(features)
+
+        # CRITICAL: Check for NaN in latent features
+        if torch.any(~torch.isfinite(latent_pi)) or torch.any(
+            ~torch.isfinite(latent_vf)
+        ):
+            print("🚨 CRITICAL: NaN detected in latent features!")
+            latent_pi = torch.nan_to_num(latent_pi, nan=0.0)
+            latent_vf = torch.nan_to_num(latent_vf, nan=0.0)
+
+        # Get action distribution with stability checks
+        action_logits = self.action_net(latent_pi)
+
+        # CRITICAL: Check for NaN in action logits
+        if torch.any(~torch.isfinite(action_logits)):
+            print("🚨 CRITICAL: NaN detected in action logits!")
+            action_logits = torch.nan_to_num(action_logits, nan=0.0)
+
+        # Additional stability: clip action logits
+        action_logits = torch.clamp(action_logits, -10.0, 10.0)
+
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         values = self.value_net(latent_vf)
@@ -928,7 +1017,13 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
 
         # STABILITY FIX: Clamp values to prevent explosion that causes high value loss
         if self.training:
-            values = torch.clamp(values, -100.0, 100.0)
+            values = torch.clamp(values, -50.0, 50.0)  # More conservative clamping
+
+        # Final NaN check
+        if torch.any(~torch.isfinite(values)) or torch.any(~torch.isfinite(log_prob)):
+            print("🚨 CRITICAL: NaN detected in final outputs!")
+            values = torch.nan_to_num(values, nan=0.0)
+            log_prob = torch.nan_to_num(log_prob, nan=-1.0)
 
         return actions, values, log_prob
 
