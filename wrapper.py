@@ -508,11 +508,14 @@ class StrategicFeatureTracker:
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
         """STABILITY FIX: Normalize features to prevent value explosions that cause high value loss."""
-        # Check for NaN or infinite values first
+        # OPTIMIZED: Silent NaN check with occasional logging
         if np.any(~np.isfinite(features)):
-            print(
-                f"⚠️  WARNING: Non-finite values detected in features, replacing with zeros"
-            )
+            if hasattr(self, "_feature_nan_count"):
+                self._feature_nan_count += 1
+                if self._feature_nan_count % 500 == 0:  # Log every 500 occurrences
+                    print(f"⚠️  Feature NaN cleaned (#{self._feature_nan_count})")
+            else:
+                self._feature_nan_count = 1
             features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
 
         # Initialize on first call with correct feature dimension
@@ -538,8 +541,9 @@ class StrategicFeatureTracker:
         normalized = (features - self.feature_rolling_mean) / safe_std
         normalized = np.clip(normalized, -3.0, 3.0)
 
-        # Final check for any remaining non-finite values
-        normalized = np.nan_to_num(normalized, nan=0.0, posinf=3.0, neginf=-3.0)
+        # OPTIMIZED: Silent final NaN check
+        if np.any(~np.isfinite(normalized)):
+            normalized = np.nan_to_num(normalized, nan=0.0, posinf=3.0, neginf=-3.0)
 
         return normalized.astype(np.float32)
 
@@ -888,11 +892,16 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         visual_obs = visual_obs.float().to(device)
         vector_obs = vector_obs.float().to(device)
 
-        # CRITICAL: Check for NaN/inf values in input
-        if torch.any(~torch.isfinite(visual_obs)) or torch.any(
-            ~torch.isfinite(vector_obs)
-        ):
-            print("🚨 CRITICAL: Non-finite values detected in observations!")
+        # OPTIMIZED: Silent NaN cleaning (only log if severe)
+        visual_nan_count = torch.sum(~torch.isfinite(visual_obs)).item()
+        vector_nan_count = torch.sum(~torch.isfinite(vector_obs)).item()
+
+        if visual_nan_count > 0 or vector_nan_count > 0:
+            # Clean silently, only log if excessive
+            if visual_nan_count > 100 or vector_nan_count > 10:
+                print(
+                    f"⚠️  Large NaN count: visual={visual_nan_count}, vector={vector_nan_count}"
+                )
             visual_obs = torch.nan_to_num(visual_obs, nan=0.0, posinf=1.0, neginf=0.0)
             vector_obs = torch.nan_to_num(vector_obs, nan=0.0, posinf=3.0, neginf=-3.0)
 
@@ -902,9 +911,8 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         # Process visual features
         visual_features = self.visual_cnn(visual_obs)
 
-        # Check for NaN after visual processing
+        # Silent NaN check for visual features
         if torch.any(~torch.isfinite(visual_features)):
-            print("🚨 CRITICAL: NaN detected after visual CNN!")
             visual_features = torch.nan_to_num(visual_features, nan=0.0)
 
         # STABILIZED vector processing
@@ -915,9 +923,8 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_embedded = self.vector_norm(vector_embedded)
         vector_embedded = self.vector_dropout(vector_embedded)
 
-        # Check for NaN after vector embedding
+        # Silent NaN check for vector embedding
         if torch.any(~torch.isfinite(vector_embedded)):
-            print("🚨 CRITICAL: NaN detected after vector embedding!")
             vector_embedded = torch.nan_to_num(vector_embedded, nan=0.0)
 
         # Process with GRU
@@ -925,18 +932,16 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_features = gru_output[:, -1, :]  # Take last output
         vector_features = self.vector_final(vector_features)
 
-        # Check for NaN after GRU
+        # Silent NaN check for GRU output
         if torch.any(~torch.isfinite(vector_features)):
-            print("🚨 CRITICAL: NaN detected after GRU!")
             vector_features = torch.nan_to_num(vector_features, nan=0.0)
 
         # Fuse features
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
 
-        # Check for NaN after fusion
+        # Silent NaN check for final output
         if torch.any(~torch.isfinite(output)):
-            print("🚨 CRITICAL: NaN detected after fusion!")
             output = torch.nan_to_num(output, nan=0.0)
 
         # STABILITY FIX: Aggressive gradient clipping
@@ -984,27 +989,30 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
         """STABILIZED forward pass with value stability controls."""
         features = self.extract_features(obs)
 
-        # CRITICAL: Check for NaN in extracted features
+        # OPTIMIZED: Silent NaN cleaning with occasional logging
         if torch.any(~torch.isfinite(features)):
-            print("🚨 CRITICAL: NaN detected in extracted features!")
+            if hasattr(self, "_nan_warning_count"):
+                self._nan_warning_count += 1
+                if self._nan_warning_count % 1000 == 0:  # Log every 1000 occurrences
+                    print(f"⚠️  NaN in features (#{self._nan_warning_count})")
+            else:
+                self._nan_warning_count = 1
             features = torch.nan_to_num(features, nan=0.0)
 
         latent_pi, latent_vf = self.mlp_extractor(features)
 
-        # CRITICAL: Check for NaN in latent features
+        # OPTIMIZED: Silent NaN cleaning for latent features
         if torch.any(~torch.isfinite(latent_pi)) or torch.any(
             ~torch.isfinite(latent_vf)
         ):
-            print("🚨 CRITICAL: NaN detected in latent features!")
             latent_pi = torch.nan_to_num(latent_pi, nan=0.0)
             latent_vf = torch.nan_to_num(latent_vf, nan=0.0)
 
         # Get action distribution with stability checks
         action_logits = self.action_net(latent_pi)
 
-        # CRITICAL: Check for NaN in action logits
+        # OPTIMIZED: Silent NaN cleaning for action logits
         if torch.any(~torch.isfinite(action_logits)):
-            print("🚨 CRITICAL: NaN detected in action logits!")
             action_logits = torch.nan_to_num(action_logits, nan=0.0)
 
         # Additional stability: clip action logits
@@ -1019,9 +1027,8 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
         if self.training:
             values = torch.clamp(values, -50.0, 50.0)  # More conservative clamping
 
-        # Final NaN check
+        # OPTIMIZED: Silent final NaN check
         if torch.any(~torch.isfinite(values)) or torch.any(~torch.isfinite(log_prob)):
-            print("🚨 CRITICAL: NaN detected in final outputs!")
             values = torch.nan_to_num(values, nan=0.0)
             log_prob = torch.nan_to_num(log_prob, nan=-1.0)
 
