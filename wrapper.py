@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-wrapper.py - STABILIZED VERSION with training instability fixes - FULL SIZE FRAMES
+wrapper.py - STABILIZED VERSION with training instability fixes + BAIT-PUNISH SYSTEM
 FIXES: Value loss normalization, reward scaling, feature stability, conservative architecture
-Addresses: High value loss (35+), Low explained variance (0.11), Low clip fraction (0.04)
-MODIFICATION: Uses full-size frames instead of scaling down for better visual detail
+NEW: Learning-based bait->block->punish sequence detection and reward shaping
+MODIFICATION: Uses full-size frames + adaptive fighting game pattern recognition
 """
 
 import cv2
@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import gymnasium as gym
-from collections import deque
+from collections import deque, defaultdict
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.policies import ActorCriticPolicy
@@ -22,6 +22,15 @@ import logging
 import os
 from datetime import datetime
 import retro
+
+# Import the bait-punish system (note: you'll need to create this file)
+try:
+    from bait_punish_system import integrate_bait_punish_system, AdaptiveRewardShaper
+
+    BAIT_PUNISH_AVAILABLE = True
+except ImportError:
+    BAIT_PUNISH_AVAILABLE = False
+    print("⚠️  Bait-punish system not available, running without it")
 
 # --- FIX for TypeError in retro.make ---
 _original_retro_make = retro.make
@@ -46,12 +55,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants - UPDATED FOR FULL SIZE FRAMES
+# Constants - UPDATED FOR FULL SIZE FRAMES + BAIT-PUNISH FEATURES
 MAX_HEALTH = 176
-# Get actual frame dimensions from retro environment (typically 224x320 for Genesis games)
 SCREEN_WIDTH = 320  # Full width instead of 180
 SCREEN_HEIGHT = 224  # Full height instead of 128
-VECTOR_FEATURE_DIM = 45  # 21 strategic + 12 oscillation + 12 button
+VECTOR_FEATURE_DIM = (
+    52 if BAIT_PUNISH_AVAILABLE else 45
+)  # EXPANDED: 21 strategic + 12 oscillation + 12 button + 7 bait-punish
 
 
 class OscillationTracker:
@@ -98,6 +108,7 @@ class OscillationTracker:
     ) -> Dict:
         self.frame_count += 1
         player_velocity, opponent_velocity = 0.0, 0.0
+
         if self.prev_player_x is not None:
             raw_velocity = player_x - self.prev_player_x
             player_velocity = (
@@ -155,12 +166,14 @@ class OscillationTracker:
             player_attacking,
             opponent_attacking,
         )
+
         (
             self.prev_player_x,
             self.prev_opponent_x,
             self.prev_player_velocity,
             self.prev_opponent_velocity,
         ) = (player_x, opponent_x, player_velocity, opponent_velocity)
+
         return movement_analysis
 
     def _analyze_movement_patterns(
@@ -185,6 +198,7 @@ class OscillationTracker:
         opponent_moving_backward = (
             opponent_x < player_x and opponent_velocity < 0
         ) or (opponent_x > player_x and opponent_velocity > 0)
+
         neutral_game = (
             not player_attacking
             and not opponent_attacking
@@ -453,8 +467,9 @@ class StrategicFeatureTracker:
         self.total_frames = 0
 
         # STABILITY FIX: Feature normalization for stability
-        self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-        self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+        # Initialize with None, will be set on first update
+        self.feature_rolling_mean = None
+        self.feature_rolling_std = None
         self.normalization_alpha = 0.999
 
         self.DANGER_ZONE_HEALTH = MAX_HEALTH * 0.25
@@ -468,6 +483,36 @@ class StrategicFeatureTracker:
         self.prev_player_health = None
         self.prev_opponent_health = None
         self.prev_score = None
+
+        # BAIT-PUNISH SYSTEM INTEGRATION
+        self._bait_punish_integrated = False
+
+    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
+        """STABILITY FIX: Normalize features to prevent value explosions that cause high value loss."""
+        # Initialize on first call with correct feature dimension
+        if self.feature_rolling_mean is None:
+            self.feature_rolling_mean = np.zeros(features.shape[0], dtype=np.float32)
+            self.feature_rolling_std = np.ones(features.shape[0], dtype=np.float32)
+
+        # Update rolling statistics for stability
+        self.feature_rolling_mean = (
+            self.normalization_alpha * self.feature_rolling_mean
+            + (1 - self.normalization_alpha) * features
+        )
+        squared_diff = (features - self.feature_rolling_mean) ** 2
+        self.feature_rolling_std = np.sqrt(
+            self.normalization_alpha * (self.feature_rolling_std**2)
+            + (1 - self.normalization_alpha) * squared_diff
+        )
+
+        # Prevent division by zero
+        safe_std = np.maximum(self.feature_rolling_std, 1e-6)
+
+        # Normalize and clip to prevent extreme values that destabilize training
+        normalized = (features - self.feature_rolling_mean) / safe_std
+        normalized = np.clip(normalized, -3.0, 3.0)
+
+        return normalized.astype(np.float32)
 
     def update(self, info: Dict, button_features: np.ndarray) -> np.ndarray:
         self.current_frame += 1
@@ -537,34 +582,21 @@ class StrategicFeatureTracker:
         self.prev_player_health = player_health
         self.prev_opponent_health = opponent_health
         self.prev_score = score
+
+        # BAIT-PUNISH INTEGRATION: Integrate system after first update call
+        if BAIT_PUNISH_AVAILABLE and not self._bait_punish_integrated:
+            integrate_bait_punish_system(self)
+            self._bait_punish_integrated = True
+            print("✅ Bait-Punish system integrated into StrategicFeatureTracker")
+            # Re-call update with the enhanced version
+            return self.update(info, button_features)
+
         return features
-
-    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        """STABILITY FIX: Normalize features to prevent value explosions that cause high value loss."""
-        # Update rolling statistics for stability
-        self.feature_rolling_mean = (
-            self.normalization_alpha * self.feature_rolling_mean
-            + (1 - self.normalization_alpha) * features
-        )
-        squared_diff = (features - self.feature_rolling_mean) ** 2
-        self.feature_rolling_std = np.sqrt(
-            self.normalization_alpha * (self.feature_rolling_std**2)
-            + (1 - self.normalization_alpha) * squared_diff
-        )
-
-        # Prevent division by zero
-        safe_std = np.maximum(self.feature_rolling_std, 1e-6)
-
-        # Normalize and clip to prevent extreme values that destabilize training
-        normalized = (features - self.feature_rolling_mean) / safe_std
-        normalized = np.clip(normalized, -3.0, 3.0)
-
-        return normalized.astype(np.float32)
 
     def _calculate_enhanced_features(
         self, info, distance, oscillation_analysis
     ) -> np.ndarray:
-        features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+        features = np.zeros(45, dtype=np.float32)  # Original feature count
         player_health, opponent_health = info.get("agent_hp", MAX_HEALTH), info.get(
             "enemy_hp", MAX_HEALTH
         )
@@ -690,14 +722,14 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
-# --- STABILIZED FEATURE EXTRACTOR FOR TRAINING STABILITY - UPDATED FOR FULL SIZE FRAMES ---
+# --- STABILIZED FEATURE EXTRACTOR FOR FULL SIZE FRAMES + BAIT-PUNISH ---
 
 
 class FixedStreetFighterCNN(BaseFeaturesExtractor):
     """
-    STABILIZED Feature extractor with training stability fixes - UPDATED FOR FULL SIZE FRAMES.
+    STABILIZED Feature extractor with training stability fixes - UPDATED FOR FULL SIZE FRAMES + BAIT-PUNISH.
     FIXES: Gradient explosion, feature scaling, conservative architecture for value loss stability.
-    MODIFICATION: Adapted for full-size frames (224x320) instead of scaled down frames.
+    NEW: Supports expanded feature vector (52 features) for bait-punish system.
     """
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
@@ -708,16 +740,19 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        print(f"🔧 STABILIZED FeatureExtractor Configuration (FULL SIZE):")
+        print(
+            f"🔧 STABILIZED FeatureExtractor Configuration (FULL SIZE + BAIT-PUNISH):"
+        )
         print(f"   - Visual channels: {n_input_channels}")
         print(
             f"   - Visual size: {visual_space.shape[1]}x{visual_space.shape[2]} (FULL SIZE)"
         )
-        print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
+        print(
+            f"   - Vector sequence: {seq_length} x {vector_feature_count} (with bait-punish)"
+        )
         print(f"   - Output features: {features_dim}")
 
         # === STABILIZED VISUAL PROCESSING FOR FULL SIZE FRAMES ===
-        # Updated CNN architecture to handle larger input (224x320 vs 128x180)
         self.visual_cnn = nn.Sequential(
             # First conv layer - larger stride to handle bigger input
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
@@ -730,9 +765,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.BatchNorm2d(64),
             nn.Dropout2d(0.1),
             # Third conv layer
-            nn.Conv2d(
-                64, 128, kernel_size=3, stride=2, padding=1
-            ),  # Added stride=2 for larger input
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
             nn.Dropout2d(0.1),
@@ -741,7 +774,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(256),
             # Adaptive pooling to ensure consistent output size
-            nn.AdaptiveAvgPool2d((3, 4)),  # Slightly larger than before for more detail
+            nn.AdaptiveAvgPool2d((3, 4)),
             nn.Flatten(),
         )
 
@@ -752,16 +785,18 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # === STABILIZED VECTOR PROCESSING ===
+        # === ENHANCED VECTOR PROCESSING FOR BAIT-PUNISH FEATURES ===
         self.vector_embed = nn.Linear(vector_feature_count, 64)
         self.vector_norm = nn.LayerNorm(64)
         self.vector_dropout = nn.Dropout(0.2)
 
-        # Simple GRU for stability (more stable than attention)
-        self.vector_gru = nn.GRU(64, 32, batch_first=True, dropout=0.1)
+        # Enhanced GRU for more complex feature patterns
+        self.vector_gru = nn.GRU(
+            64, 64, batch_first=True, dropout=0.1
+        )  # Increased hidden size
 
         self.vector_final = nn.Sequential(
-            nn.Linear(32, 32),
+            nn.Linear(64, 32),
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
         )
@@ -769,11 +804,9 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         # === STABILIZED FUSION LAYER ===
         fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
-            nn.Linear(
-                fusion_input_size, 512
-            ),  # Increased capacity for full-size frames
+            nn.Linear(fusion_input_size, 512),
             nn.ReLU(inplace=True),
-            nn.LayerNorm(512),  # LayerNorm for stability
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, features_dim),
             nn.ReLU(inplace=True),
@@ -786,7 +819,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         print(f"   - Fusion input size: {fusion_input_size}")
         print(f"   - Final output size: {features_dim}")
         print(
-            "   ✅ STABILIZED Feature Extractor initialized for FULL SIZE training stability"
+            "   ✅ STABILIZED Feature Extractor initialized for FULL SIZE + BAIT-PUNISH"
         )
 
     def _init_weights_conservative(self, m):
@@ -882,7 +915,7 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             *args,
             **kwargs,
         )
-        print("✅ STABILIZED Policy initialized for FULL SIZE training stability")
+        print("✅ STABILIZED Policy initialized for FULL SIZE + BAIT-PUNISH training")
 
     def forward(self, obs, deterministic: bool = False):
         """STABILIZED forward pass with value stability controls."""
@@ -900,14 +933,13 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
         return actions, values, log_prob
 
 
-# --- STABILIZED STREET FIGHTER ENVIRONMENT WRAPPER - UPDATED FOR FULL SIZE FRAMES ---
+# --- ENHANCED STREET FIGHTER ENVIRONMENT WRAPPER WITH BAIT-PUNISH ---
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    STABILIZED: Street Fighter wrapper with reward scaling and stability improvements - FULL SIZE FRAMES.
-    FIXES: Reward scaling for value stability, episode length limits, normalized rewards.
-    MODIFICATION: Uses full-size frames (224x320) instead of scaling down to (128x180).
+    STABILIZED: Street Fighter wrapper with bait-punish system and full-size frames.
+    FEATURES: Learning-based bait->block->punish detection and adaptive reward shaping.
     """
 
     def __init__(self, env, frame_stack=8, rendering=False):
@@ -934,7 +966,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
-        # Updated observation space for full-size frames
+        # Updated observation space for full-size frames + bait-punish features
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -946,7 +978,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "vector_obs": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(frame_stack, VECTOR_FEATURE_DIM),
+                    shape=(
+                        frame_stack,
+                        VECTOR_FEATURE_DIM,
+                    ),  # Now 52 features if bait-punish available
                     dtype=np.float32,
                 ),
             }
@@ -962,6 +997,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.wins, self.losses, self.total_rounds = 0, 0, 0
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
+        # BAIT-PUNISH REWARD SHAPING
+        if BAIT_PUNISH_AVAILABLE:
+            self.reward_shaper = AdaptiveRewardShaper()
+            print("✅ Adaptive reward shaper initialized for bait-punish patterns")
+        else:
+            self.reward_shaper = None
+
         # STABILITY FIX: Reward scaling and episode management
         self.reward_scale = 0.1  # Scale down rewards for value function stability
         self.episode_steps = 0
@@ -972,11 +1014,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
     def _create_initial_vector_features(self, info):
         """STABILITY FIX: Create well-normalized initial vector features."""
-        player_health = info.get("agent_hp", self.full_hp)
-        opponent_health = info.get("enemy_hp", self.full_hp)
-        player_x = info.get("agent_x", SCREEN_WIDTH / 2)
-        opponent_x = info.get("enemy_x", SCREEN_WIDTH / 2)
-
         initial_button_features = np.zeros(12, dtype=np.float32)
         initial_features = self.strategic_tracker.update(info, initial_button_features)
 
@@ -1004,8 +1041,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.strategic_tracker = StrategicFeatureTracker(
             history_length=self.frame_stack
         )
-        initial_button_features = np.zeros(12, dtype=np.float32)
-        self.strategic_tracker.update(info, initial_button_features)
 
         return self._get_observation(), info
 
@@ -1023,11 +1058,22 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         curr_player_health = info.get("agent_hp", self.full_hp)
         curr_opponent_health = info.get("enemy_hp", self.full_hp)
 
-        custom_reward, custom_done = self._calculate_stabilized_reward(
+        base_reward, custom_done = self._calculate_base_reward(
             curr_player_health, curr_opponent_health
         )
 
-        # STABILITY FIX: Episode length limit to prevent extremely long episodes
+        # ENHANCED: Apply bait-punish reward shaping if available
+        if self.reward_shaper is not None:
+            bait_punish_info = getattr(
+                self.strategic_tracker, "last_bait_punish_info", {}
+            )
+            final_reward = self.reward_shaper.shape_reward(
+                base_reward, bait_punish_info, info
+            )
+        else:
+            final_reward = base_reward
+
+        # STABILITY FIX: Episode length limit
         if self.episode_steps >= self.max_episode_steps:
             truncated = True
             print(f"Episode truncated at {self.episode_steps} steps")
@@ -1042,12 +1088,24 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.vector_features_history.append(vector_features)
 
         self._update_enhanced_stats()
+
+        # Add bait-punish stats to info if available
+        if hasattr(self.strategic_tracker, "bait_punish_detector"):
+            bait_punish_stats = (
+                self.strategic_tracker.bait_punish_detector.get_learning_stats()
+            )
+            info.update(bait_punish_stats)
+
+        if self.reward_shaper is not None:
+            adaptation_stats = self.reward_shaper.get_adaptation_stats()
+            info.update(adaptation_stats)
+
         info.update(self.stats)
 
-        return self._get_observation(), custom_reward, done, truncated, info
+        return self._get_observation(), final_reward, done, truncated, info
 
-    def _calculate_stabilized_reward(self, curr_player_health, curr_opponent_health):
-        """STABILITY FIX: Properly scaled and normalized reward function to prevent value loss explosion."""
+    def _calculate_base_reward(self, curr_player_health, curr_opponent_health):
+        """Calculate base reward (before bait-punish shaping)."""
         reward, done = 0.0, False
 
         # Win/Loss rewards - scaled down for stability
@@ -1055,7 +1113,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.total_rounds += 1
             if curr_opponent_health <= 0 < curr_player_health:
                 self.wins += 1
-                # STABILITY FIX: Much smaller win reward to prevent value function instability
                 win_bonus = 25.0 + (curr_player_health / self.full_hp) * 10.0
                 reward += win_bonus
                 print(
@@ -1063,7 +1120,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 )
             else:
                 self.losses += 1
-                # STABILITY FIX: Small loss penalty instead of large negative reward
                 reward -= 10.0
                 print(
                     f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
@@ -1077,13 +1133,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
         damage_received = max(0, self.prev_player_health - curr_player_health)
 
-        # STABILITY FIX: Much smaller damage rewards to prevent value explosion
         reward += (damage_dealt * 0.1) - (damage_received * 0.05)
 
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
 
-        # Strategic bonuses - very small for stability
+        # Basic strategic bonuses
         osc_tracker = self.strategic_tracker.oscillation_tracker
         rolling_freq = osc_tracker.get_rolling_window_frequency()
         if 1.0 <= rolling_freq <= 3.0:
@@ -1091,10 +1146,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         if osc_tracker.space_control_score > 0:
             reward += osc_tracker.space_control_score * 0.005
 
-        # STABILITY FIX: Small step penalty to encourage efficiency
+        # Small step penalty
         reward -= 0.001
 
-        # STABILITY FIX: Apply reward scaling and clipping
+        # Apply base reward scaling and clipping
         reward *= self.reward_scale
         reward = np.clip(reward, -2.0, 2.0)
 
@@ -1159,9 +1214,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 
 def verify_gradient_flow(model, env, device=None):
-    """Verify gradient flow with focus on training stability - UPDATED for full-size frames."""
-    print("\n🔬 STABILIZED Gradient Flow Verification (FULL SIZE)")
-    print("=" * 60)
+    """Verify gradient flow with focus on training stability - UPDATED for bait-punish features."""
+    print("\n🔬 STABILIZED Gradient Flow Verification (FULL SIZE + BAIT-PUNISH)")
+    print("=" * 70)
 
     if device is None:
         device = next(model.policy.parameters()).device
@@ -1186,10 +1241,13 @@ def verify_gradient_flow(model, env, device=None):
     print(f"   - Memory usage: {visual_obs.numel() * 4 / 1024 / 1024:.1f} MB")
     print(f"   - Range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}")
 
-    # Check vector features for stability
+    # Check vector features for stability (now includes bait-punish features)
     vector_obs = obs_tensor["vector_obs"]
-    print(f"🔍 Vector Feature Stability:")
+    print(f"🔍 Vector Feature Analysis (WITH BAIT-PUNISH):")
     print(f"   - Shape: {vector_obs.shape}")
+    print(
+        f"   - Features: {vector_obs.shape[-1]} ({'52 = 45 original + 7 bait-punish' if BAIT_PUNISH_AVAILABLE else '45 original'})"
+    )
     print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
 
     if vector_obs.abs().max() > 10.0:
@@ -1247,7 +1305,9 @@ def verify_gradient_flow(model, env, device=None):
     print(f"   - Average norm: {avg_grad_norm:.6f}")
 
     if coverage > 95 and avg_grad_norm < 10.0:
-        print("✅ EXCELLENT: Stable gradient flow ready for FULL SIZE training!")
+        print(
+            "✅ EXCELLENT: Stable gradient flow ready for FULL SIZE + BAIT-PUNISH training!"
+        )
         return True
     else:
         print("❌ Gradient flow issues detected")
@@ -1264,3 +1324,6 @@ __all__ = [
     "StrategicFeatureTracker",
     "StreetFighterDiscreteActions",
 ]
+
+if BAIT_PUNISH_AVAILABLE:
+    __all__.append("AdaptiveRewardShaper")
