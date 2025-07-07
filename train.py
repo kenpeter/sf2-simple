@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-train.py - STABILIZED TRAINING SCRIPT with fixes for training instability
+train.py - STABILIZED TRAINING SCRIPT with fixes for training instability - FULL SIZE FRAMES
 FIXES: High value loss (35+→<8), Low explained variance (0.11→>0.3), Low clip fraction (0.04→0.1-0.3)
 SOLUTION: Conservative hyperparameters, enhanced monitoring, stability-focused training
+MODIFICATION: Adapted for full-size frames (224x320) with adjusted hyperparameters for increased memory usage
 """
 
 import os
@@ -31,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 class StabilityCallback(BaseCallback):
     """
-    STABILIZED callback with focus on training stability metrics.
+    STABILIZED callback with focus on training stability metrics - UPDATED for full-size frames.
     Monitors value loss, explained variance, clip fraction for stability issues.
+    Additional monitoring for memory usage with larger frames.
     """
 
     def __init__(self, save_freq=50000, save_path="./models/", verbose=1):
@@ -62,31 +64,47 @@ class StabilityCallback(BaseCallback):
         self.best_value_loss = float("inf")
         self.best_stability_score = 0.0
 
+        # Memory monitoring for full-size frames
+        self.memory_warnings = 0
+        self.peak_memory_usage = 0.0
+
     def _on_training_start(self):
-        """Initialize training with stability focus."""
+        """Initialize training with stability focus - UPDATED for full-size frames."""
         self.training_start_time = datetime.now()
         self.device = next(self.model.policy.parameters()).device
 
-        print(f"🚀 STABILIZED Training Started")
+        print(f"🚀 STABILIZED Training Started (FULL SIZE FRAMES)")
         print(f"🎯 STABILITY TARGETS:")
         print(f"   - Value Loss: <8.0 (currently expecting 35+)")
         print(f"   - Explained Variance: >0.3 (currently 0.11)")
         print(f"   - Clip Fraction: 0.1-0.3 (currently 0.04)")
+        print(
+            f"🖼️  Frame Size: Full resolution (224x320) - Higher memory usage expected"
+        )
         print(f"🔧 Device: {self.device}")
+
+        # Check memory availability
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            memory_gb = torch.cuda.get_device_properties(self.device).total_memory / 1e9
+            print(f"📊 GPU Memory: {memory_gb:.1f} GB")
+            if memory_gb < 8:
+                print(
+                    "   ⚠️  WARNING: Limited GPU memory - consider reducing batch size"
+                )
 
         # Initial stability check
         self._perform_initial_stability_check()
 
     def _perform_initial_stability_check(self):
-        """Check initial model stability before training."""
-        print("\n🔬 Initial Stability Assessment")
+        """Check initial model stability before training - UPDATED for full-size frames."""
+        print("\n🔬 Initial Stability Assessment (FULL SIZE)")
 
         env = self._get_env()
         if env:
             try:
                 stable = verify_gradient_flow(self.model, env, self.device)
                 if stable:
-                    print("   ✅ Initial stability verified")
+                    print("   ✅ Initial stability verified for full-size frames")
                 else:
                     print("   ⚠️  Initial stability issues detected")
                     print("   🔧 Proceeding with enhanced monitoring")
@@ -103,13 +121,16 @@ class StabilityCallback(BaseCallback):
             return self.training_env
 
     def _on_step(self) -> bool:
-        """Monitor training stability each step."""
+        """Monitor training stability each step - UPDATED for memory monitoring."""
 
         # Extract training metrics
         self._extract_training_metrics()
 
         # Extract performance metrics
         self._extract_performance_metrics()
+
+        # Monitor memory usage for full-size frames
+        self._monitor_memory_usage()
 
         # Periodic stability monitoring
         if self.num_timesteps % 10000 == 0:
@@ -124,6 +145,21 @@ class StabilityCallback(BaseCallback):
             self._save_stability_checkpoint()
 
         return True
+
+    def _monitor_memory_usage(self):
+        """Monitor memory usage for full-size frames."""
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            current_memory = torch.cuda.memory_allocated(self.device) / 1e9
+            self.peak_memory_usage = max(self.peak_memory_usage, current_memory)
+
+            # Warn if memory usage is very high
+            if (
+                current_memory
+                > 0.9 * torch.cuda.get_device_properties(self.device).total_memory / 1e9
+            ):
+                self.memory_warnings += 1
+                if self.memory_warnings % 10 == 0:  # Only warn every 10th time
+                    print(f"⚠️  High GPU memory usage: {current_memory:.1f} GB")
 
     def _extract_training_metrics(self):
         """Extract key training stability metrics."""
@@ -245,15 +281,24 @@ class StabilityCallback(BaseCallback):
         return score
 
     def _log_stability_report(self):
-        """Log detailed stability report."""
-        print(f"\n📊 STABILITY REPORT - Step {self.num_timesteps:,}")
-        print("=" * 55)
+        """Log detailed stability report - UPDATED for full-size frames."""
+        print(f"\n📊 STABILITY REPORT (FULL SIZE) - Step {self.num_timesteps:,}")
+        print("=" * 65)
 
         # Training time
         if self.training_start_time:
             elapsed = datetime.now() - self.training_start_time
             hours = elapsed.total_seconds() / 3600
             print(f"⏱️  Training Time: {hours:.1f} hours")
+
+        # Memory usage for full-size frames
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            current_memory = torch.cuda.memory_allocated(self.device) / 1e9
+            print(
+                f"🖼️  Memory Usage: {current_memory:.1f} GB (Peak: {self.peak_memory_usage:.1f} GB)"
+            )
+            if self.memory_warnings > 0:
+                print(f"   ⚠️  Memory warnings: {self.memory_warnings}")
 
         # Core stability metrics
         if self.value_losses:
@@ -387,19 +432,25 @@ class StabilityCallback(BaseCallback):
         )
         print(f"   📊 Current stability: {stability_score:.0f}/100")
 
+        # Log memory usage
+        if torch.cuda.is_available() and self.device.type == "cuda":
+            current_memory = torch.cuda.memory_allocated(self.device) / 1e9
+            print(f"   💾 GPU Memory: {current_memory:.1f} GB")
+
 
 def make_env(
     game="StreetFighterIISpecialChampionEdition-Genesis",
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create the Street Fighter environment with stability wrapper."""
+    """Create the Street Fighter environment with stability wrapper - UPDATED for full-size frames."""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = Monitor(env)
         env = StreetFighterVisionWrapper(
             env, frame_stack=8, rendering=(render_mode is not None)
         )
+        print(f"✅ Environment created with full-size frames")
         return env
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
@@ -407,7 +458,9 @@ def make_env(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="STABILIZED Street Fighter Training")
+    parser = argparse.ArgumentParser(
+        description="STABILIZED Street Fighter Training - Full Size"
+    )
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
     )
@@ -425,24 +478,24 @@ def main():
         "--test-stability", action="store_true", help="Test stability before training"
     )
 
-    # STABILITY-FOCUSED HYPERPARAMETERS
+    # STABILITY-FOCUSED HYPERPARAMETERS - ADJUSTED FOR FULL-SIZE FRAMES
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=1e-4,
-        help="Learning rate (default: 1e-4 for stability)",
+        default=8e-5,  # Reduced from 1e-4 for larger frames
+        help="Learning rate (default: 8e-5 for full-size stability)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=256,
-        help="Batch size (default: 256 for stability)",
+        default=128,  # Reduced from 256 for memory management
+        help="Batch size (default: 128 for full-size frames)",
     )
     parser.add_argument(
         "--n-steps",
         type=int,
-        default=8192,
-        help="Rollout steps (default: 8192 for stability)",
+        default=4096,  # Reduced from 8192 for memory management
+        help="Rollout steps (default: 4096 for full-size frames)",
     )
     parser.add_argument(
         "--n-epochs",
@@ -465,30 +518,45 @@ def main():
 
     args = parser.parse_args()
 
-    print("🔧 STABILIZED STREET FIGHTER TRAINING")
-    print("=" * 50)
+    print("🔧 STABILIZED STREET FIGHTER TRAINING - FULL SIZE FRAMES")
+    print("=" * 70)
     print("🎯 ADDRESSING TRAINING INSTABILITY:")
     print("   - HIGH Value Loss: 35+ → Target <8.0")
     print("   - LOW Explained Variance: 0.11 → Target >0.3")
     print("   - LOW Clip Fraction: 0.04 → Target 0.1-0.3")
     print()
+    print("🖼️  FULL SIZE FRAME MODIFICATIONS:")
+    print("   - Frame Resolution: 224x320 (vs 128x180 previously)")
+    print("   - Memory Usage: ~3x higher")
+    print("   - Batch Size: Reduced to 128 (from 256)")
+    print("   - Rollout Steps: Reduced to 4096 (from 8192)")
+    print("   - Learning Rate: Reduced to 8e-5 (from 1e-4)")
+    print()
     print("🔧 STABILIZED HYPERPARAMETERS:")
-    print(f"   - Learning Rate: {args.learning_rate} (conservative)")
-    print(f"   - Batch Size: {args.batch_size} (large for stability)")
-    print(f"   - Rollout Steps: {args.n_steps} (large buffer)")
+    print(f"   - Learning Rate: {args.learning_rate} (conservative for full-size)")
+    print(f"   - Batch Size: {args.batch_size} (reduced for memory)")
+    print(f"   - Rollout Steps: {args.n_steps} (reduced for memory)")
     print(f"   - Epochs: {args.n_epochs} (fewer for stability)")
     print(f"   - Clip Range: {args.clip_range} (low for stability)")
     print(f"   - Value Coefficient: {args.vf_coef} (high for value stability)")
     print(f"   - Total timesteps: {args.total_timesteps:,}")
     print()
 
-    # Device selection
+    # Device selection with memory considerations
     if args.force_cpu:
         device = torch.device("cpu")
         print(f"🔧 Device: CPU (forced)")
     elif args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"🔧 Device: {device} (auto-detected)")
+
+        # Check GPU memory for full-size frames
+        if device.type == "cuda":
+            memory_gb = torch.cuda.get_device_properties(device).total_memory / 1e9
+            print(f"📊 GPU Memory: {memory_gb:.1f} GB")
+            if memory_gb < 6:
+                print("   ⚠️  WARNING: Low GPU memory for full-size frames!")
+                print("   💡 Consider using --force-cpu or reducing batch size")
     else:
         device = torch.device(args.device)
         print(f"🔧 Device: {device} (specified)")
@@ -500,20 +568,30 @@ def main():
     render_mode = "human" if args.render else None
     env = make_env(args.game, args.state, render_mode)
 
-    # Test environment
-    print("🧪 Testing environment...")
+    # Test environment with full-size frames
+    print("🧪 Testing environment with full-size frames...")
     obs = env.reset()
     if isinstance(obs, tuple):
         obs = obs[0]
-    print("   ✅ Environment working")
+
+    # Check frame dimensions
+    visual_shape = obs["visual_obs"].shape
+    print(f"   ✅ Visual obs shape: {visual_shape}")
+    print(
+        f"   🖼️  Frame size: {visual_shape[1]}x{visual_shape[2]} (confirmed full-size)"
+    )
+
+    # Estimate memory usage
+    frame_memory_mb = np.prod(visual_shape) * 4 / 1024 / 1024  # 4 bytes per float32
+    batch_memory_mb = frame_memory_mb * args.batch_size
+    print(f"   📊 Estimated batch memory: {batch_memory_mb:.1f} MB")
 
     # Create or load model
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
-        print("🔄 Applying new hyperparameters for continued training...")
+        print("🔄 Applying new hyperparameters for continued full-size training...")
         try:
             # Pass hyperparameters directly into the .load() method.
-            # This allows SB3 to correctly initialize schedules and other internal components.
             model = PPO.load(
                 args.resume,
                 env=env,
@@ -525,7 +603,9 @@ def main():
                 clip_range=args.clip_range,
                 vf_coef=args.vf_coef,
             )
-            print(f"   ✅ Model loaded on {device} with updated hyperparameters.")
+            print(
+                f"   ✅ Model loaded on {device} with updated hyperparameters for full-size."
+            )
 
         except Exception as e:
             print(f"   ❌ Failed to load model: {e}")
@@ -535,18 +615,18 @@ def main():
         model = None
 
     if model is None:
-        print("🆕 Creating new STABILIZED model...")
+        print("🆕 Creating new STABILIZED model for full-size frames...")
         model = PPO(
             FixedStreetFighterPolicy,
             env,
-            learning_rate=args.learning_rate,  # 1e-4 (much lower for stability)
-            n_steps=args.n_steps,  # 8192 (larger rollout buffer)
-            batch_size=args.batch_size,  # 256 (larger for stability)
+            learning_rate=args.learning_rate,  # 8e-5 (reduced for full-size)
+            n_steps=args.n_steps,  # 4096 (reduced for memory)
+            batch_size=args.batch_size,  # 128 (reduced for memory)
             n_epochs=args.n_epochs,  # 3 (fewer for stability)
             gamma=0.99,
             gae_lambda=0.95,
-            clip_range=args.clip_range,  # 0.1 (much lower for stability)
-            ent_coef=0.03,  # inc
+            clip_range=args.clip_range,  # 0.1 (low for stability)
+            ent_coef=0.03,
             vf_coef=args.vf_coef,  # 2.0 (higher for value stability)
             max_grad_norm=0.5,  # Conservative gradient clipping
             verbose=1,
@@ -559,21 +639,22 @@ def main():
 
     # Test stability if requested
     if args.test_stability:
-        print("\n🔬 Testing training stability...")
+        print("\n🔬 Testing training stability with full-size frames...")
         stable = verify_gradient_flow(model, env, device)
         if not stable:
             print("⚠️  Stability issues detected but proceeding with monitoring")
         else:
-            print("✅ Stability verified - ready for stable training!")
+            print("✅ Stability verified - ready for stable full-size training!")
 
-    # Create stability-focused callback
+    # Create stability-focused callback with memory monitoring
     callback = StabilityCallback(save_freq=50000, save_path="./models/")
 
-    print("\n🚀 STARTING STABILIZED TRAINING...")
+    print("\n🚀 STARTING STABILIZED FULL-SIZE TRAINING...")
     print("📊 Real-time monitoring of:")
     print("   - Value Loss (target: <8.0)")
     print("   - Explained Variance (target: >0.3)")
     print("   - Clip Fraction (target: 0.1-0.3)")
+    print("   - GPU Memory Usage (full-size frames)")
     print("💾 Auto-saving best stability models")
     print()
 
@@ -586,18 +667,20 @@ def main():
         )
 
         # Save final model
-        final_path = "./models/final_stabilized_model.zip"
+        final_path = "./models/final_stabilized_fullsize_model.zip"
         model.save(final_path)
-        print(f"🎉 Training completed successfully!")
+        print(f"🎉 Full-size training completed successfully!")
         print(f"💾 Final model saved: {final_path}")
 
         # Final stability report
-        print(f"\n📊 FINAL STABILITY RESULTS:")
+        print(f"\n📊 FINAL STABILITY RESULTS (FULL SIZE):")
         if callback.value_losses:
             final_value_loss = np.mean(callback.value_losses[-20:])
             print(f"📉 Final Value Loss: {final_value_loss:.2f}")
             if final_value_loss < 8.0:
-                print(f"   ✅ SUCCESS: Value loss target achieved!")
+                print(
+                    f"   ✅ SUCCESS: Value loss target achieved with full-size frames!"
+                )
             else:
                 improvement = 35.0 - final_value_loss  # Assuming started at 35
                 print(f"   📈 IMPROVEMENT: Reduced by {improvement:.1f} points")
@@ -606,7 +689,9 @@ def main():
             final_explained_var = np.mean(callback.explained_variances[-20:])
             print(f"📈 Final Explained Variance: {final_explained_var:.3f}")
             if final_explained_var > 0.3:
-                print(f"   ✅ SUCCESS: Explained variance target achieved!")
+                print(
+                    f"   ✅ SUCCESS: Explained variance target achieved with full-size!"
+                )
             else:
                 improvement = final_explained_var - 0.11  # Assuming started at 0.11
                 print(f"   📈 IMPROVEMENT: Increased by {improvement:.3f}")
@@ -620,14 +705,20 @@ def main():
         final_stability = callback.best_stability_score
         print(f"🏥 Best Stability Score: {final_stability:.0f}/100")
 
+        # Memory usage summary
+        if callback.peak_memory_usage > 0:
+            print(f"📊 Peak GPU Memory: {callback.peak_memory_usage:.1f} GB")
+            if callback.memory_warnings > 0:
+                print(f"   ⚠️  Memory warnings: {callback.memory_warnings}")
+
         if final_stability >= 60:
-            print("🎉 TRAINING STABILIZATION SUCCESSFUL!")
+            print("🎉 FULL-SIZE TRAINING STABILIZATION SUCCESSFUL!")
         else:
             print("📈 PARTIAL IMPROVEMENT - Continue training for full stabilization")
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        interrupted_path = "./models/interrupted_model.zip"
+        interrupted_path = "./models/interrupted_fullsize_model.zip"
         model.save(interrupted_path)
         print(f"💾 Model saved: {interrupted_path}")
 
@@ -637,7 +728,7 @@ def main():
 
         traceback.print_exc()
 
-        error_path = "./models/error_model.zip"
+        error_path = "./models/error_fullsize_model.zip"
         try:
             model.save(error_path)
             print(f"💾 Model saved: {error_path}")
@@ -647,7 +738,7 @@ def main():
 
     finally:
         env.close()
-        print("🔚 Training session ended")
+        print("🔚 Full-size training session ended")
 
 
 if __name__ == "__main__":

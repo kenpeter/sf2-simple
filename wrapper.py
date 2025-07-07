@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-wrapper.py - STABILIZED VERSION with training instability fixes
+wrapper.py - STABILIZED VERSION with training instability fixes - FULL SIZE FRAMES
 FIXES: Value loss normalization, reward scaling, feature stability, conservative architecture
 Addresses: High value loss (35+), Low explained variance (0.11), Low clip fraction (0.04)
+MODIFICATION: Uses full-size frames instead of scaling down for better visual detail
 """
 
 import cv2
@@ -45,10 +46,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
+# Constants - UPDATED FOR FULL SIZE FRAMES
 MAX_HEALTH = 176
-SCREEN_WIDTH = 180
-SCREEN_HEIGHT = 128
+# Get actual frame dimensions from retro environment (typically 224x320 for Genesis games)
+SCREEN_WIDTH = 320  # Full width instead of 180
+SCREEN_HEIGHT = 224  # Full height instead of 128
 VECTOR_FEATURE_DIM = 45  # 21 strategic + 12 oscillation + 12 button
 
 
@@ -76,10 +78,11 @@ class OscillationTracker:
         self.aggressive_forward_count = 0
         self.defensive_backward_count = 0
         self.neutral_dance_count = 0
-        self.CLOSE_RANGE = 25
-        self.MID_RANGE = 45
-        self.FAR_RANGE = 70
-        self.WHIFF_BAIT_RANGE = 35
+        # UPDATED: Scaled ranges for full-size frames
+        self.CLOSE_RANGE = 45  # Was 25, scaled by ~1.78x
+        self.MID_RANGE = 80  # Was 45, scaled by ~1.78x
+        self.FAR_RANGE = 125  # Was 70, scaled by ~1.78x
+        self.WHIFF_BAIT_RANGE = 62  # Was 35, scaled by ~1.78x
         self.prev_player_x = None
         self.prev_opponent_x = None
         self.prev_player_velocity = 0.0
@@ -287,8 +290,13 @@ class OscillationTracker:
             0.0,
             1.0,
         )
-        features[2] = np.clip(self.player_oscillation_amplitude / 50.0, 0.0, 1.0)
-        features[3] = np.clip(self.opponent_oscillation_amplitude / 50.0, 0.0, 1.0)
+        # UPDATED: Scale oscillation amplitude for full-size frames
+        features[2] = np.clip(
+            self.player_oscillation_amplitude / 90.0, 0.0, 1.0
+        )  # Was /50.0
+        features[3] = np.clip(
+            self.opponent_oscillation_amplitude / 90.0, 0.0, 1.0
+        )  # Was /50.0
         features[4] = np.clip(self.space_control_score, -1.0, 1.0)
         features[5] = np.clip(self.neutral_game_duration / 180.0, 0.0, 1.0)
 
@@ -450,10 +458,11 @@ class StrategicFeatureTracker:
         self.normalization_alpha = 0.999
 
         self.DANGER_ZONE_HEALTH = MAX_HEALTH * 0.25
-        self.CORNER_THRESHOLD = 30
-        self.CLOSE_DISTANCE = 40
-        self.OPTIMAL_SPACING_MIN = 35
-        self.OPTIMAL_SPACING_MAX = 55
+        # UPDATED: Scale thresholds for full-size frames
+        self.CORNER_THRESHOLD = 53  # Was 30, scaled by ~1.78x
+        self.CLOSE_DISTANCE = 71  # Was 40, scaled by ~1.78x
+        self.OPTIMAL_SPACING_MIN = 62  # Was 35, scaled by ~1.78x
+        self.OPTIMAL_SPACING_MAX = 98  # Was 55, scaled by ~1.78x
         self.COMBO_TIMEOUT_FRAMES = 60
         self.MIN_SCORE_INCREASE_FOR_HIT = 50
         self.prev_player_health = None
@@ -600,7 +609,11 @@ class StrategicFeatureTracker:
             abs(opponent_x - SCREEN_WIDTH / 2) - abs(player_x - SCREEN_WIDTH / 2)
         )
         features[11] = np.clip(
-            (info.get("agent_y", 64) - info.get("enemy_y", 64)) / (SCREEN_HEIGHT / 2),
+            (
+                info.get("agent_y", SCREEN_HEIGHT / 2)
+                - info.get("enemy_y", SCREEN_HEIGHT / 2)
+            )
+            / (SCREEN_HEIGHT / 2),
             -1.0,
             1.0,
         )
@@ -677,13 +690,14 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
-# --- STABILIZED FEATURE EXTRACTOR FOR TRAINING STABILITY ---
+# --- STABILIZED FEATURE EXTRACTOR FOR TRAINING STABILITY - UPDATED FOR FULL SIZE FRAMES ---
 
 
 class FixedStreetFighterCNN(BaseFeaturesExtractor):
     """
-    STABILIZED Feature extractor with training stability fixes.
+    STABILIZED Feature extractor with training stability fixes - UPDATED FOR FULL SIZE FRAMES.
     FIXES: Gradient explosion, feature scaling, conservative architecture for value loss stability.
+    MODIFICATION: Adapted for full-size frames (224x320) instead of scaled down frames.
     """
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
@@ -694,26 +708,40 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        print(f"🔧 STABILIZED FeatureExtractor Configuration:")
+        print(f"🔧 STABILIZED FeatureExtractor Configuration (FULL SIZE):")
         print(f"   - Visual channels: {n_input_channels}")
+        print(
+            f"   - Visual size: {visual_space.shape[1]}x{visual_space.shape[2]} (FULL SIZE)"
+        )
         print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
         print(f"   - Output features: {features_dim}")
 
-        # === STABILIZED VISUAL PROCESSING ===
+        # === STABILIZED VISUAL PROCESSING FOR FULL SIZE FRAMES ===
+        # Updated CNN architecture to handle larger input (224x320 vs 128x180)
         self.visual_cnn = nn.Sequential(
-            # Reduced complexity for stability
+            # First conv layer - larger stride to handle bigger input
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(32),
             nn.Dropout2d(0.1),
+            # Second conv layer
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(64),
             nn.Dropout2d(0.1),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            # Third conv layer
+            nn.Conv2d(
+                64, 128, kernel_size=3, stride=2, padding=1
+            ),  # Added stride=2 for larger input
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
-            nn.AdaptiveAvgPool2d((2, 2)),
+            nn.Dropout2d(0.1),
+            # Fourth conv layer for full-size frames
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(256),
+            # Adaptive pooling to ensure consistent output size
+            nn.AdaptiveAvgPool2d((3, 4)),  # Slightly larger than before for more detail
             nn.Flatten(),
         )
 
@@ -741,20 +769,25 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         # === STABILIZED FUSION LAYER ===
         fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
-            nn.Linear(fusion_input_size, 256),
+            nn.Linear(
+                fusion_input_size, 512
+            ),  # Increased capacity for full-size frames
             nn.ReLU(inplace=True),
-            nn.LayerNorm(256),  # LayerNorm for stability
+            nn.LayerNorm(512),  # LayerNorm for stability
             nn.Dropout(0.2),
-            nn.Linear(256, features_dim),
+            nn.Linear(512, features_dim),
             nn.ReLU(inplace=True),
         )
 
         # STABILITY FIX: Conservative weight initialization
         self.apply(self._init_weights_conservative)
 
+        print(f"   - Visual output size: {visual_output_size}")
         print(f"   - Fusion input size: {fusion_input_size}")
         print(f"   - Final output size: {features_dim}")
-        print("   ✅ STABILIZED Feature Extractor initialized for training stability")
+        print(
+            "   ✅ STABILIZED Feature Extractor initialized for FULL SIZE training stability"
+        )
 
     def _init_weights_conservative(self, m):
         """STABILITY FIX: Conservative weight initialization to prevent gradient explosion."""
@@ -849,7 +882,7 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             *args,
             **kwargs,
         )
-        print("✅ STABILIZED Policy initialized for training stability")
+        print("✅ STABILIZED Policy initialized for FULL SIZE training stability")
 
     def forward(self, obs, deterministic: bool = False):
         """STABILIZED forward pass with value stability controls."""
@@ -867,23 +900,41 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
         return actions, values, log_prob
 
 
-# --- STABILIZED STREET FIGHTER ENVIRONMENT WRAPPER ---
+# --- STABILIZED STREET FIGHTER ENVIRONMENT WRAPPER - UPDATED FOR FULL SIZE FRAMES ---
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
-    STABILIZED: Street Fighter wrapper with reward scaling and stability improvements.
+    STABILIZED: Street Fighter wrapper with reward scaling and stability improvements - FULL SIZE FRAMES.
     FIXES: Reward scaling for value stability, episode length limits, normalized rewards.
+    MODIFICATION: Uses full-size frames (224x320) instead of scaling down to (128x180).
     """
 
     def __init__(self, env, frame_stack=8, rendering=False):
         super().__init__(env)
         self.frame_stack = frame_stack
         self.rendering = rendering
-        self.target_size = (128, 180)
+
+        # Get the actual frame size from the environment
+        sample_obs = env.reset()
+        if isinstance(sample_obs, tuple):
+            sample_obs = sample_obs[0]
+
+        # Use the actual frame dimensions (typically 224x320 for Genesis)
+        if hasattr(sample_obs, "shape"):
+            self.target_size = sample_obs.shape[:2]  # (height, width)
+        else:
+            # Fallback to common Genesis resolution
+            self.target_size = (224, 320)
+
+        print(
+            f"🖼️  Using FULL SIZE frames: {self.target_size[0]}x{self.target_size[1]} (H x W)"
+        )
+
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
+        # Updated observation space for full-size frames
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -1063,8 +1114,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return {"visual_obs": visual_obs, "vector_obs": vector_obs}
 
     def _preprocess_frame(self, frame):
+        """MODIFIED: No resizing - use full-size frames directly."""
         if frame is None:
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
+
+        # If frame is already the target size, return as-is
+        if frame.shape[:2] == self.target_size:
+            return frame
+
+        # If frame dimensions don't match, resize (fallback)
         return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
 
     def _update_enhanced_stats(self):
@@ -1101,9 +1159,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 
 def verify_gradient_flow(model, env, device=None):
-    """Verify gradient flow with focus on training stability."""
-    print("\n🔬 STABILIZED Gradient Flow Verification")
-    print("=" * 50)
+    """Verify gradient flow with focus on training stability - UPDATED for full-size frames."""
+    print("\n🔬 STABILIZED Gradient Flow Verification (FULL SIZE)")
+    print("=" * 60)
 
     if device is None:
         device = next(model.policy.parameters()).device
@@ -1120,6 +1178,13 @@ def verify_gradient_flow(model, env, device=None):
             obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
         else:
             obs_tensor[key] = torch.tensor(value).unsqueeze(0).float().to(device)
+
+    # Check visual features for full-size compatibility
+    visual_obs = obs_tensor["visual_obs"]
+    print(f"🖼️  Visual Feature Analysis (FULL SIZE):")
+    print(f"   - Shape: {visual_obs.shape}")
+    print(f"   - Memory usage: {visual_obs.numel() * 4 / 1024 / 1024:.1f} MB")
+    print(f"   - Range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}")
 
     # Check vector features for stability
     vector_obs = obs_tensor["vector_obs"]
@@ -1182,7 +1247,7 @@ def verify_gradient_flow(model, env, device=None):
     print(f"   - Average norm: {avg_grad_norm:.6f}")
 
     if coverage > 95 and avg_grad_norm < 10.0:
-        print("✅ EXCELLENT: Stable gradient flow ready for training!")
+        print("✅ EXCELLENT: Stable gradient flow ready for FULL SIZE training!")
         return True
     else:
         print("❌ Gradient flow issues detected")
