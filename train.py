@@ -2,6 +2,7 @@
 train.py - UPDATED TRAINING SCRIPT FOR ADVANCED STREET FIGHTER AI
 COMPATIBLE: Works with the new AdvancedStreetFighterPolicy and complete wrapper
 FEATURES: Advanced monitoring for baiting, blocking, and tactical gameplay
+UPDATES: Full frame size support (320x224), adjusted monitoring for pixel changes
 """
 
 import os
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class AdvancedTacticsCallback(BaseCallback):
-    """Advanced callback for monitoring Street Fighter tactics and stability"""
+    """Advanced callback for monitoring Street Fighter tactics and stability - UPDATED FOR FULL FRAME"""
 
     def __init__(self, save_freq=25000, save_path="./models/", verbose=1):
         super().__init__(verbose)
@@ -71,7 +72,7 @@ class AdvancedTacticsCallback(BaseCallback):
     def _on_training_start(self):
         """Initialize training with advanced monitoring"""
         self.training_start_time = datetime.now()
-        print(f"🥊 ADVANCED STREET FIGHTER TRAINING STARTED")
+        print(f"🥊 ADVANCED STREET FIGHTER TRAINING STARTED (FULL FRAME)")
         print("=" * 60)
         print(f"🎯 Goals:")
         print(f"   - Learn proper baiting techniques")
@@ -79,10 +80,12 @@ class AdvancedTacticsCallback(BaseCallback):
         print(f"   - Develop advanced spacing control")
         print(f"   - Achieve stable value loss < {self.value_loss_threshold}")
         print(f"🔧 Advanced Features:")
+        print(f"   - Full frame size: 320x224 (no scaling)")
         print(f"   - 42-dimensional feature space")
         print(f"   - Research-based baiting system")
         print(f"   - Frame-accurate blocking detection")
         print(f"   - Move-specific punishment tracking")
+        print(f"   - Updated pixel values for baiting ranges")
         print()
 
         # Initial stability check
@@ -90,7 +93,7 @@ class AdvancedTacticsCallback(BaseCallback):
 
     def _perform_initial_checks(self):
         """Perform initial system checks"""
-        print("🔬 Initial System Checks")
+        print("🔬 Initial System Checks (Full Frame)")
         print("-" * 30)
 
         env = self._get_env()
@@ -101,6 +104,17 @@ class AdvancedTacticsCallback(BaseCallback):
                     print("   ✅ Gradient flow stable")
                 else:
                     print("   ⚠️  Gradient flow issues detected")
+                    
+                # Check frame size
+                obs = env.reset()[0]
+                visual_shape = obs["visual_obs"].shape
+                print(f"   📺 Frame size: {visual_shape[1]}x{visual_shape[2]} (Full Frame)")
+                
+                if visual_shape[1] == 224 and visual_shape[2] == 320:
+                    print("   ✅ Full frame size confirmed")
+                else:
+                    print("   ⚠️  Unexpected frame size")
+                    
             except Exception as e:
                 print(f"   ❌ System check failed: {e}")
         print()
@@ -249,7 +263,7 @@ class AdvancedTacticsCallback(BaseCallback):
 
     def _log_advanced_report(self):
         """Generate comprehensive training report"""
-        print(f"\n🥊 ADVANCED TACTICAL REPORT - Step {self.num_timesteps:,}")
+        print(f"\n🥊 ADVANCED TACTICAL REPORT (Full Frame) - Step {self.num_timesteps:,}")
         print("=" * 60)
 
         if self.training_start_time:
@@ -289,7 +303,7 @@ class AdvancedTacticsCallback(BaseCallback):
             print(f"   📈 Avg Episode Reward: {recent_reward:.3f}")
 
         # Advanced tactical analysis
-        print(f"\n🥋 TACTICAL MASTERY:")
+        print(f"\n🥋 TACTICAL MASTERY (Updated Ranges):")
 
         if self.bait_success_rates:
             recent_bait_rate = np.mean(self.bait_success_rates[-10:])
@@ -402,7 +416,7 @@ class AdvancedTacticsCallback(BaseCallback):
 
     def _save_advanced_checkpoint(self):
         """Save model with advanced metadata"""
-        model_name = f"sf_advanced_{self.num_timesteps}"
+        model_name = f"sf_advanced_fullframe_{self.num_timesteps}"
         model_path = os.path.join(self.save_path, f"{model_name}.zip")
 
         try:
@@ -417,7 +431,7 @@ class AdvancedTacticsCallback(BaseCallback):
                 and np.mean(self.value_losses[-5:]) < 10.0
             ):
 
-                best_path = os.path.join(self.save_path, "best_tactical_model.zip")
+                best_path = os.path.join(self.save_path, "best_tactical_fullframe_model.zip")
                 self.model.save(best_path)
                 print(
                     f"   🌟 Saved as best tactical model (score: {tactical_score:.1f})"
@@ -426,7 +440,7 @@ class AdvancedTacticsCallback(BaseCallback):
             # Save stable model
             if self.consecutive_stable_steps > 20000 and self.best_win_rate > 0.3:
 
-                stable_path = os.path.join(self.save_path, "stable_advanced_model.zip")
+                stable_path = os.path.join(self.save_path, "stable_advanced_fullframe_model.zip")
                 self.model.save(stable_path)
                 print(f"   🛡️  Saved as stable model")
 
@@ -439,7 +453,7 @@ def make_advanced_env(
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create advanced Street Fighter environment"""
+    """Create advanced Street Fighter environment with full frame support"""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = Monitor(env)
@@ -448,6 +462,12 @@ def make_advanced_env(
             frame_stack=4,
             rendering=(render_mode is not None),
         )
+        
+        # Verify full frame size
+        obs = env.reset()[0]
+        visual_shape = obs["visual_obs"].shape
+        print(f"🎮 Environment created with frame size: {visual_shape[1]}x{visual_shape[2]}")
+        
         return env
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
@@ -455,7 +475,7 @@ def make_advanced_env(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Advanced Street Fighter Training")
+    parser = argparse.ArgumentParser(description="Advanced Street Fighter Training (Full Frame)")
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
     )
@@ -479,13 +499,19 @@ def main():
 
     args = parser.parse_args()
 
-    print("🥊 ADVANCED STREET FIGHTER AI TRAINING")
+    print("🥊 ADVANCED STREET FIGHTER AI TRAINING (FULL FRAME)")
     print("=" * 50)
     print("🎯 Training Goals:")
-    print("   - Master baiting techniques")
+    print("   - Master baiting techniques with updated ranges")
     print("   - Perfect blocking and punishment")
-    print("   - Develop advanced spacing")
+    print("   - Develop advanced spacing (320x224 full frame)")
     print("   - Achieve consistent wins")
+    print()
+    print("🔧 Technical Updates:")
+    print("   - Full frame size: 320x224 (no downscaling)")
+    print("   - Updated psycho crusher bait range: 90-140 pixels")
+    print("   - Updated head stomp bait range: 45-90 pixels")
+    print("   - Enhanced CNN for full frame processing")
     print()
     print("🔧 Hyperparameters:")
     print(f"   - Learning Rate: {args.learning_rate}")
@@ -531,9 +557,9 @@ def main():
             model = None
 
     if model is None:
-        print("🆕 Creating new advanced model...")
+        print("🆕 Creating new advanced model (full frame)...")
         model = PPO(
-            AdvancedStreetFighterPolicy,  # Updated policy
+            AdvancedStreetFighterPolicy,  # Updated policy with full frame support
             env,
             learning_rate=args.learning_rate,
             n_steps=args.n_steps,
@@ -551,7 +577,7 @@ def main():
         print("✅ New advanced model created")
 
     # Pre-training stability test
-    print("\n🔬 Pre-training system verification...")
+    print("\n🔬 Pre-training system verification (full frame)...")
     try:
         obs = env.reset()[0]
         obs_tensor = {}
@@ -564,6 +590,14 @@ def main():
         print(f"✅ System verification passed")
         print(f"   Initial value: {values.item():.3f}")
         print(f"   Feature dimensions verified: {obs['vector_obs'].shape}")
+        print(f"   Visual dimensions verified: {obs['visual_obs'].shape}")
+
+        # Verify frame size
+        visual_shape = obs['visual_obs'].shape
+        if visual_shape[1] == 224 and visual_shape[2] == 320:
+            print(f"   ✅ Full frame size confirmed: {visual_shape[1]}x{visual_shape[2]}")
+        else:
+            print(f"   ⚠️  Unexpected frame size: {visual_shape[1]}x{visual_shape[2]}")
 
     except Exception as e:
         print(f"❌ System verification failed: {e}")
@@ -572,9 +606,10 @@ def main():
     # Create advanced callback
     callback = AdvancedTacticsCallback(save_freq=50000, save_path="./models/")
 
-    print("\n🚀 STARTING ADVANCED TRAINING...")
+    print("\n🚀 STARTING ADVANCED TRAINING (FULL FRAME)...")
     print("📊 Monitoring: Baiting, Blocking, Spacing, Win Rate")
     print("🛡️  Safety: Auto-stop on training instability")
+    print("🎯 Tactical: Updated pixel ranges for all moves")
     print()
 
     try:
@@ -586,7 +621,7 @@ def main():
         )
 
         # Save final model
-        final_path = "./models/final_advanced_sf_model.zip"
+        final_path = "./models/final_advanced_sf_fullframe_model.zip"
         model.save(final_path)
         print(f"🎉 Advanced training completed successfully!")
         print(f"💾 Final model saved: {final_path}")
@@ -603,9 +638,14 @@ def main():
         final_tactical_score = callback._calculate_tactical_effectiveness()
         print(f"🎖️  Final tactical score: {final_tactical_score:.1f}/10.0")
 
+        # Frame size summary
+        obs = env.reset()[0]
+        visual_shape = obs["visual_obs"].shape
+        print(f"📺 Training completed with frame size: {visual_shape[1]}x{visual_shape[2]}")
+
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        model.save("./models/interrupted_advanced_model.zip")
+        model.save("./models/interrupted_advanced_fullframe_model.zip")
         print("💾 Progress saved")
 
     except Exception as e:
@@ -616,7 +656,7 @@ def main():
 
         # Try to save model even after error
         try:
-            model.save("./models/error_advanced_model.zip")
+            model.save("./models/error_advanced_fullframe_model.zip")
             print("💾 Model saved despite error")
         except:
             print("❌ Could not save model")

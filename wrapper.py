@@ -3,6 +3,7 @@
 wrapper.py - COMPLETE STREET FIGHTER AI WRAPPER
 FEATURES: Advanced baiting, blocking detection, move-specific analysis, frame data
 RESEARCH-BASED: Proper Street Fighter mechanics implementation
+UPDATES: Full frame size (no scaling), adjusted pixel values for baiting system
 """
 
 import cv2
@@ -45,10 +46,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
+# Constants - UPDATED FOR FULL FRAME SIZE
 MAX_HEALTH = 176
-SCREEN_WIDTH = 180
-SCREEN_HEIGHT = 128
+SCREEN_WIDTH = 320  # Full frame width (was 180)
+SCREEN_HEIGHT = 224  # Full frame height (was 128)
 VECTOR_FEATURE_DIM = 42  # 21 core + 12 movement + 9 advanced tactics
 
 # Frame data constants (60 FPS)
@@ -168,54 +169,54 @@ class RewardNormalizer:
 
 
 class StreetFighterMoveDatabase:
-    """Database of Street Fighter move properties based on research"""
+    """Database of Street Fighter move properties based on research - UPDATED PIXEL VALUES"""
 
     def __init__(self):
-        # Move ranges and frame data (estimated for SF2/similar games)
+        # Move ranges and frame data (updated for full frame size 320x224)
         self.move_data = {
             "psycho_crusher": {
                 "startup_range": (
-                    45,
-                    85,
-                ),  # Range where Psycho Crusher typically starts
-                "active_range": (35, 75),  # Range where it's active/dangerous
-                "recovery_range": (25, 65),  # Range during recovery (punishable)
+                    80,
+                    150,
+                ),  # Range where Psycho Crusher typically starts (was 45,85)
+                "active_range": (60, 130),  # Range where it's active/dangerous (was 35,75)
+                "recovery_range": (45, 115),  # Range during recovery (punishable) (was 25,65)
                 "block_advantage": -4,  # Negative on block (punishable)
                 "whiff_recovery": 25,  # Frames of recovery if whiffed
                 "chip_damage": 0.1,  # Chip damage ratio
             },
             "scissor_kick": {
-                "startup_range": (35, 60),
-                "active_range": (25, 50),
-                "recovery_range": (15, 45),
+                "startup_range": (65, 105),  # Updated from (35, 60)
+                "active_range": (45, 90),    # Updated from (25, 50)
+                "recovery_range": (30, 80),  # Updated from (15, 45)
                 "block_advantage": -2,
                 "whiff_recovery": 18,
                 "chip_damage": 0.05,
             },
             "head_stomp": {
-                "startup_range": (20, 45),
-                "active_range": (15, 35),
-                "recovery_range": (10, 30),
+                "startup_range": (35, 80),   # Updated from (20, 45)
+                "active_range": (25, 60),    # Updated from (15, 35)
+                "recovery_range": (20, 55),  # Updated from (10, 30)
                 "block_advantage": -6,
                 "whiff_recovery": 22,
                 "chip_damage": 0.08,
             },
             "heavy_punch": {
-                "startup_range": (25, 50),
-                "active_range": (20, 40),
-                "recovery_range": (15, 35),
+                "startup_range": (45, 90),   # Updated from (25, 50)
+                "active_range": (35, 70),    # Updated from (20, 40)
+                "recovery_range": (25, 60),  # Updated from (15, 35)
                 "block_advantage": -3,
                 "whiff_recovery": 15,
                 "chip_damage": 0.02,
             },
         }
 
-        # Baiting ranges for different moves
+        # Baiting ranges for different moves (updated for full frame size)
         self.bait_ranges = {
-            "psycho_crusher": (50, 80),  # Optimal range to bait Psycho Crusher
-            "scissor_kick": (40, 65),
-            "head_stomp": (25, 50),
-            "general": (35, 70),  # General baiting range
+            "psycho_crusher": (90, 140),  # Optimal range to bait Psycho Crusher (was 50,80)
+            "scissor_kick": (70, 115),    # Updated from (40, 65)
+            "head_stomp": (45, 90),       # Updated from (25, 50)
+            "general": (60, 125),         # General baiting range (was 35,70)
         }
 
 
@@ -354,7 +355,7 @@ class AdvancedBaitingSystem:
     def _detect_control_normal_usage(self, player_attacking, distance):
         """Detect usage of control normals for baiting"""
         # Control normals are attacks used at specific ranges to threaten opponent
-        optimal_control_range = (30, 60)  # Range where control normals are effective
+        optimal_control_range = (55, 105)  # Range where control normals are effective (updated from 30,60)
 
         if (
             player_attacking
@@ -594,9 +595,9 @@ class AdvancedBlockingSystem:
 
         # Also consider optimal punish timing and range
         if frames_since_block <= 6:  # Fast punish
-            punish_range = (10, 50)  # Close range for fast punishes
+            punish_range = (20, 90)  # Close range for fast punishes (updated from 10,50)
         else:
-            punish_range = (15, 60)  # Medium range for slower punishes
+            punish_range = (25, 105)  # Medium range for slower punishes (updated from 15,60)
 
         return punish_range[0] <= distance <= punish_range[1]
 
@@ -648,8 +649,8 @@ class EnhancedMovementTracker:
         self.optimal_spacing_time = 0
         self.frame_count = 0
 
-        # Spacing analysis
-        self.OPTIMAL_RANGES = {"close": (15, 35), "mid": (35, 65), "far": (65, 100)}
+        # Spacing analysis (updated for full frame size)
+        self.OPTIMAL_RANGES = {"close": (25, 60), "mid": (60, 115), "far": (115, 180)}  # Updated ranges
 
     def update(self, player_x, opponent_x, player_attacking):
         """Update movement tracking"""
@@ -725,7 +726,7 @@ class EnhancedMovementTracker:
         if len(self.position_history) >= 5:
             recent_distances = [pos[2] for pos in list(self.position_history)[-5:]]
             features[5] = np.mean(recent_distances) / SCREEN_WIDTH  # Average distance
-            features[6] = np.std(recent_distances) / 20  # Distance variance
+            features[6] = np.std(recent_distances) / 35  # Distance variance (adjusted scale)
             features[7] = (
                 max(recent_distances) - min(recent_distances)
             ) / SCREEN_WIDTH  # Range of movement
@@ -838,12 +839,12 @@ class ComprehensiveStrategicTracker:
             VECTOR_FEATURE_DIM, clip_range=2.0, adaptive=True
         )
 
-        # Game constants
+        # Game constants (updated for full frame size)
         self.DANGER_ZONE_HEALTH = MAX_HEALTH * 0.25
-        self.CORNER_THRESHOLD = 30
-        self.CLOSE_DISTANCE = 40
-        self.OPTIMAL_SPACING_MIN = 35
-        self.OPTIMAL_SPACING_MAX = 55
+        self.CORNER_THRESHOLD = 55  # Updated from 30 for full frame width
+        self.CLOSE_DISTANCE = 70    # Updated from 40 for full frame width
+        self.OPTIMAL_SPACING_MIN = 60  # Updated from 35 for full frame width
+        self.OPTIMAL_SPACING_MAX = 100 # Updated from 55 for full frame width
         self.COMBO_TIMEOUT_FRAMES = 60
         self.MIN_SCORE_INCREASE_FOR_HIT = 50
 
@@ -1045,7 +1046,7 @@ class ComprehensiveStrategicTracker:
             abs(opponent_x - SCREEN_WIDTH / 2) - abs(player_x - SCREEN_WIDTH / 2)
         )
 
-        y_diff = info.get("agent_y", 64) - info.get("enemy_y", 64)
+        y_diff = info.get("agent_y", 112) - info.get("enemy_y", 112)  # Updated for full frame height
         features[12] = np.clip(y_diff / (SCREEN_HEIGHT / 2), -1.0, 1.0)
 
         # Tactical features (13-17)
@@ -1164,7 +1165,7 @@ class ComprehensiveStrategicTracker:
 
 
 class OptimizedStreetFighterCNN(BaseFeaturesExtractor):
-    """Optimized CNN architecture for Street Fighter with advanced features"""
+    """Optimized CNN architecture for Street Fighter with advanced features - UPDATED FOR FULL FRAME"""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__(observation_space, features_dim)
@@ -1174,14 +1175,15 @@ class OptimizedStreetFighterCNN(BaseFeaturesExtractor):
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        print(f"🥊 Advanced Street Fighter CNN Configuration:")
+        print(f"🥊 Advanced Street Fighter CNN Configuration (Full Frame):")
         print(f"   - Visual channels: {n_input_channels}")
+        print(f"   - Frame size: {visual_space.shape[1]}x{visual_space.shape[2]} (Full)")
         print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
         print(f"   - Output features: {features_dim}")
 
-        # Visual processing with residual connections
+        # Visual processing with residual connections - UPDATED FOR FULL FRAME
         self.visual_cnn = nn.Sequential(
-            # First block
+            # First block - adapted for larger input
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
@@ -1192,6 +1194,10 @@ class OptimizedStreetFighterCNN(BaseFeaturesExtractor):
             # Third block
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            # Additional block for full frame processing
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
             # Adaptive pooling and flatten
             nn.AdaptiveAvgPool2d((4, 4)),
@@ -1243,7 +1249,7 @@ class OptimizedStreetFighterCNN(BaseFeaturesExtractor):
 
         print(f"   - Visual output size: {visual_output_size}")
         print(f"   - Fusion input size: {fusion_input_size}")
-        print(f"   ✅ Advanced CNN initialized with attention and temporal processing")
+        print(f"   ✅ Advanced CNN initialized with full frame support")
 
     def _init_weights(self, m):
         """Initialize weights with proper scaling"""
@@ -1348,19 +1354,19 @@ class AdvancedStreetFighterPolicy(ActorCriticPolicy):
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """Complete Street Fighter wrapper with all advanced features"""
+    """Complete Street Fighter wrapper with all advanced features - UPDATED FOR FULL FRAME"""
 
     def __init__(self, env, frame_stack=4, rendering=False):
         super().__init__(env)
         self.frame_stack = frame_stack
         self.rendering = rendering
-        self.target_size = (128, 180)
+        self.target_size = (224, 320)  # FULL FRAME SIZE (height, width)
 
         # Action space
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
-        # Observation space
+        # Observation space - UPDATED FOR FULL FRAME
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -1403,6 +1409,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.episode_rewards = deque(maxlen=100)
         self.stats = {}
 
+        print(f"🥊 Street Fighter Wrapper initialized with FULL FRAME SIZE: {self.target_size}")
+
     def reset(self, **kwargs):
         """Reset environment with proper initialization"""
         obs, info = self.env.reset(**kwargs)
@@ -1412,7 +1420,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
 
-        # Process initial frame
+        # Process initial frame - NO SCALING (keep full size)
         processed_frame = self._preprocess_frame(obs)
         initial_vector_features = self._create_initial_vector_features(info)
 
@@ -1460,7 +1468,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             truncated = True
         done = custom_done or done
 
-        # Process frame
+        # Process frame - NO SCALING (keep full size)
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.append(processed_frame)
 
@@ -1567,10 +1575,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return {"visual_obs": visual_obs, "vector_obs": vector_obs}
 
     def _preprocess_frame(self, frame):
-        """Preprocess visual frame"""
+        """Preprocess visual frame - NO SCALING, KEEP FULL FRAME SIZE"""
         if frame is None:
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
-        return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
+        
+        # Check if frame is already the correct size
+        if frame.shape[:2] == self.target_size:
+            return frame.astype(np.uint8)
+        
+        # Only resize if necessary - preserve aspect ratio and quality
+        return cv2.resize(frame, (self.target_size[1], self.target_size[0]), 
+                         interpolation=cv2.INTER_LINEAR)
 
     def _update_comprehensive_stats(self):
         """Update comprehensive statistics"""
@@ -1647,12 +1662,13 @@ def verify_gradient_flow(model, env, device=None):
     vector_obs = obs_tensor["vector_obs"]
     visual_obs = obs_tensor["visual_obs"]
 
-    print(f"🔍 Observation Analysis:")
+    print(f"🔍 Observation Analysis (Full Frame):")
     print(f"   - Vector shape: {vector_obs.shape}")
     print(
         f"   - Vector range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}"
     )
     print(f"   - Visual shape: {visual_obs.shape}")
+    print(f"   - Visual size: {visual_obs.shape[2]}x{visual_obs.shape[3]} (Full Frame)")
     print(
         f"   - Visual range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}"
     )
