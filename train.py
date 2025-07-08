@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-train.py - STABILIZED TRAINING SCRIPT with fixes for training instability - FULL SIZE FRAMES
-FIXES: High value loss (35+→<8), Low explained variance (0.11→>0.3), Low clip fraction (0.04→0.1-0.3)
-SOLUTION: Conservative hyperparameters, enhanced monitoring, stability-focused training
+train.py - STABILIZED TRAINING SCRIPT with fixes for training instability AND array ambiguity - FULL SIZE FRAMES
+FIXES: High value loss (35+→<8), Low explained variance (0.11→>0.3), Low clip fraction (0.04→0.1-0.3), Array ambiguity errors
+SOLUTION: Conservative hyperparameters, enhanced monitoring, stability-focused training, proper scalar handling
 MODIFICATION: Adapted for full-size frames (224x320) with adjusted hyperparameters for increased memory usage
 """
 
@@ -23,6 +23,8 @@ from wrapper import (
     FixedStreetFighterPolicy,
     StreetFighterVisionWrapper,
     verify_gradient_flow,
+    ensure_scalar,
+    safe_bool_check,
 )
 
 # Configure logging
@@ -32,9 +34,10 @@ logger = logging.getLogger(__name__)
 
 class StabilityCallback(BaseCallback):
     """
-    STABILIZED callback with focus on training stability metrics - UPDATED for full-size frames.
+    STABILIZED callback with focus on training stability metrics AND array safety - UPDATED for full-size frames.
     Monitors value loss, explained variance, clip fraction for stability issues.
     Additional monitoring for memory usage with larger frames.
+    CRITICAL FIX: Proper handling of array values from metrics.
     """
 
     def __init__(self, save_freq=50000, save_path="./models/", verbose=1):
@@ -82,6 +85,7 @@ class StabilityCallback(BaseCallback):
             f"🖼️  Frame Size: Full resolution (224x320) - Higher memory usage expected"
         )
         print(f"🔧 Device: {self.device}")
+        print(f"🛡️  Array Safety: Enhanced scalar conversion for metrics")
 
         # Check memory availability
         if torch.cuda.is_available() and self.device.type == "cuda":
@@ -123,10 +127,10 @@ class StabilityCallback(BaseCallback):
     def _on_step(self) -> bool:
         """Monitor training stability each step - UPDATED for memory monitoring."""
 
-        # Extract training metrics
+        # Extract training metrics with array safety
         self._extract_training_metrics()
 
-        # Extract performance metrics
+        # Extract performance metrics with array safety
         self._extract_performance_metrics()
 
         # Monitor memory usage for full-size frames
@@ -162,13 +166,14 @@ class StabilityCallback(BaseCallback):
                     print(f"⚠️  High GPU memory usage: {current_memory:.1f} GB")
 
     def _extract_training_metrics(self):
-        """Extract key training stability metrics."""
+        """Extract key training stability metrics with ARRAY SAFETY."""
         if hasattr(self.logger, "name_to_value"):
             metrics = self.logger.name_to_value
 
-            # Value loss (CRITICAL for stability)
+            # CRITICAL FIX: Value loss (CRITICAL for stability) - ensure scalar
             if "train/value_loss" in metrics:
-                value_loss = metrics["train/value_loss"]
+                value_loss_raw = metrics["train/value_loss"]
+                value_loss = ensure_scalar(value_loss_raw, 0.0)
                 self.value_losses.append(value_loss)
 
                 # Detect dangerous value loss spikes
@@ -182,37 +187,44 @@ class StabilityCallback(BaseCallback):
                 if len(self.value_losses) > 1000:
                     self.value_losses.pop(0)
 
-            # Explained variance
+            # CRITICAL FIX: Explained variance - ensure scalar
             if "train/explained_variance" in metrics:
-                explained_var = metrics["train/explained_variance"]
+                explained_var_raw = metrics["train/explained_variance"]
+                explained_var = ensure_scalar(explained_var_raw, 0.0)
                 self.explained_variances.append(explained_var)
                 if len(self.explained_variances) > 1000:
                     self.explained_variances.pop(0)
 
-            # Clip fraction
+            # CRITICAL FIX: Clip fraction - ensure scalar
             if "train/clip_fraction" in metrics:
-                clip_frac = metrics["train/clip_fraction"]
+                clip_frac_raw = metrics["train/clip_fraction"]
+                clip_frac = ensure_scalar(clip_frac_raw, 0.0)
                 self.clip_fractions.append(clip_frac)
                 if len(self.clip_fractions) > 1000:
                     self.clip_fractions.pop(0)
 
     def _extract_performance_metrics(self):
-        """Extract episode performance metrics."""
+        """Extract episode performance metrics with ARRAY SAFETY."""
         if hasattr(self.locals, "infos") and self.locals["infos"]:
             for info in self.locals["infos"]:
                 if "episode" in info:
                     episode_info = info["episode"]
-                    self.episode_rewards.append(episode_info["r"])
-                    self.episode_lengths.append(episode_info["l"])
+                    # CRITICAL FIX: Ensure scalar episode metrics
+                    episode_reward = ensure_scalar(episode_info["r"], 0.0)
+                    episode_length = ensure_scalar(episode_info["l"], 0.0)
+
+                    self.episode_rewards.append(episode_reward)
+                    self.episode_lengths.append(episode_length)
 
                     # Keep recent episodes only
                     if len(self.episode_rewards) > 100:
                         self.episode_rewards.pop(0)
                         self.episode_lengths.pop(0)
 
-                # Win rate tracking
+                # CRITICAL FIX: Win rate tracking - ensure scalar
                 if "win_rate" in info:
-                    self.win_rates.append(info["win_rate"])
+                    win_rate = ensure_scalar(info["win_rate"], 0.0)
+                    self.win_rates.append(win_rate)
                     if len(self.win_rates) > 100:
                         self.win_rates.pop(0)
 
@@ -221,7 +233,7 @@ class StabilityCallback(BaseCallback):
         if not self.value_losses:
             return
 
-        # Calculate recent metrics
+        # Calculate recent metrics - all guaranteed to be scalars now
         recent_value_loss = np.mean(self.value_losses[-10:])
         recent_explained_var = (
             np.mean(self.explained_variances[-10:]) if self.explained_variances else 0
@@ -249,7 +261,7 @@ class StabilityCallback(BaseCallback):
         self.best_stability_score = max(self.best_stability_score, stability_score)
 
     def _calculate_stability_score(self, value_loss, explained_var, clip_frac):
-        """Calculate overall stability score (0-100)."""
+        """Calculate overall stability score (0-100) - inputs guaranteed to be scalars."""
         score = 0.0
 
         # Value loss component (40 points max)
@@ -300,7 +312,7 @@ class StabilityCallback(BaseCallback):
             if self.memory_warnings > 0:
                 print(f"   ⚠️  Memory warnings: {self.memory_warnings}")
 
-        # Core stability metrics
+        # Core stability metrics - all guaranteed to be scalars
         if self.value_losses:
             recent_value_loss = np.mean(self.value_losses[-20:])
             print(f"🎯 Value Loss: {recent_value_loss:.2f}")
@@ -396,6 +408,7 @@ class StabilityCallback(BaseCallback):
 
     def _save_stability_checkpoint(self):
         """Save model checkpoint with stability metrics."""
+        # All metrics guaranteed to be scalars now
         current_value_loss = (
             np.mean(self.value_losses[-10:]) if self.value_losses else float("inf")
         )
@@ -450,7 +463,7 @@ def make_env(
         env = StreetFighterVisionWrapper(
             env, frame_stack=8, rendering=(render_mode is not None)
         )
-        print(f"✅ Environment created with full-size frames")
+        print(f"✅ Environment created with full-size frames and array safety")
         return env
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
@@ -459,7 +472,7 @@ def make_env(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="STABILIZED Street Fighter Training - Full Size"
+        description="STABILIZED Street Fighter Training - Full Size + Array Safety"
     )
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
@@ -518,12 +531,13 @@ def main():
 
     args = parser.parse_args()
 
-    print("🔧 STABILIZED STREET FIGHTER TRAINING - FULL SIZE FRAMES")
-    print("=" * 70)
+    print("🔧 STABILIZED STREET FIGHTER TRAINING - FULL SIZE FRAMES + ARRAY SAFETY")
+    print("=" * 80)
     print("🎯 ADDRESSING TRAINING INSTABILITY:")
     print("   - HIGH Value Loss: 35+ → Target <8.0")
     print("   - LOW Explained Variance: 0.11 → Target >0.3")
     print("   - LOW Clip Fraction: 0.04 → Target 0.1-0.3")
+    print("   - ARRAY AMBIGUITY: Fixed with scalar conversion")
     print()
     print("🖼️  FULL SIZE FRAME MODIFICATIONS:")
     print("   - Frame Resolution: 224x320 (vs 128x180 previously)")
@@ -531,6 +545,11 @@ def main():
     print("   - Batch Size: Reduced to 128 (from 256)")
     print("   - Rollout Steps: Reduced to 4096 (from 8192)")
     print("   - Learning Rate: Reduced to 8e-5 (from 1e-4)")
+    print()
+    print("🛡️  ARRAY SAFETY ENHANCEMENTS:")
+    print("   - ensure_scalar() for all metric extractions")
+    print("   - safe_bool_check() for array boolean operations")
+    print("   - Proper vectorized env info handling")
     print()
     print("🔧 STABILIZED HYPERPARAMETERS:")
     print(f"   - Learning Rate: {args.learning_rate} (conservative for full-size)")
@@ -569,7 +588,7 @@ def main():
     env = make_env(args.game, args.state, render_mode)
 
     # Test environment with full-size frames
-    print("🧪 Testing environment with full-size frames...")
+    print("🧪 Testing environment with full-size frames and array safety...")
     obs = env.reset()
     if isinstance(obs, tuple):
         obs = obs[0]
@@ -585,6 +604,7 @@ def main():
     frame_memory_mb = np.prod(visual_shape) * 4 / 1024 / 1024  # 4 bytes per float32
     batch_memory_mb = frame_memory_mb * args.batch_size
     print(f"   📊 Estimated batch memory: {batch_memory_mb:.1f} MB")
+    print(f"   🛡️  Array safety: All metrics will be converted to scalars")
 
     # Create or load model
     if args.resume and os.path.exists(args.resume):
@@ -646,15 +666,16 @@ def main():
         else:
             print("✅ Stability verified - ready for stable full-size training!")
 
-    # Create stability-focused callback with memory monitoring
+    # Create stability-focused callback with memory monitoring and array safety
     callback = StabilityCallback(save_freq=50000, save_path="./models/")
 
-    print("\n🚀 STARTING STABILIZED FULL-SIZE TRAINING...")
+    print("\n🚀 STARTING STABILIZED FULL-SIZE TRAINING WITH ARRAY SAFETY...")
     print("📊 Real-time monitoring of:")
     print("   - Value Loss (target: <8.0)")
     print("   - Explained Variance (target: >0.3)")
     print("   - Clip Fraction (target: 0.1-0.3)")
     print("   - GPU Memory Usage (full-size frames)")
+    print("   - Array Safety (scalar conversion)")
     print("💾 Auto-saving best stability models")
     print()
 
@@ -667,13 +688,13 @@ def main():
         )
 
         # Save final model
-        final_path = "./models/final_stabilized_fullsize_model.zip"
+        final_path = "./models/final_stabilized_fullsize_arraysafe_model.zip"
         model.save(final_path)
-        print(f"🎉 Full-size training completed successfully!")
+        print(f"🎉 Full-size training with array safety completed successfully!")
         print(f"💾 Final model saved: {final_path}")
 
         # Final stability report
-        print(f"\n📊 FINAL STABILITY RESULTS (FULL SIZE):")
+        print(f"\n📊 FINAL STABILITY RESULTS (FULL SIZE + ARRAY SAFE):")
         if callback.value_losses:
             final_value_loss = np.mean(callback.value_losses[-20:])
             print(f"📉 Final Value Loss: {final_value_loss:.2f}")
@@ -711,14 +732,16 @@ def main():
             if callback.memory_warnings > 0:
                 print(f"   ⚠️  Memory warnings: {callback.memory_warnings}")
 
+        print(f"🛡️  Array Safety: No 'truth value of array' errors encountered!")
+
         if final_stability >= 60:
-            print("🎉 FULL-SIZE TRAINING STABILIZATION SUCCESSFUL!")
+            print("🎉 FULL-SIZE TRAINING STABILIZATION WITH ARRAY SAFETY SUCCESSFUL!")
         else:
             print("📈 PARTIAL IMPROVEMENT - Continue training for full stabilization")
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        interrupted_path = "./models/interrupted_fullsize_model.zip"
+        interrupted_path = "./models/interrupted_fullsize_arraysafe_model.zip"
         model.save(interrupted_path)
         print(f"💾 Model saved: {interrupted_path}")
 
@@ -728,7 +751,13 @@ def main():
 
         traceback.print_exc()
 
-        error_path = "./models/error_fullsize_model.zip"
+        # Check if it's the array ambiguity error we were trying to fix
+        if "truth value of an array" in str(e):
+            print("🚨 CRITICAL: Array ambiguity error still occurring!")
+            print("   This suggests the error is coming from a different location.")
+            print("   Check for any remaining numpy array boolean operations.")
+
+        error_path = "./models/error_fullsize_arraysafe_model.zip"
         try:
             model.save(error_path)
             print(f"💾 Model saved: {error_path}")
@@ -738,7 +767,7 @@ def main():
 
     finally:
         env.close()
-        print("🔚 Full-size training session ended")
+        print("🔚 Full-size training session with array safety ended")
 
 
 if __name__ == "__main__":

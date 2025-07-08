@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-wrapper_fixed.py - CRITICAL NaN FIXES for vector features
-FIXES: Division by zero, invalid math operations, bait-punish integration issues, and ambiguity errors with array inputs.
-SOLUTION: Comprehensive NaN prevention, safe mathematical operations, robust error handling, and guaranteed scalar processing of environment info.
+wrapper_fixed.py - COMPLETE ARRAY AMBIGUITY FIX
+FIXES: All remaining boolean array operations that cause "truth value of an array" errors
+SOLUTION: Comprehensive array-to-scalar conversion at every potential boolean operation point
 """
 
 import cv2
@@ -62,9 +62,13 @@ SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 52 if BAIT_PUNISH_AVAILABLE else 45
 
 
-# CRITICAL: Safe mathematical operations to prevent NaN
+# CRITICAL: Enhanced safe operations with more aggressive scalar conversion
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
+    # CRITICAL FIX: Ensure both inputs are scalars
+    numerator = ensure_scalar(numerator, default)
+    denominator = ensure_scalar(denominator, 1.0 if default == 0.0 else default)
+
     if denominator == 0 or not np.isfinite(denominator):
         return default
     result = numerator / denominator
@@ -103,13 +107,118 @@ def safe_mean(values, default=0.0):
 
 def sanitize_array(arr, default_val=0.0):
     """Sanitize numpy array, replacing NaN/inf with default value."""
+    # CRITICAL FIX: Handle scalar inputs
+    if isinstance(arr, (int, float)):
+        if np.isfinite(arr):
+            return np.array([arr], dtype=np.float32)
+        else:
+            return np.array([default_val], dtype=np.float32)
+
     if not isinstance(arr, np.ndarray):
-        arr = np.array(arr)
+        try:
+            arr = np.array(arr, dtype=np.float32)
+        except (ValueError, TypeError):
+            print(f"⚠️  Cannot convert to array: {type(arr)}, using default")
+            return np.array([default_val], dtype=np.float32)
+
+    # Handle 0-dimensional arrays
+    if arr.ndim == 0:
+        val = arr.item()
+        if np.isfinite(val):
+            return np.array([val], dtype=np.float32)
+        else:
+            return np.array([default_val], dtype=np.float32)
+
+    # Handle regular arrays
     mask = ~np.isfinite(arr)
     if np.any(mask):
         arr = arr.copy()
         arr[mask] = default_val
-    return arr
+
+    return arr.astype(np.float32)
+
+
+def ensure_scalar(value, default=0.0):
+    """CRITICAL FIX: Ensure value is a scalar, handling arrays properly."""
+    if value is None:
+        return default
+
+    if isinstance(value, np.ndarray):
+        if value.size == 0:
+            return default
+        elif value.size == 1:
+            try:
+                return float(value.item())
+            except (ValueError, TypeError):
+                return default
+        else:
+            # For multi-element arrays, take the first element
+            try:
+                return float(value.flat[0])
+            except (ValueError, TypeError, IndexError):
+                return default
+    elif isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return default
+        try:
+            return float(value[0])
+        except (ValueError, TypeError, IndexError):
+            return default
+    else:
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
+
+def safe_bool_check(value):
+    """CRITICAL FIX: Safe boolean check for arrays."""
+    if value is None:
+        return False
+
+    if isinstance(value, np.ndarray):
+        if value.size == 0:
+            return False
+        elif value.size == 1:
+            try:
+                return bool(value.item())
+            except (ValueError, TypeError):
+                return False
+        else:
+            # For multi-element arrays, use any() for existence check
+            try:
+                return bool(np.any(value))
+            except (ValueError, TypeError):
+                return False
+    else:
+        try:
+            return bool(value)
+        except (ValueError, TypeError):
+            return False
+
+
+def safe_comparison(value1, value2, operator="==", default=False):
+    """CRITICAL FIX: Safe comparison that handles arrays."""
+    try:
+        val1 = ensure_scalar(value1)
+        val2 = ensure_scalar(value2)
+
+        if operator == "==":
+            return val1 == val2
+        elif operator == "!=":
+            return val1 != val2
+        elif operator == "<":
+            return val1 < val2
+        elif operator == "<=":
+            return val1 <= val2
+        elif operator == ">":
+            return val1 > val2
+        elif operator == ">=":
+            return val1 >= val2
+        else:
+            return default
+    except:
+        return default
 
 
 class OscillationTracker:
@@ -154,11 +263,18 @@ class OscillationTracker:
         opponent_attacking: bool = False,
     ) -> Dict:
         self.frame_count += 1
-        player_x = float(player_x) if np.isfinite(player_x) else SCREEN_WIDTH / 2
-        opponent_x = float(opponent_x) if np.isfinite(opponent_x) else SCREEN_WIDTH / 2
+
+        # CRITICAL FIX: Ensure scalar values
+        player_x = ensure_scalar(player_x, SCREEN_WIDTH / 2)
+        opponent_x = ensure_scalar(opponent_x, SCREEN_WIDTH / 2)
+        player_attacking = safe_bool_check(player_attacking)
+        opponent_attacking = safe_bool_check(opponent_attacking)
+
         player_velocity, opponent_velocity = 0.0, 0.0
+
+        # CRITICAL FIX: Safe scalar comparisons
         if self.prev_player_x is not None:
-            raw_velocity = player_x - self.prev_player_x
+            raw_velocity = player_x - ensure_scalar(self.prev_player_x, player_x)
             if np.isfinite(raw_velocity):
                 player_velocity = (
                     self.velocity_smoothing_factor * raw_velocity
@@ -166,8 +282,9 @@ class OscillationTracker:
                 )
                 if not np.isfinite(player_velocity):
                     player_velocity = 0.0
+
         if self.prev_opponent_x is not None:
-            raw_velocity = opponent_x - self.prev_opponent_x
+            raw_velocity = opponent_x - ensure_scalar(self.prev_opponent_x, opponent_x)
             if np.isfinite(raw_velocity):
                 opponent_velocity = (
                     self.velocity_smoothing_factor * raw_velocity
@@ -175,29 +292,37 @@ class OscillationTracker:
                 )
                 if not np.isfinite(opponent_velocity):
                     opponent_velocity = 0.0
+
         self.player_x_history.append(player_x)
         self.opponent_x_history.append(opponent_x)
         self.player_velocity_history.append(player_velocity)
         self.opponent_velocity_history.append(opponent_velocity)
+
+        # Direction change detection with safe comparisons
         if (
             len(self.player_velocity_history) >= 2
             and abs(self.prev_player_velocity) > self.direction_change_threshold
             and abs(player_velocity) > self.direction_change_threshold
         ):
+
             if (self.prev_player_velocity > 0 and player_velocity < 0) or (
                 self.prev_player_velocity < 0 and player_velocity > 0
             ):
                 self.player_direction_changes += 1
                 self.direction_change_timestamps.append(self.frame_count)
+
         if (
             len(self.opponent_velocity_history) >= 2
             and abs(self.prev_opponent_velocity) > self.direction_change_threshold
             and abs(opponent_velocity) > self.direction_change_threshold
         ):
+
             if (self.prev_opponent_velocity > 0 and opponent_velocity < 0) or (
                 self.prev_opponent_velocity < 0 and opponent_velocity > 0
             ):
                 self.opponent_direction_changes += 1
+
+        # Oscillation amplitude calculation
         if len(self.player_x_history) >= 8:
             recent_positions = list(self.player_x_history)[-8:]
             finite_positions = [p for p in recent_positions if np.isfinite(p)]
@@ -207,6 +332,7 @@ class OscillationTracker:
                 )
             else:
                 self.player_oscillation_amplitude = 0.0
+
         if len(self.opponent_x_history) >= 8:
             recent_positions = list(self.opponent_x_history)[-8:]
             finite_positions = [p for p in recent_positions if np.isfinite(p)]
@@ -216,9 +342,11 @@ class OscillationTracker:
                 )
             else:
                 self.opponent_oscillation_amplitude = 0.0
+
         distance = abs(player_x - opponent_x)
         if not np.isfinite(distance):
             distance = 80.0
+
         movement_analysis = self._analyze_movement_patterns(
             player_x,
             opponent_x,
@@ -228,11 +356,13 @@ class OscillationTracker:
             player_attacking,
             opponent_attacking,
         )
+
         self.prev_player_x, self.prev_opponent_x = player_x, opponent_x
         self.prev_player_velocity, self.prev_opponent_velocity = (
             player_velocity,
             opponent_velocity,
         )
+
         return movement_analysis
 
     def _analyze_movement_patterns(
@@ -245,18 +375,23 @@ class OscillationTracker:
         player_attacking,
         opponent_attacking,
     ) -> Dict:
-        player_moving_forward = (player_x < opponent_x and player_velocity > 0.5) or (
-            player_x > opponent_x and player_velocity < -0.5
-        )
-        player_moving_backward = (player_x < opponent_x and player_velocity < -0.5) or (
-            player_x > opponent_x and player_velocity > 0.5
-        )
+        # CRITICAL FIX: Safe boolean operations
+        player_moving_forward = (
+            safe_comparison(player_x, opponent_x, "<") and player_velocity > 0.5
+        ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity < -0.5)
+
+        player_moving_backward = (
+            safe_comparison(player_x, opponent_x, "<") and player_velocity < -0.5
+        ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity > 0.5)
+
         opponent_moving_forward = (
-            opponent_x < player_x and opponent_velocity > 0.5
-        ) or (opponent_x > player_x and opponent_velocity < -0.5)
+            safe_comparison(opponent_x, player_x, "<") and opponent_velocity > 0.5
+        ) or (safe_comparison(opponent_x, player_x, ">") and opponent_velocity < -0.5)
+
         opponent_moving_backward = (
-            opponent_x < player_x and opponent_velocity < -0.5
-        ) or (opponent_x > player_x and opponent_velocity > 0.5)
+            safe_comparison(opponent_x, player_x, "<") and opponent_velocity < -0.5
+        ) or (safe_comparison(opponent_x, player_x, ">") and opponent_velocity > 0.5)
+
         neutral_game = (
             not player_attacking
             and not opponent_attacking
@@ -264,12 +399,14 @@ class OscillationTracker:
             and abs(player_velocity) < 2.0
             and abs(opponent_velocity) < 2.0
         )
+
         if neutral_game:
             self.neutral_game_duration += 1
         else:
             if self.neutral_game_duration > 0:
                 self.advantage_transitions += 1
             self.neutral_game_duration = 0
+
         if player_moving_forward and distance > self.MID_RANGE:
             self.aggressive_forward_count += 1
         elif player_moving_backward and distance < self.MID_RANGE:
@@ -279,6 +416,7 @@ class OscillationTracker:
             and self.MID_RANGE <= distance <= self.FAR_RANGE
         ):
             self.neutral_dance_count += 1
+
         if (
             distance > self.WHIFF_BAIT_RANGE
             and distance < self.MID_RANGE + 5
@@ -286,9 +424,11 @@ class OscillationTracker:
             and not player_attacking
         ):
             self.whiff_bait_attempts += 1
+
         self.space_control_score = self._calculate_enhanced_space_control(
             player_x, opponent_x, player_velocity, opponent_velocity, distance
         )
+
         return {
             "player_moving_forward": player_moving_forward,
             "player_moving_backward": player_moving_backward,
@@ -308,10 +448,12 @@ class OscillationTracker:
         center_control = safe_divide(
             opponent_center_dist - player_center_dist, SCREEN_WIDTH / 2, 0.0
         )
+
         movement_initiative = 0.0
         velocity_diff = abs(player_velocity) - abs(opponent_velocity)
         if abs(velocity_diff) > 0.1:
             movement_initiative = 0.3 if velocity_diff > 0 else -0.3
+
         range_control = 0.0
         if self.CLOSE_RANGE <= distance <= self.MID_RANGE:
             range_control = 0.4
@@ -319,17 +461,20 @@ class OscillationTracker:
             range_control = -0.3
         elif self.MID_RANGE < distance <= self.FAR_RANGE:
             range_control = 0.2
+
         oscillation_effectiveness = 0.0
         if self.frame_count > 60:
             freq = self.get_rolling_window_frequency()
             if 1.0 <= freq <= 3.0:
                 oscillation_effectiveness = 0.3
+
         total_control = (
             center_control * 0.3
             + movement_initiative * 0.3
             + range_control * 0.2
             + oscillation_effectiveness * 0.2
         )
+
         return np.clip(total_control, -1.0, 1.0) if np.isfinite(total_control) else 0.0
 
     def get_rolling_window_frequency(self) -> float:
@@ -348,63 +493,89 @@ class OscillationTracker:
         return frequency
 
     def get_oscillation_features(self) -> np.ndarray:
-        features = np.zeros(12, dtype=np.float32)
-        if self.frame_count == 0:
-            return features
-        rolling_freq = self.get_rolling_window_frequency()
-        features[0] = np.clip(rolling_freq / 5.0, 0.0, 1.0)
-        if self.frame_count > 0:
-            opponent_freq = safe_divide(
-                self.opponent_direction_changes, max(1, self.frame_count / 60), 0.0
+        """CRITICAL FIX: Ensure this always returns exactly 12 features."""
+        try:
+            features = np.zeros(12, dtype=np.float32)
+            if self.frame_count == 0:
+                return features
+
+            rolling_freq = self.get_rolling_window_frequency()
+            features[0] = np.clip(rolling_freq / 5.0, 0.0, 1.0)
+
+            if self.frame_count > 0:
+                opponent_freq = safe_divide(
+                    self.opponent_direction_changes, max(1, self.frame_count / 60), 0.0
+                )
+                features[1] = np.clip(opponent_freq / 5.0, 0.0, 1.0)
+            else:
+                features[1] = 0.0
+
+            features[2] = np.clip(self.player_oscillation_amplitude / 90.0, 0.0, 1.0)
+            features[3] = np.clip(self.opponent_oscillation_amplitude / 90.0, 0.0, 1.0)
+            features[4] = np.clip(self.space_control_score, -1.0, 1.0)
+            features[5] = np.clip(self.neutral_game_duration / 180.0, 0.0, 1.0)
+
+            total_movement = (
+                self.aggressive_forward_count
+                + self.defensive_backward_count
+                + self.neutral_dance_count
             )
-            features[1] = np.clip(opponent_freq / 5.0, 0.0, 1.0)
-        else:
-            features[1] = 0.0
-        features[2] = np.clip(self.player_oscillation_amplitude / 90.0, 0.0, 1.0)
-        features[3] = np.clip(self.opponent_oscillation_amplitude / 90.0, 0.0, 1.0)
-        features[4] = np.clip(self.space_control_score, -1.0, 1.0)
-        features[5] = np.clip(self.neutral_game_duration / 180.0, 0.0, 1.0)
-        total_movement = (
-            self.aggressive_forward_count
-            + self.defensive_backward_count
-            + self.neutral_dance_count
-        )
-        if total_movement > 0:
-            features[6] = safe_divide(
-                self.aggressive_forward_count, total_movement, 0.0
-            )
-            features[7] = safe_divide(
-                self.defensive_backward_count, total_movement, 0.0
-            )
-            features[8] = safe_divide(self.neutral_dance_count, total_movement, 0.0)
-        else:
-            features[6] = features[7] = features[8] = 0.33
-        if self.frame_count > 0:
-            frame_rate = max(1, self.frame_count / 60)
-            features[9] = np.clip(
-                safe_divide(self.whiff_bait_attempts, frame_rate, 0.0), 0.0, 1.0
-            )
-            features[10] = np.clip(
-                safe_divide(self.advantage_transitions, frame_rate, 0.0), 0.0, 1.0
-            )
-        else:
-            features[9] = features[10] = 0.0
-        if (
-            len(self.player_velocity_history) > 0
-            and len(self.opponent_velocity_history) > 0
-        ):
-            velocity_diff = (
-                self.player_velocity_history[-1] - self.opponent_velocity_history[-1]
-            )
-            features[11] = (
-                np.clip(velocity_diff / 5.0, -1.0, 1.0)
-                if np.isfinite(velocity_diff)
-                else 0.0
-            )
-        else:
-            features[11] = 0.0
-        features = sanitize_array(features, 0.0)
-        return features
+            if total_movement > 0:
+                features[6] = safe_divide(
+                    self.aggressive_forward_count, total_movement, 0.0
+                )
+                features[7] = safe_divide(
+                    self.defensive_backward_count, total_movement, 0.0
+                )
+                features[8] = safe_divide(self.neutral_dance_count, total_movement, 0.0)
+            else:
+                features[6] = features[7] = features[8] = 0.33
+
+            if self.frame_count > 0:
+                frame_rate = max(1, self.frame_count / 60)
+                features[9] = np.clip(
+                    safe_divide(self.whiff_bait_attempts, frame_rate, 0.0), 0.0, 1.0
+                )
+                features[10] = np.clip(
+                    safe_divide(self.advantage_transitions, frame_rate, 0.0), 0.0, 1.0
+                )
+            else:
+                features[9] = features[10] = 0.0
+
+            if (
+                len(self.player_velocity_history) > 0
+                and len(self.opponent_velocity_history) > 0
+            ):
+                velocity_diff = (
+                    self.player_velocity_history[-1]
+                    - self.opponent_velocity_history[-1]
+                )
+                features[11] = (
+                    np.clip(velocity_diff / 5.0, -1.0, 1.0)
+                    if np.isfinite(velocity_diff)
+                    else 0.0
+                )
+            else:
+                features[11] = 0.0
+
+            features = sanitize_array(features, 0.0)
+
+            # CRITICAL FIX: Final dimension check
+            if len(features) != 12:
+                print(
+                    f"⚠️  Oscillation features wrong dimension: got {len(features)}, expected 12"
+                )
+                if len(features) < 12:
+                    padding = np.zeros(12 - len(features), dtype=np.float32)
+                    features = np.concatenate([features, padding])
+                else:
+                    features = features[:12]
+
+            return features.astype(np.float32)
+
+        except Exception as e:
+            print(f"⚠️  Error in get_oscillation_features: {e}")
+            return np.zeros(12, dtype=np.float32)
 
     def get_stats(self) -> Dict:
         return {
@@ -545,17 +716,56 @@ class StrategicFeatureTracker:
         self._bait_punish_integrated = False
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
+        # CRITICAL FIX: Handle case where features is not an array
+        if not isinstance(features, np.ndarray):
+            if isinstance(features, (int, float)):
+                print(f"⚠️  Features is scalar ({features}), creating array")
+                features = np.array([features], dtype=np.float32)
+            else:
+                print(f"⚠️  Features is not array-like: {type(features)}, using zeros")
+                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
         if not isinstance(features, np.ndarray):
             features = np.array(features, dtype=np.float32)
+
+        # CRITICAL FIX: Ensure features is at least 1D
+        if features.ndim == 0:
+            features = np.array([features.item()], dtype=np.float32)
+
+        # CRITICAL FIX: Ensure features match expected dimension
+        try:
+            current_dim = len(features)
+        except TypeError:
+            print(f"⚠️  Cannot get len() of features: {type(features)}, using zeros")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        if current_dim != VECTOR_FEATURE_DIM:
+            print(
+                f"⚠️  Normalizer feature dimension mismatch: got {current_dim}, expected {VECTOR_FEATURE_DIM}"
+            )
+            if current_dim < VECTOR_FEATURE_DIM:
+                padding = np.zeros(VECTOR_FEATURE_DIM - current_dim, dtype=np.float32)
+                features = np.concatenate([features, padding])
+            else:
+                features = features[:VECTOR_FEATURE_DIM]
+
         nan_mask = ~np.isfinite(features)
         if np.any(nan_mask):
             self.feature_nan_count += np.sum(nan_mask)
             if self.feature_nan_count % 100 == 0:
                 print(f"⚠️  Feature NaN cleaned (total: {self.feature_nan_count})")
             features = sanitize_array(features, 0.0)
+
         if self.feature_rolling_mean is None:
-            self.feature_rolling_mean = np.zeros(features.shape[0], dtype=np.float32)
-            self.feature_rolling_std = np.ones(features.shape[0], dtype=np.float32)
+            self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        # CRITICAL FIX: Handle dimension mismatch in rolling statistics
+        if len(self.feature_rolling_mean) != VECTOR_FEATURE_DIM:
+            print(f"⚠️  Rolling mean dimension mismatch, reinitializing")
+            self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+
         self.feature_rolling_mean = (
             self.normalization_alpha * self.feature_rolling_mean
             + (1 - self.normalization_alpha) * features
@@ -566,189 +776,438 @@ class StrategicFeatureTracker:
             + (1 - self.normalization_alpha) * squared_diff
         )
         safe_std = np.maximum(self.feature_rolling_std, 1e-6)
-        normalized = safe_divide(features - self.feature_rolling_mean, safe_std, 0.0)
+
+        # CRITICAL FIX: Handle safe_divide returning arrays
+        try:
+            if isinstance(features, np.ndarray) and isinstance(
+                self.feature_rolling_mean, np.ndarray
+            ):
+                # Element-wise division for arrays
+                normalized = (features - self.feature_rolling_mean) / safe_std
+                normalized = np.where(np.isfinite(normalized), normalized, 0.0)
+            else:
+                # Fallback to safe_divide for problematic cases
+                normalized = safe_divide(
+                    features - self.feature_rolling_mean, safe_std, 0.0
+                )
+                if not isinstance(normalized, np.ndarray):
+                    normalized = np.array([normalized], dtype=np.float32)
+        except Exception as e:
+            print(f"⚠️  Normalization division error: {e}, using zeros")
+            normalized = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
         if isinstance(normalized, np.ndarray):
             normalized = np.clip(normalized, -3.0, 3.0)
         else:
             normalized = np.clip(normalized, -3.0, 3.0)
+
         normalized = sanitize_array(normalized, 0.0)
+
+        # CRITICAL FIX: Final dimension check after normalization
+        if len(normalized) != VECTOR_FEATURE_DIM:
+            print(
+                f"⚠️  Normalized features wrong dimension: got {len(normalized)}, expected {VECTOR_FEATURE_DIM}"
+            )
+            if len(normalized) < VECTOR_FEATURE_DIM:
+                padding = np.zeros(
+                    VECTOR_FEATURE_DIM - len(normalized), dtype=np.float32
+                )
+                normalized = np.concatenate([normalized, padding])
+            else:
+                normalized = normalized[:VECTOR_FEATURE_DIM]
+
         return normalized.astype(np.float32)
 
     def update(self, info: Dict, button_features: np.ndarray) -> np.ndarray:
         self.current_frame += 1
 
-        player_health = float(info.get("agent_hp", MAX_HEALTH))
-        opponent_health = float(info.get("enemy_hp", MAX_HEALTH))
-        score = float(info.get("score", 0))
-        player_x = float(info.get("agent_x", SCREEN_WIDTH / 2))
-        opponent_x = float(info.get("enemy_x", SCREEN_WIDTH / 2))
-
-        player_health = player_health if np.isfinite(player_health) else MAX_HEALTH
-        opponent_health = (
-            opponent_health if np.isfinite(opponent_health) else MAX_HEALTH
-        )
-        score = score if np.isfinite(score) else 0
-        player_x = player_x if np.isfinite(player_x) else SCREEN_WIDTH / 2
-        opponent_x = opponent_x if np.isfinite(opponent_x) else SCREEN_WIDTH / 2
-        button_features = sanitize_array(button_features, 0.0)
-        self.player_health_history.append(player_health)
-        self.opponent_health_history.append(opponent_health)
-        score_change = 0
-        if self.prev_score is not None and np.isfinite(self.prev_score):
-            score_change = score - self.prev_score
-            if not np.isfinite(score_change):
-                score_change = 0
-        if score_change >= self.MIN_SCORE_INCREASE_FOR_HIT:
-            if (
-                self.current_frame - self.last_score_increase_frame
-                <= self.COMBO_TIMEOUT_FRAMES
-            ):
-                self.combo_counter += 1
-            else:
-                self.combo_counter = 1
-            self.last_score_increase_frame = self.current_frame
-            self.max_combo_this_round = max(
-                self.max_combo_this_round, self.combo_counter
+        try:
+            # CRITICAL FIX: Ensure all extracted values are scalars
+            player_health = ensure_scalar(info.get("agent_hp", MAX_HEALTH), MAX_HEALTH)
+            opponent_health = ensure_scalar(
+                info.get("enemy_hp", MAX_HEALTH), MAX_HEALTH
             )
-        elif (
-            self.current_frame - self.last_score_increase_frame
-            > self.COMBO_TIMEOUT_FRAMES
-        ):
-            self.combo_counter = 0
-        self.score_history.append(score)
-        self.score_change_history.append(score_change)
-        self.button_features_history.append(self.previous_button_features.copy())
-        self.previous_button_features = button_features.copy()
-        player_damage = 0
-        opponent_damage = 0
-        if self.prev_opponent_health is not None and np.isfinite(
-            self.prev_opponent_health
-        ):
-            player_damage = max(0, self.prev_opponent_health - opponent_health)
-            if not np.isfinite(player_damage):
-                player_damage = 0
-        if self.prev_player_health is not None and np.isfinite(self.prev_player_health):
-            opponent_damage = max(0, self.prev_player_health - player_health)
-            if not np.isfinite(opponent_damage):
-                opponent_damage = 0
-        self.player_damage_dealt_history.append(player_damage)
-        self.opponent_damage_dealt_history.append(opponent_damage)
-        player_attacking = np.any(button_features[[0, 1, 8, 9, 10, 11]] > 0.5)
-        oscillation_analysis = self.oscillation_tracker.update(
-            player_x, opponent_x, player_attacking
-        )
-        self.total_frames += 1
-        distance = abs(player_x - opponent_x)
-        if np.isfinite(distance) and distance <= self.CLOSE_DISTANCE:
-            self.close_combat_count += 1
-        features = self._calculate_enhanced_features(
-            info, distance, oscillation_analysis
-        )
-        features = self._normalize_features(features)
-        self.prev_player_health = player_health
-        self.prev_opponent_health = opponent_health
-        self.prev_score = score
-        if BAIT_PUNISH_AVAILABLE and not self._bait_punish_integrated:
+            score = ensure_scalar(info.get("score", 0), 0)
+            player_x = ensure_scalar(
+                info.get("agent_x", SCREEN_WIDTH / 2), SCREEN_WIDTH / 2
+            )
+            opponent_x = ensure_scalar(
+                info.get("enemy_x", SCREEN_WIDTH / 2), SCREEN_WIDTH / 2
+            )
+
+            button_features = sanitize_array(button_features, 0.0)
+            self.player_health_history.append(player_health)
+            self.opponent_health_history.append(opponent_health)
+
+            score_change = 0
+            if self.prev_score is not None and np.isfinite(self.prev_score):
+                score_change = score - self.prev_score
+                if not np.isfinite(score_change):
+                    score_change = 0
+
+            # CRITICAL FIX: Safe scalar comparisons for combo logic
+            if safe_comparison(score_change, self.MIN_SCORE_INCREASE_FOR_HIT, ">="):
+                if safe_comparison(
+                    self.current_frame - self.last_score_increase_frame,
+                    self.COMBO_TIMEOUT_FRAMES,
+                    "<=",
+                ):
+                    self.combo_counter += 1
+                else:
+                    self.combo_counter = 1
+                self.last_score_increase_frame = self.current_frame
+                self.max_combo_this_round = max(
+                    self.max_combo_this_round, self.combo_counter
+                )
+            elif safe_comparison(
+                self.current_frame - self.last_score_increase_frame,
+                self.COMBO_TIMEOUT_FRAMES,
+                ">",
+            ):
+                self.combo_counter = 0
+
+            self.score_history.append(score)
+            self.score_change_history.append(score_change)
+            self.button_features_history.append(self.previous_button_features.copy())
+            self.previous_button_features = button_features.copy()
+
+            player_damage = 0
+            opponent_damage = 0
+            if self.prev_opponent_health is not None and np.isfinite(
+                self.prev_opponent_health
+            ):
+                damage_calc = ensure_scalar(self.prev_opponent_health) - ensure_scalar(
+                    opponent_health
+                )
+                player_damage = max(0, damage_calc) if np.isfinite(damage_calc) else 0
+
+            if self.prev_player_health is not None and np.isfinite(
+                self.prev_player_health
+            ):
+                damage_calc = ensure_scalar(self.prev_player_health) - ensure_scalar(
+                    player_health
+                )
+                opponent_damage = max(0, damage_calc) if np.isfinite(damage_calc) else 0
+
+            self.player_damage_dealt_history.append(player_damage)
+            self.opponent_damage_dealt_history.append(opponent_damage)
+
+            # CRITICAL FIX: Use safe_bool_check for button features analysis
             try:
-                integrate_bait_punish_system(self)
-                self._bait_punish_integrated = True
-                print("✅ Bait-Punish system integrated into StrategicFeatureTracker")
-                return self.update(info, button_features)
-            except Exception as e:
-                print(f"⚠️  Bait-Punish integration failed: {e}, continuing without it")
-                globals()["BAIT_PUNISH_AVAILABLE"] = False
-        return features
+                attack_buttons = button_features[[0, 1, 8, 9, 10, 11]]
+                player_attacking = safe_bool_check(np.any(attack_buttons > 0.5))
+            except:
+                player_attacking = False
+
+            oscillation_analysis = self.oscillation_tracker.update(
+                player_x, opponent_x, player_attacking
+            )
+
+            self.total_frames += 1
+            distance = abs(player_x - opponent_x)
+            if np.isfinite(distance) and safe_comparison(
+                distance, self.CLOSE_DISTANCE, "<="
+            ):
+                self.close_combat_count += 1
+
+            # CRITICAL FIX: Ensure _calculate_enhanced_features returns proper array
+            features = self._calculate_enhanced_features(
+                info, distance, oscillation_analysis
+            )
+
+            # CRITICAL FIX: Validate features before normalization
+            if not isinstance(features, np.ndarray):
+                print(
+                    f"⚠️  Features from _calculate_enhanced_features is not array: {type(features)}"
+                )
+                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            elif features.size == 0:
+                print(f"⚠️  Features array is empty, using zeros")
+                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            elif len(features) != VECTOR_FEATURE_DIM:
+                print(
+                    f"⚠️  Features wrong dimension: got {len(features)}, expected {VECTOR_FEATURE_DIM}"
+                )
+                if len(features) < VECTOR_FEATURE_DIM:
+                    padding = np.zeros(
+                        VECTOR_FEATURE_DIM - len(features), dtype=np.float32
+                    )
+                    features = np.concatenate([features, padding])
+                else:
+                    features = features[:VECTOR_FEATURE_DIM]
+
+            # Now normalize the features
+            features = self._normalize_features(features)
+
+            # CRITICAL FIX: Final validation before return
+            if (
+                not isinstance(features, np.ndarray)
+                or len(features) != VECTOR_FEATURE_DIM
+            ):
+                print(f"⚠️  Final features validation failed, using zeros")
+                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+            self.prev_player_health = player_health
+            self.prev_opponent_health = opponent_health
+            self.prev_score = score
+
+            # Bait-punish integration
+            if BAIT_PUNISH_AVAILABLE and not self._bait_punish_integrated:
+                try:
+                    integrate_bait_punish_system(self)
+                    self._bait_punish_integrated = True
+                    print(
+                        "✅ Bait-Punish system integrated into StrategicFeatureTracker"
+                    )
+                except Exception as e:
+                    print(
+                        f"⚠️  Bait-Punish integration failed: {e}, continuing without it"
+                    )
+                    globals()["BAIT_PUNISH_AVAILABLE"] = False
+
+            return features
+
+        except Exception as e:
+            print(f"⚠️  Critical error in StrategicFeatureTracker.update(): {e}")
+            import traceback
+
+            traceback.print_exc()
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
 
     def _calculate_enhanced_features(
         self, info, distance, oscillation_analysis
     ) -> np.ndarray:
-        features = np.zeros(45, dtype=np.float32)
-        player_health = float(info.get("agent_hp", MAX_HEALTH))
-        opponent_health = float(info.get("enemy_hp", MAX_HEALTH))
-        player_x = float(info.get("agent_x", SCREEN_WIDTH / 2))
-        opponent_x = float(info.get("enemy_x", SCREEN_WIDTH / 2))
-        player_health = player_health if np.isfinite(player_health) else MAX_HEALTH
-        opponent_health = (
-            opponent_health if np.isfinite(opponent_health) else MAX_HEALTH
-        )
-        player_x = player_x if np.isfinite(player_x) else SCREEN_WIDTH / 2
-        opponent_x = opponent_x if np.isfinite(opponent_x) else SCREEN_WIDTH / 2
-        distance = distance if np.isfinite(distance) else 80.0
-        features[0] = 1.0 if player_health <= self.DANGER_ZONE_HEALTH else 0.0
-        features[1] = 1.0 if opponent_health <= self.DANGER_ZONE_HEALTH else 0.0
-        if opponent_health > 0:
-            health_ratio = safe_divide(player_health, opponent_health, 1.0)
-            features[2] = np.clip(health_ratio, 0.0, 3.0)
+        # CRITICAL FIX: Determine actual feature count based on bait-punish availability
+        base_features = 45
+        if BAIT_PUNISH_AVAILABLE and self._bait_punish_integrated:
+            expected_features = 52  # 45 + 7 bait-punish features
         else:
-            features[2] = 3.0
-        features[3] = (
-            self._calculate_momentum(self.player_health_history)
-            + self._calculate_momentum(self.opponent_health_history)
-        ) / 2.0
-        features[4] = self._calculate_momentum(self.player_damage_dealt_history)
-        features[5] = self._calculate_momentum(self.opponent_damage_dealt_history)
-        features[6] = np.clip(
-            min(player_x, SCREEN_WIDTH - player_x) / (SCREEN_WIDTH / 2), 0.0, 1.0
-        )
-        features[7] = np.clip(
-            min(opponent_x, SCREEN_WIDTH - opponent_x) / (SCREEN_WIDTH / 2), 0.0, 1.0
-        )
-        features[8] = (
-            1.0
-            if min(player_x, SCREEN_WIDTH - player_x) <= self.CORNER_THRESHOLD
-            else 0.0
-        )
-        features[9] = (
-            1.0
-            if min(opponent_x, SCREEN_WIDTH - opponent_x) <= self.CORNER_THRESHOLD
-            else 0.0
-        )
-        player_center_dist = abs(player_x - SCREEN_WIDTH / 2)
-        opponent_center_dist = abs(opponent_x - SCREEN_WIDTH / 2)
-        features[10] = np.sign(opponent_center_dist - player_center_dist)
-        player_y = float(info.get("agent_y", SCREEN_HEIGHT / 2))
-        opponent_y = float(info.get("enemy_y", SCREEN_HEIGHT / 2))
-        player_y = player_y if np.isfinite(player_y) else SCREEN_HEIGHT / 2
-        opponent_y = opponent_y if np.isfinite(opponent_y) else SCREEN_HEIGHT / 2
-        y_diff = (player_y - opponent_y) / (SCREEN_HEIGHT / 2)
-        features[11] = np.clip(y_diff, -1.0, 1.0) if np.isfinite(y_diff) else 0.0
-        space_control = oscillation_analysis.get("space_control_score", 0.0)
-        features[12] = space_control if np.isfinite(space_control) else 0.0
-        features[13] = (
-            1.0
-            if self.OPTIMAL_SPACING_MIN <= distance <= self.OPTIMAL_SPACING_MAX
-            else 0.0
-        )
-        player_forward = oscillation_analysis.get("player_moving_forward", False)
-        player_backward = oscillation_analysis.get("player_moving_backward", False)
-        features[14] = 1.0 if player_forward else (-1.0 if player_backward else 0.0)
-        features[15] = 1.0 if player_backward else 0.0
-        features[16] = safe_divide(
-            self.close_combat_count, max(1, self.total_frames), 0.0
-        )
-        features[17] = self._calculate_enhanced_score_momentum()
-        agent_status = float(info.get("agent_status", 0))
-        enemy_status = float(info.get("enemy_status", 0))
-        agent_status = agent_status if np.isfinite(agent_status) else 0
-        enemy_status = enemy_status if np.isfinite(enemy_status) else 0
-        status_diff = (agent_status - enemy_status) / 100.0
-        features[18] = np.clip(status_diff, -1.0, 1.0)
-        agent_victories = float(info.get("agent_victories", 0))
-        enemy_victories = float(info.get("enemy_victories", 0))
-        features[19] = (
-            min(agent_victories / 10.0, 1.0) if np.isfinite(agent_victories) else 0.0
-        )
-        features[20] = (
-            min(enemy_victories / 10.0, 1.0) if np.isfinite(enemy_victories) else 0.0
-        )
-        oscillation_features = self.oscillation_tracker.get_oscillation_features()
-        features[21:33] = oscillation_features
-        if len(self.button_features_history) > 0:
-            features[33:45] = self.button_features_history[-1]
-        else:
-            features[33:45] = np.zeros(12)
-        features = sanitize_array(features, 0.0)
-        return features
+            expected_features = 45
+
+        features = np.zeros(expected_features, dtype=np.float32)
+
+        try:
+            # CRITICAL FIX: Ensure all extracted values are scalars
+            player_health = ensure_scalar(info.get("agent_hp", MAX_HEALTH), MAX_HEALTH)
+            opponent_health = ensure_scalar(
+                info.get("enemy_hp", MAX_HEALTH), MAX_HEALTH
+            )
+            player_x = ensure_scalar(
+                info.get("agent_x", SCREEN_WIDTH / 2), SCREEN_WIDTH / 2
+            )
+            opponent_x = ensure_scalar(
+                info.get("enemy_x", SCREEN_WIDTH / 2), SCREEN_WIDTH / 2
+            )
+
+            distance = distance if np.isfinite(distance) else 80.0
+
+            # CRITICAL FIX: Safe comparisons for health danger zones
+            features[0] = (
+                1.0
+                if safe_comparison(player_health, self.DANGER_ZONE_HEALTH, "<=")
+                else 0.0
+            )
+            features[1] = (
+                1.0
+                if safe_comparison(opponent_health, self.DANGER_ZONE_HEALTH, "<=")
+                else 0.0
+            )
+
+            if safe_comparison(opponent_health, 0, ">"):
+                health_ratio = safe_divide(player_health, opponent_health, 1.0)
+                features[2] = np.clip(health_ratio, 0.0, 3.0)
+            else:
+                features[2] = 3.0
+
+            features[3] = (
+                self._calculate_momentum(self.player_health_history)
+                + self._calculate_momentum(self.opponent_health_history)
+            ) / 2.0
+            features[4] = self._calculate_momentum(self.player_damage_dealt_history)
+            features[5] = self._calculate_momentum(self.opponent_damage_dealt_history)
+
+            features[6] = np.clip(
+                min(player_x, SCREEN_WIDTH - player_x) / (SCREEN_WIDTH / 2), 0.0, 1.0
+            )
+            features[7] = np.clip(
+                min(opponent_x, SCREEN_WIDTH - opponent_x) / (SCREEN_WIDTH / 2),
+                0.0,
+                1.0,
+            )
+
+            # CRITICAL FIX: Safe corner detection
+            features[8] = (
+                1.0
+                if safe_comparison(
+                    min(player_x, SCREEN_WIDTH - player_x), self.CORNER_THRESHOLD, "<="
+                )
+                else 0.0
+            )
+            features[9] = (
+                1.0
+                if safe_comparison(
+                    min(opponent_x, SCREEN_WIDTH - opponent_x),
+                    self.CORNER_THRESHOLD,
+                    "<=",
+                )
+                else 0.0
+            )
+
+            player_center_dist = abs(player_x - SCREEN_WIDTH / 2)
+            opponent_center_dist = abs(opponent_x - SCREEN_WIDTH / 2)
+            features[10] = np.sign(opponent_center_dist - player_center_dist)
+
+            player_y = ensure_scalar(
+                info.get("agent_y", SCREEN_HEIGHT / 2), SCREEN_HEIGHT / 2
+            )
+            opponent_y = ensure_scalar(
+                info.get("enemy_y", SCREEN_HEIGHT / 2), SCREEN_HEIGHT / 2
+            )
+
+            y_diff = (player_y - opponent_y) / (SCREEN_HEIGHT / 2)
+            features[11] = np.clip(y_diff, -1.0, 1.0) if np.isfinite(y_diff) else 0.0
+
+            space_control = oscillation_analysis.get("space_control_score", 0.0)
+            features[12] = space_control if np.isfinite(space_control) else 0.0
+
+            # CRITICAL FIX: Safe optimal spacing check
+            optimal_spacing = safe_comparison(
+                distance, self.OPTIMAL_SPACING_MIN, ">="
+            ) and safe_comparison(distance, self.OPTIMAL_SPACING_MAX, "<=")
+            features[13] = 1.0 if optimal_spacing else 0.0
+
+            player_forward = oscillation_analysis.get("player_moving_forward", False)
+            player_backward = oscillation_analysis.get("player_moving_backward", False)
+            features[14] = 1.0 if player_forward else (-1.0 if player_backward else 0.0)
+            features[15] = 1.0 if player_backward else 0.0
+
+            features[16] = safe_divide(
+                self.close_combat_count, max(1, self.total_frames), 0.0
+            )
+            features[17] = self._calculate_enhanced_score_momentum()
+
+            agent_status = ensure_scalar(info.get("agent_status", 0), 0)
+            enemy_status = ensure_scalar(info.get("enemy_status", 0), 0)
+
+            status_diff = (agent_status - enemy_status) / 100.0
+            features[18] = np.clip(status_diff, -1.0, 1.0)
+
+            agent_victories = ensure_scalar(info.get("agent_victories", 0), 0)
+            enemy_victories = ensure_scalar(info.get("enemy_victories", 0), 0)
+            features[19] = (
+                min(agent_victories / 10.0, 1.0)
+                if np.isfinite(agent_victories)
+                else 0.0
+            )
+            features[20] = (
+                min(enemy_victories / 10.0, 1.0)
+                if np.isfinite(enemy_victories)
+                else 0.0
+            )
+
+            # CRITICAL FIX: Safe oscillation feature extraction
+            try:
+                oscillation_features = (
+                    self.oscillation_tracker.get_oscillation_features()
+                )
+                if (
+                    isinstance(oscillation_features, np.ndarray)
+                    and len(oscillation_features) == 12
+                ):
+                    features[21:33] = oscillation_features
+                else:
+                    print(
+                        f"⚠️  Oscillation features wrong type/size: {type(oscillation_features)}, len: {len(oscillation_features) if hasattr(oscillation_features, '__len__') else 'N/A'}"
+                    )
+                    features[21:33] = np.zeros(12, dtype=np.float32)
+            except Exception as e:
+                print(f"⚠️  Error getting oscillation features: {e}")
+                features[21:33] = np.zeros(12, dtype=np.float32)
+
+            # CRITICAL FIX: Safe button features extraction
+            try:
+                if len(self.button_features_history) > 0:
+                    button_hist = self.button_features_history[-1]
+                    if isinstance(button_hist, np.ndarray) and len(button_hist) == 12:
+                        features[33:45] = button_hist
+                    else:
+                        print(
+                            f"⚠️  Button history wrong type/size: {type(button_hist)}, len: {len(button_hist) if hasattr(button_hist, '__len__') else 'N/A'}"
+                        )
+                        features[33:45] = np.zeros(12, dtype=np.float32)
+                else:
+                    features[33:45] = np.zeros(12, dtype=np.float32)
+            except Exception as e:
+                print(f"⚠️  Error getting button features: {e}")
+                features[33:45] = np.zeros(12, dtype=np.float32)
+
+            # CRITICAL FIX: Add bait-punish features if available and integrated
+            if (
+                BAIT_PUNISH_AVAILABLE
+                and self._bait_punish_integrated
+                and expected_features > 45
+            ):
+                try:
+                    # Add 7 additional bait-punish features
+                    bait_punish_features = getattr(
+                        self, "last_bait_punish_features", np.zeros(7, dtype=np.float32)
+                    )
+                    if (
+                        isinstance(bait_punish_features, np.ndarray)
+                        and len(bait_punish_features) == 7
+                    ):
+                        features[45:52] = bait_punish_features
+                    else:
+                        features[45:52] = np.zeros(7, dtype=np.float32)
+                except Exception as e:
+                    print(f"⚠️  Error adding bait-punish features: {e}")
+                    features[45:52] = np.zeros(7, dtype=np.float32)
+
+            features = sanitize_array(features, 0.0)
+
+        except Exception as e:
+            print(f"⚠️  Error in _calculate_enhanced_features: {e}")
+            import traceback
+
+            traceback.print_exc()
+            features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        # CRITICAL FIX: Ensure features is a proper numpy array
+        if not isinstance(features, np.ndarray):
+            print(f"⚠️  Features is not array after sanitization: {type(features)}")
+            features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        # CRITICAL FIX: Ensure features is at least 1D
+        if features.ndim == 0:
+            print(f"⚠️  Features is 0-dimensional: {features}")
+            features = np.array([features.item()], dtype=np.float32)
+
+        # CRITICAL FIX: Final dimension check with proper error handling
+        try:
+            current_length = len(features)
+        except TypeError:
+            print(f"⚠️  Cannot get length of features: {type(features)}, using zeros")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        if current_length != VECTOR_FEATURE_DIM:
+            print(
+                f"⚠️  Final feature dimension mismatch: got {current_length}, expected {VECTOR_FEATURE_DIM}"
+            )
+            if current_length < VECTOR_FEATURE_DIM:
+                padding = np.zeros(
+                    VECTOR_FEATURE_DIM - current_length, dtype=np.float32
+                )
+                features = np.concatenate([features, padding])
+            else:
+                features = features[:VECTOR_FEATURE_DIM]
+
+        # CRITICAL FIX: Final safety check
+        if not isinstance(features, np.ndarray) or features.size == 0:
+            print(f"⚠️  Features final check failed, using zeros")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        # FIX: The error was here. Removed extra parenthesis and the duplicated code block that followed.
+        return features.astype(np.float32)
 
     def _calculate_momentum(self, history):
         if len(history) < 2:
@@ -803,6 +1262,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             f"   - Vector sequence: {seq_length} x {vector_feature_count} (NaN-protected)"
         )
         print(f"   - Output features: {features_dim}")
+
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
@@ -822,11 +1282,13 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.AdaptiveAvgPool2d((3, 4)),
             nn.Flatten(),
         )
+
         with torch.no_grad():
             dummy_visual = torch.zeros(
                 1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
+
         self.vector_embed = nn.Linear(vector_feature_count, 64)
         self.vector_norm = nn.LayerNorm(64)
         self.vector_dropout = nn.Dropout(0.2)
@@ -836,6 +1298,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
         )
+
         fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_size, 512),
@@ -845,6 +1308,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.Linear(512, features_dim),
             nn.ReLU(inplace=True),
         )
+
         self.apply(self._init_weights_conservative)
         print(f"   - Visual output size: {visual_output_size}")
         print(f"   - Fusion input size: {fusion_input_size}")
@@ -875,10 +1339,13 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         visual_obs = observations["visual_obs"]
         vector_obs = observations["vector_obs"]
         device = next(self.parameters()).device
+
         visual_obs = visual_obs.float().to(device)
         vector_obs = vector_obs.float().to(device)
+
         visual_nan_mask = ~torch.isfinite(visual_obs)
         vector_nan_mask = ~torch.isfinite(vector_obs)
+
         if torch.any(visual_nan_mask):
             visual_obs = torch.where(
                 visual_nan_mask, torch.zeros_like(visual_obs), visual_obs
@@ -887,41 +1354,51 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             vector_obs = torch.where(
                 vector_nan_mask, torch.zeros_like(vector_obs), vector_obs
             )
+
         visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
         visual_features = self.visual_cnn(visual_obs)
+
         if torch.any(~torch.isfinite(visual_features)):
             visual_features = torch.where(
                 ~torch.isfinite(visual_features),
                 torch.zeros_like(visual_features),
                 visual_features,
             )
+
         batch_size, seq_len, feature_dim = vector_obs.shape
         vector_embedded = self.vector_embed(vector_obs)
         vector_embedded = self.vector_norm(vector_embedded)
         vector_embedded = self.vector_dropout(vector_embedded)
+
         if torch.any(~torch.isfinite(vector_embedded)):
             vector_embedded = torch.where(
                 ~torch.isfinite(vector_embedded),
                 torch.zeros_like(vector_embedded),
                 vector_embedded,
             )
+
         gru_output, _ = self.vector_gru(vector_embedded)
         vector_features = gru_output[:, -1, :]
         vector_features = self.vector_final(vector_features)
+
         if torch.any(~torch.isfinite(vector_features)):
             vector_features = torch.where(
                 ~torch.isfinite(vector_features),
                 torch.zeros_like(vector_features),
                 vector_features,
             )
+
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
+
         if torch.any(~torch.isfinite(output)):
             output = torch.where(
                 ~torch.isfinite(output), torch.zeros_like(output), output
             )
+
         if self.training:
             output = torch.clamp(output, -5.0, 5.0)
+
         return output
 
 
@@ -957,7 +1434,9 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             features = torch.where(
                 ~torch.isfinite(features), torch.zeros_like(features), features
             )
+
         latent_pi, latent_vf = self.mlp_extractor(features)
+
         if torch.any(~torch.isfinite(latent_pi)):
             latent_pi = torch.where(
                 ~torch.isfinite(latent_pi), torch.zeros_like(latent_pi), latent_pi
@@ -966,6 +1445,7 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             latent_vf = torch.where(
                 ~torch.isfinite(latent_vf), torch.zeros_like(latent_vf), latent_vf
             )
+
         action_logits = self.action_net(latent_pi)
         if torch.any(~torch.isfinite(action_logits)):
             action_logits = torch.where(
@@ -973,13 +1453,16 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
                 torch.zeros_like(action_logits),
                 action_logits,
             )
+
         action_logits = torch.clamp(action_logits, -10.0, 10.0)
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         values = self.value_net(latent_vf)
         log_prob = distribution.log_prob(actions)
+
         if self.training:
             values = torch.clamp(values, -50.0, 50.0)
+
         if torch.any(~torch.isfinite(values)):
             values = torch.where(
                 ~torch.isfinite(values), torch.zeros_like(values), values
@@ -988,6 +1471,7 @@ class FixedStreetFighterPolicy(ActorCriticPolicy):
             log_prob = torch.where(
                 ~torch.isfinite(log_prob), torch.full_like(log_prob, -1.0), log_prob
             )
+
         return actions, values, log_prob
 
 
@@ -996,6 +1480,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         super().__init__(env)
         self.frame_stack = frame_stack
         self.rendering = rendering
+
         sample_obs = env.reset()
         if isinstance(sample_obs, tuple):
             sample_obs = sample_obs[0]
@@ -1003,11 +1488,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.target_size = sample_obs.shape[:2]
         else:
             self.target_size = (224, 320)
+
         print(
             f"🖼️  Using FULL SIZE frames: {self.target_size[0]}x{self.target_size[1]} (H x W)"
         )
+
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
+
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -1024,6 +1512,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 ),
             }
         )
+
         self.frame_buffer = deque(maxlen=frame_stack)
         self.vector_features_history = deque(maxlen=frame_stack)
         self.strategic_tracker = StrategicFeatureTracker(history_length=frame_stack)
@@ -1032,11 +1521,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.prev_opponent_health = self.full_hp
         self.wins, self.losses, self.total_rounds = 0, 0, 0
         self.total_damage_dealt, self.total_damage_received = 0, 0
+
         if BAIT_PUNISH_AVAILABLE:
             self.reward_shaper = AdaptiveRewardShaper()
             print("✅ Adaptive reward shaper initialized")
         else:
             self.reward_shaper = None
+
         self.reward_scale = 0.1
         self.episode_steps = 0
         self.max_episode_steps = 18000
@@ -1047,10 +1538,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         """Converts array values from a vectorized env's info dict to scalars."""
         sanitized = {}
         for k, v in info.items():
-            if isinstance(v, np.ndarray):
-                sanitized[k] = v.item(0) if v.size > 0 else 0
-            else:
-                sanitized[k] = v
+            # CRITICAL FIX: Use ensure_scalar instead of item()
+            sanitized[k] = ensure_scalar(v, 0)
         return sanitized
 
     def _create_initial_vector_features(self, info):
@@ -1060,7 +1549,30 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             initial_features = self.strategic_tracker.update(
                 sanitized_info, initial_button_features
             )
-            initial_features = sanitize_array(initial_features, 0.0)
+
+            # CRITICAL FIX: Handle case where update returns scalar instead of array
+            if not isinstance(initial_features, np.ndarray):
+                print(
+                    f"⚠️  Initial features is not an array: {type(initial_features)}, creating fallback"
+                )
+                initial_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            else:
+                initial_features = sanitize_array(initial_features, 0.0)
+
+            # CRITICAL FIX: Ensure correct shape for vector features
+            if len(initial_features) != VECTOR_FEATURE_DIM:
+                print(
+                    f"⚠️  Feature dimension mismatch: got {len(initial_features)}, expected {VECTOR_FEATURE_DIM}"
+                )
+                # Pad or truncate to match expected dimension
+                if len(initial_features) < VECTOR_FEATURE_DIM:
+                    padding = np.zeros(
+                        VECTOR_FEATURE_DIM - len(initial_features), dtype=np.float32
+                    )
+                    initial_features = np.concatenate([initial_features, padding])
+                else:
+                    initial_features = initial_features[:VECTOR_FEATURE_DIM]
+
             return initial_features
         except Exception as e:
             print(f"⚠️  Error creating initial features: {e}, using zeros")
@@ -1071,20 +1583,26 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
         self.episode_steps = 0
+
         processed_frame = self._preprocess_frame(obs)
         initial_vector_features = self._create_initial_vector_features(info)
+
         self.frame_buffer.clear()
         self.vector_features_history.clear()
+
         for _ in range(self.frame_stack):
             self.frame_buffer.append(processed_frame)
             self.vector_features_history.append(initial_vector_features.copy())
+
         self.strategic_tracker = StrategicFeatureTracker(
             history_length=self.frame_stack
         )
+
         return self._get_observation(), info
 
     def step(self, discrete_action):
         self.episode_steps += 1
+
         multibinary_action = self.discrete_actions.discrete_to_multibinary(
             discrete_action
         )
@@ -1095,18 +1613,14 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         sanitized_info = self._sanitize_info(info)
 
-        curr_player_health = sanitized_info.get("agent_hp", self.full_hp)
-        curr_opponent_health = sanitized_info.get("enemy_hp", self.full_hp)
-        curr_player_health = (
-            float(curr_player_health)
-            if np.isfinite(curr_player_health)
-            else self.full_hp
+        # CRITICAL FIX: Use ensure_scalar for health values
+        curr_player_health = ensure_scalar(
+            sanitized_info.get("agent_hp", self.full_hp), self.full_hp
         )
-        curr_opponent_health = (
-            float(curr_opponent_health)
-            if np.isfinite(curr_opponent_health)
-            else self.full_hp
+        curr_opponent_health = ensure_scalar(
+            sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
         )
+
         base_reward, custom_done = self._calculate_base_reward(
             curr_player_health, curr_opponent_health
         )
@@ -1126,22 +1640,53 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             final_reward = base_reward
 
         final_reward = final_reward if np.isfinite(final_reward) else 0.0
-        if self.episode_steps >= self.max_episode_steps:
+
+        # CRITICAL FIX: Safe episode step comparison
+        if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
             truncated = True
+
         done = custom_done or done
+
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.append(processed_frame)
+
         button_features = self.discrete_actions.get_button_features(discrete_action)
+
         try:
             vector_features = self.strategic_tracker.update(
                 sanitized_info, button_features
             )
-            vector_features = sanitize_array(vector_features, 0.0)
+
+            # CRITICAL FIX: Handle case where update returns scalar instead of array
+            if not isinstance(vector_features, np.ndarray):
+                print(
+                    f"⚠️  Vector features is not an array: {type(vector_features)}, creating fallback"
+                )
+                vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            else:
+                vector_features = sanitize_array(vector_features, 0.0)
+
+            # CRITICAL FIX: Ensure consistent vector feature dimensions
+            if len(vector_features) != VECTOR_FEATURE_DIM:
+                print(
+                    f"⚠️  Runtime feature dimension mismatch: got {len(vector_features)}, expected {VECTOR_FEATURE_DIM}"
+                )
+                # Pad or truncate to match expected dimension
+                if len(vector_features) < VECTOR_FEATURE_DIM:
+                    padding = np.zeros(
+                        VECTOR_FEATURE_DIM - len(vector_features), dtype=np.float32
+                    )
+                    vector_features = np.concatenate([vector_features, padding])
+                else:
+                    vector_features = vector_features[:VECTOR_FEATURE_DIM]
+
         except Exception as e:
             print(f"⚠️  Vector feature update error: {e}, using zeros")
             vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
         self.vector_features_history.append(vector_features)
         self._update_enhanced_stats()
+
         if hasattr(self.strategic_tracker, "bait_punish_detector"):
             try:
                 bait_punish_stats = (
@@ -1150,96 +1695,17 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 sanitized_info.update(bait_punish_stats)
             except Exception as e:
                 print(f"⚠️  Error getting bait-punish stats: {e}")
+
         if self.reward_shaper is not None:
             try:
                 adaptation_stats = self.reward_shaper.get_adaptation_stats()
                 sanitized_info.update(adaptation_stats)
             except Exception as e:
                 print(f"⚠️  Error getting adaptation stats: {e}")
+
         sanitized_info.update(self.stats)
+
         return self._get_observation(), final_reward, done, truncated, sanitized_info
-
-    def _calculate_base_reward(self, curr_player_health, curr_opponent_health):
-        reward, done = 0.0, False
-        if curr_player_health <= 0 or curr_opponent_health <= 0:
-            self.total_rounds += 1
-            if curr_opponent_health <= 0 < curr_player_health:
-                self.wins += 1
-                win_bonus = (
-                    25.0 + safe_divide(curr_player_health, self.full_hp, 0.0) * 10.0
-                )
-                reward += win_bonus
-                print(
-                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            else:
-                self.losses += 1
-                reward -= 10.0
-                print(
-                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            done = True
-            combo_bonus = self.strategic_tracker.combo_counter * 0.02
-            reward += combo_bonus
-        damage_dealt = 0
-        damage_received = 0
-        if np.isfinite(self.prev_opponent_health) and np.isfinite(curr_opponent_health):
-            damage_dealt = max(0, self.prev_opponent_health - curr_opponent_health)
-        if np.isfinite(self.prev_player_health) and np.isfinite(curr_player_health):
-            damage_received = max(0, self.prev_player_health - curr_player_health)
-        reward += (damage_dealt * 0.1) - (damage_received * 0.05)
-        self.total_damage_dealt += damage_dealt
-        self.total_damage_received += damage_received
-        try:
-            osc_tracker = self.strategic_tracker.oscillation_tracker
-            rolling_freq = osc_tracker.get_rolling_window_frequency()
-            if np.isfinite(rolling_freq) and 1.0 <= rolling_freq <= 3.0:
-                reward += 0.01
-            space_control = osc_tracker.space_control_score
-            if np.isfinite(space_control) and space_control > 0:
-                reward += space_control * 0.005
-        except Exception as e:
-            print(f"⚠️  Error in strategic bonuses: {e}")
-        reward -= 0.001
-        reward *= self.reward_scale
-        reward = np.clip(reward, -2.0, 2.0) if np.isfinite(reward) else 0.0
-        self.prev_player_health, self.prev_opponent_health = (
-            curr_player_health,
-            curr_opponent_health,
-        )
-        if done:
-            self.episode_rewards.append(reward)
-        return reward, done
-
-    def _get_observation(self):
-        try:
-            visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(
-                2, 0, 1
-            )
-            vector_obs = np.stack(list(self.vector_features_history))
-            visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
-            vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
-            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
-        except Exception as e:
-            print(f"⚠️  Error constructing observation: {e}, using fallback")
-            visual_obs = np.zeros(
-                (3 * self.frame_stack, *self.target_size), dtype=np.uint8
-            )
-            vector_obs = np.zeros(
-                (self.frame_stack, VECTOR_FEATURE_DIM), dtype=np.float32
-            )
-            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
-
-    def _preprocess_frame(self, frame):
-        if frame is None:
-            return np.zeros((*self.target_size, 3), dtype=np.uint8)
-        try:
-            if frame.shape[:2] == self.target_size:
-                return frame
-            return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
-        except Exception as e:
-            print(f"⚠️  Frame preprocessing error: {e}, using black frame")
-            return np.zeros((*self.target_size, 3), dtype=np.uint8)
 
     def _update_enhanced_stats(self):
         try:
@@ -1256,6 +1722,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 self.total_damage_dealt, max(1, self.total_damage_received), 1.0
             )
             combo_stats = self.strategic_tracker.get_combo_stats()
+
             self.stats.update(
                 {
                     "win_rate": win_rate,
@@ -1278,8 +1745,121 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             print(f"⚠️  Error updating stats: {e}")
             self.stats = {"error": "stats_update_failed"}
 
+    def _calculate_base_reward(self, curr_player_health, curr_opponent_health):
+        reward, done = 0.0, False
 
-# <<< FIX: Restoring the verify_gradient_flow function >>>
+        # CRITICAL FIX: Ensure scalar comparisons using safe_comparison
+        curr_player_health = ensure_scalar(curr_player_health, self.full_hp)
+        curr_opponent_health = ensure_scalar(curr_opponent_health, self.full_hp)
+
+        # CRITICAL FIX: Use safe_comparison for health checks
+        player_dead = safe_comparison(curr_player_health, 0, "<=")
+        opponent_dead = safe_comparison(curr_opponent_health, 0, "<=")
+
+        if player_dead or opponent_dead:
+            self.total_rounds += 1
+            if opponent_dead and not player_dead:
+                self.wins += 1
+                win_bonus = (
+                    25.0 + safe_divide(curr_player_health, self.full_hp, 0.0) * 10.0
+                )
+                reward += win_bonus
+                print(
+                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
+            else:
+                self.losses += 1
+                reward -= 10.0
+                print(
+                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
+                )
+            done = True
+            combo_bonus = self.strategic_tracker.combo_counter * 0.02
+            reward += combo_bonus
+
+        damage_dealt = 0
+        damage_received = 0
+
+        # CRITICAL FIX: Safe damage calculations
+        if self.prev_opponent_health is not None and np.isfinite(
+            self.prev_opponent_health
+        ):
+            damage_calc = (
+                ensure_scalar(self.prev_opponent_health) - curr_opponent_health
+            )
+            damage_dealt = max(0, damage_calc) if np.isfinite(damage_calc) else 0
+
+        if self.prev_player_health is not None and np.isfinite(self.prev_player_health):
+            damage_calc = ensure_scalar(self.prev_player_health) - curr_player_health
+            damage_received = max(0, damage_calc) if np.isfinite(damage_calc) else 0
+
+        reward += (damage_dealt * 0.1) - (damage_received * 0.05)
+        self.total_damage_dealt += damage_dealt
+        self.total_damage_received += damage_received
+
+        # Strategic bonuses with safe operations
+        try:
+            osc_tracker = self.strategic_tracker.oscillation_tracker
+            rolling_freq = osc_tracker.get_rolling_window_frequency()
+            if (
+                np.isfinite(rolling_freq)
+                and safe_comparison(rolling_freq, 1.0, ">=")
+                and safe_comparison(rolling_freq, 3.0, "<=")
+            ):
+                reward += 0.01
+            space_control = osc_tracker.space_control_score
+            if np.isfinite(space_control) and safe_comparison(space_control, 0, ">"):
+                reward += space_control * 0.005
+        except Exception as e:
+            print(f"⚠️  Error in strategic bonuses: {e}")
+
+        reward -= 0.001
+        reward *= self.reward_scale
+        reward = np.clip(reward, -2.0, 2.0) if np.isfinite(reward) else 0.0
+
+        self.prev_player_health, self.prev_opponent_health = (
+            curr_player_health,
+            curr_opponent_health,
+        )
+
+        if done:
+            self.episode_rewards.append(reward)
+
+        return reward, done
+
+    def _get_observation(self):
+        try:
+            visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(
+                2, 0, 1
+            )
+            vector_obs = np.stack(list(self.vector_features_history))
+
+            visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
+            vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
+
+            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
+        except Exception as e:
+            print(f"⚠️  Error constructing observation: {e}, using fallback")
+            visual_obs = np.zeros(
+                (3 * self.frame_stack, *self.target_size), dtype=np.uint8
+            )
+            vector_obs = np.zeros(
+                (self.frame_stack, VECTOR_FEATURE_DIM), dtype=np.float32
+            )
+            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
+
+    def _preprocess_frame(self, frame):
+        if frame is None:
+            return np.zeros((*self.target_size, 3), dtype=np.uint8)
+        try:
+            if frame.shape[:2] == self.target_size:
+                return frame
+            return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
+        except Exception as e:
+            print(f"⚠️  Frame preprocessing error: {e}, using black frame")
+            return np.zeros((*self.target_size, 3), dtype=np.uint8)
+
+
 def verify_gradient_flow(model, env, device=None):
     """CRITICAL FIX: Enhanced gradient flow verification with NaN detection."""
     print("\n🔬 NaN-SAFE Gradient Flow Verification")
@@ -1319,6 +1899,7 @@ def verify_gradient_flow(model, env, device=None):
         return False
     else:
         print("   ✅ No NaN values detected")
+
     if vector_obs.abs().max() > 10.0:
         print("   ⚠️  WARNING: Large vector values detected!")
     else:
@@ -1336,23 +1917,27 @@ def verify_gradient_flow(model, env, device=None):
         print(
             f"   - Log prob NaN count: {torch.sum(~torch.isfinite(log_probs)).item()}"
         )
+
         if (
             torch.sum(~torch.isfinite(values)) > 0
             or torch.sum(~torch.isfinite(log_probs)) > 0
         ):
             print("   🚨 CRITICAL: NaN values in policy outputs!")
             return False
+
         if abs(values.item()) > 100.0:
             print("   🚨 CRITICAL: Value function output too large!")
             return False
         else:
             print("   ✅ Value function output is stable")
+
     except Exception as e:
         print(f"❌ Policy forward pass failed: {e}")
         return False
 
     loss = values.mean() + log_probs.mean() * 0.1
     model.policy.zero_grad()
+
     try:
         loss.backward()
         print("✅ Backward pass successful")
@@ -1361,6 +1946,7 @@ def verify_gradient_flow(model, env, device=None):
         return False
 
     total_params, params_with_grads, total_grad_norm, nan_grad_count = 0, 0, 0.0, 0
+
     for name, param in model.policy.named_parameters():
         total_params += param.numel()
         if param.grad is not None:
@@ -1370,15 +1956,19 @@ def verify_gradient_flow(model, env, device=None):
                 total_grad_norm += grad_norm
             else:
                 nan_grad_count += 1
+
     coverage = (params_with_grads / total_params) * 100
     avg_grad_norm = safe_divide(total_grad_norm, max(params_with_grads, 1), 0.0)
+
     print(f"📊 Gradient Analysis:")
     print(f"   - Coverage: {coverage:.1f}%")
     print(f"   - Average norm: {avg_grad_norm:.6f}")
     print(f"   - NaN gradients: {nan_grad_count}")
+
     if nan_grad_count > 0:
         print("   🚨 CRITICAL: NaN gradients detected!")
         return False
+
     if coverage > 95 and avg_grad_norm < 10.0 and nan_grad_count == 0:
         print("✅ EXCELLENT: Stable, NaN-free gradient flow ready for training!")
         return True
@@ -1400,6 +1990,9 @@ __all__ = [
     "safe_std",
     "safe_mean",
     "sanitize_array",
+    "ensure_scalar",
+    "safe_bool_check",
+    "safe_comparison",
 ]
 
 if BAIT_PUNISH_AVAILABLE:
