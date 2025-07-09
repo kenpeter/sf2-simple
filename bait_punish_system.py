@@ -13,6 +13,46 @@ from typing import Dict, List, Optional, Tuple
 import math
 
 
+def normalize_feature(value, min_val, max_val, target_min=-1.0, target_max=1.0):
+    """Normalize a feature value to target range with safety bounds."""
+    try:
+        value = ensure_scalar(value, (min_val + max_val) / 2.0)
+
+        # Clamp to expected range first
+        value = max(min_val, min(max_val, value))
+
+        # Normalize to [0, 1] then scale to target range
+        if max_val > min_val:
+            normalized = (value - min_val) / (max_val - min_val)
+        else:
+            normalized = 0.5
+
+        # Scale to target range
+        result = target_min + normalized * (target_max - target_min)
+
+        # Final safety clamp
+        return max(target_min, min(target_max, result))
+    except:
+        return (target_min + target_max) / 2.0
+
+
+def normalize_array(arr, feature_ranges, target_min=-1.0, target_max=1.0):
+    """Normalize an entire feature array using specified ranges."""
+    try:
+        arr = sanitize_array(arr, 0.0)
+        normalized = np.zeros_like(arr)
+
+        for i, (min_val, max_val) in enumerate(feature_ranges):
+            if i < len(arr):
+                normalized[i] = normalize_feature(
+                    arr[i], min_val, max_val, target_min, target_max
+                )
+
+        return normalized.astype(np.float32)
+    except:
+        return np.zeros(len(feature_ranges), dtype=np.float32)
+
+
 def ensure_scalar(value, default=0.0):
     """Ensure value is a scalar, handling arrays properly."""
     if value is None:
@@ -111,6 +151,35 @@ class SequencePattern:
         self.current_sequence = deque(maxlen=pattern_length)
         self.sequence_rewards = deque(maxlen=1000)
 
+        # Feature normalization ranges [min, max] for each of the 20 features
+        self.feature_ranges = [
+            # Movement statistics (1-4)
+            (0.0, 2.0),  # Player movement variance (normalized by 50)
+            (0.0, 2.0),  # Opponent movement variance (normalized by 50)
+            (0.0, 3.0),  # Average distance (normalized by 100)
+            (0.0, 2.0),  # Distance variance (normalized by 50)
+            # Attack patterns (5-8)
+            (0.0, 1.0),  # Player attack frequency
+            (0.0, 1.0),  # Opponent attack frequency
+            (0.0, 1.0),  # Player attack clustering
+            (0.0, 1.0),  # Opponent attack clustering
+            # Damage patterns (9-12)
+            (0.0, 2.0),  # Player damage taken (normalized by 100)
+            (0.0, 2.0),  # Opponent damage taken (normalized by 100)
+            (0.0, 1.0),  # Player damage timing
+            (0.0, 1.0),  # Opponent damage timing
+            # Positional dynamics (13-16)
+            (0.0, 1.0),  # Approach/retreat ratio
+            (0.0, 1.0),  # Range control
+            (0.0, 1.0),  # Positioning advantage
+            (-1.0, 1.0),  # Momentum shift (can be negative)
+            # Temporal patterns (17-20)
+            (0.0, 1.0),  # Sequence rhythm
+            (0.0, 1.0),  # Defensive windows
+            (0.0, 1.0),  # Counter-attack timing
+            (0.0, 1.0),  # Pressure relief
+        ]
+
     def add_frame(self, state: GameState):
         """Add a frame to the current sequence being tracked."""
         self.current_sequence.append(state)
@@ -127,7 +196,7 @@ class SequencePattern:
         opponent_positions = [ensure_scalar(s.opponent_x, 160.0) for s in sequence]
         distances = [ensure_scalar(s.distance, 80.0) for s in sequence]
 
-        # 1-4: Movement statistics
+        # 1-4: Movement statistics (RAW values, will normalize later)
         features.extend(
             [
                 np.std(player_positions) / 50.0,  # Player movement variance
@@ -189,8 +258,16 @@ class SequencePattern:
             ]
         )
 
+        # Convert to array and sanitize
         features_array = np.array(features, dtype=np.float32)
-        return sanitize_array(features_array, 0.0)
+        features_array = sanitize_array(features_array, 0.0)
+
+        # NORMALIZE ALL FEATURES to [-1, 1] range
+        normalized_features = normalize_array(
+            features_array, self.feature_ranges, -1.0, 1.0
+        )
+
+        return normalized_features
 
     def _calculate_attack_clustering(
         self, sequence: List[GameState], player: str
@@ -420,8 +497,42 @@ class BaitPunishDetector:
         self.defense_damage_reduction = 0.7  # Will adapt
         self.punish_timing_window = 8  # Will adapt
 
-        # Pattern recognition weights (learned)
-        self.pattern_weights = np.ones(20, dtype=np.float32) * 0.05  # Will be updated
+        # Pattern recognition weights (learned) - NORMALIZED RANGE
+        self.pattern_weights = np.zeros(20, dtype=np.float32)  # Start at zero
+
+        # Reward normalization parameters
+        self.reward_scale = 0.1  # Scale factor for all rewards
+        self.max_base_reward = 1.0  # Maximum base reward before scaling
+
+        # Running statistics for adaptive normalization
+        self.reward_history = deque(maxlen=1000)
+        self.reward_mean = 0.0
+        self.reward_std = 1.0
+
+        # Safety validation
+        self._validate_system_state()
+
+    def _normalize_reward(self, raw_reward: float) -> float:
+        """Normalize rewards using running statistics."""
+        # Update running statistics
+        self.reward_history.append(raw_reward)
+
+        if len(self.reward_history) > 10:
+            # Update running mean and std
+            recent_rewards = list(self.reward_history)[-100:]  # Use recent history
+            self.reward_mean = np.mean(recent_rewards)
+            self.reward_std = max(
+                np.std(recent_rewards), 0.01
+            )  # Prevent division by tiny std
+
+        # Z-score normalization
+        normalized = (raw_reward - self.reward_mean) / self.reward_std
+
+        # Scale and clip to reasonable range
+        scaled = normalized * self.reward_scale
+
+        # Final clipping to prevent explosions
+        return max(-0.5, min(0.5, scaled))
 
     def update(
         self,
@@ -432,40 +543,84 @@ class BaitPunishDetector:
     ) -> Dict:
         """Update the detector with new frame data."""
 
-        # Create current game state with safe scalar extraction
-        state = GameState(
-            player_x=ensure_scalar(info.get("agent_x", 160), 160.0),
-            opponent_x=ensure_scalar(info.get("enemy_x", 160), 160.0),
-            player_health=ensure_scalar(info.get("agent_hp", 176), 176),
-            opponent_health=ensure_scalar(info.get("enemy_hp", 176), 176),
-            player_attacking=self._is_attacking(button_features),
-            opponent_attacking=self._infer_opponent_attacking(info, damage_received),
-            player_blocking=self._is_blocking(button_features, damage_received),
-            distance=abs(
-                ensure_scalar(info.get("agent_x", 160), 160.0)
-                - ensure_scalar(info.get("enemy_x", 160), 160.0)
-            ),
-            player_damage_taken=ensure_scalar(damage_received, 0),
-            opponent_damage_taken=ensure_scalar(damage_dealt, 0),
-            button_state=sanitize_array(button_features, 0.0),
-            frame_number=len(self.state_history),
-        )
+        try:
+            # Create current game state with safe scalar extraction
+            state = GameState(
+                player_x=ensure_scalar(info.get("agent_x", 160), 160.0),
+                opponent_x=ensure_scalar(info.get("enemy_x", 160), 160.0),
+                player_health=ensure_scalar(info.get("agent_hp", 176), 176),
+                opponent_health=ensure_scalar(info.get("enemy_hp", 176), 176),
+                player_attacking=self._is_attacking(button_features),
+                opponent_attacking=self._infer_opponent_attacking(
+                    info, damage_received
+                ),
+                player_blocking=self._is_blocking(button_features, damage_received),
+                distance=abs(
+                    ensure_scalar(info.get("agent_x", 160), 160.0)
+                    - ensure_scalar(info.get("enemy_x", 160), 160.0)
+                ),
+                player_damage_taken=max(
+                    0, min(100, ensure_scalar(damage_received, 0))
+                ),  # Cap damage
+                opponent_damage_taken=max(
+                    0, min(100, ensure_scalar(damage_dealt, 0))
+                ),  # Cap damage
+                button_state=sanitize_array(button_features, 0.0),
+                frame_number=len(self.state_history),
+            )
 
-        self.state_history.append(state)
-        self.pattern_learner.add_frame(state)
+            self.state_history.append(state)
+            self.pattern_learner.add_frame(state)
 
-        # Analyze current sequence
-        sequence_reward, sequence_info = self._analyze_sequence(state)
+            # Analyze current sequence with error handling
+            sequence_reward, sequence_info = self._analyze_sequence(state)
 
-        # Update learning
-        self._update_pattern_learning()
+            # NORMALIZE the reward using running statistics
+            raw_reward = ensure_scalar(sequence_reward, 0.0)
+            normalized_reward = self._normalize_reward(raw_reward)
 
-        return {
-            "bait_punish_reward": ensure_scalar(sequence_reward, 0.0),
-            "sequence_phase": self.current_phase,
-            "sequence_quality": ensure_scalar(self.sequence_quality_score, 0.0),
-            **sequence_info,
-        }
+            # NORMALIZE sequence quality
+            sequence_quality = normalize_feature(
+                self.sequence_quality_score, 0.0, 1.0, 0.0, 1.0
+            )
+
+            # Update learning with error protection
+            try:
+                self._update_pattern_learning()
+            except Exception as e:
+                print(f"Learning update failed: {e}")
+
+            # Return safe, bounded values
+            result = {
+                "bait_punish_reward": normalized_reward,  # Now normalized
+                "sequence_phase": str(self.current_phase),
+                "sequence_quality": sequence_quality,
+            }
+
+            # Add sequence_info with normalization
+            for key, value in sequence_info.items():
+                if isinstance(value, (int, float, np.number)):
+                    # Normalize info values to [-1, 1] range
+                    normalized_value = normalize_feature(value, -5.0, 5.0, -1.0, 1.0)
+                    result[key] = normalized_value
+                else:
+                    result[key] = value
+
+            return result
+
+        except Exception as e:
+            # Fallback: return safe default values
+            print(f"BaitPunish update error: {e}")
+            return {
+                "bait_punish_reward": 0.0,
+                "sequence_phase": "neutral",
+                "sequence_quality": 0.0,
+                "phase_transition": False,
+                "sequence_length": 0,
+                "bait_quality": 0.0,
+                "defense_quality": 0.0,
+                "punish_quality": 0.0,
+            }
 
     def _is_attacking(self, button_features: np.ndarray) -> bool:
         """Detect if player is attacking based on button inputs."""
@@ -715,22 +870,22 @@ class BaitPunishDetector:
     ) -> float:
         """Evaluate the quality of phase transitions."""
         transitions = {
-            ("neutral", "baiting"): 0.02,
-            ("baiting", "defending"): 0.05,
-            ("defending", "punishing"): 0.1,
-            ("punishing", "neutral"): 0.05,
-            ("neutral", "defending"): 0.03,
-            ("neutral", "punishing"): 0.08,
+            ("neutral", "baiting"): 0.01,  # Small base rewards
+            ("baiting", "defending"): 0.02,
+            ("defending", "punishing"): 0.05,
+            ("punishing", "neutral"): 0.02,
+            ("neutral", "defending"): 0.015,
+            ("neutral", "punishing"): 0.04,
         }
 
         base_reward = transitions.get((old_phase, new_phase), 0.0)
 
-        # Bonus for proper sequence flow
+        # Bonus for proper sequence flow (small multiplier)
         if (old_phase, new_phase) in [
             ("baiting", "defending"),
             ("defending", "punishing"),
         ]:
-            base_reward *= 1.5
+            base_reward *= 1.2  # Reduced from 1.5
 
         return base_reward
 
@@ -741,8 +896,16 @@ class BaitPunishDetector:
 
         # Extract features and use pattern weights
         features = self.pattern_learner.extract_sequence_features(sequence)
-        quality = np.dot(features, self.pattern_weights)
 
+        # CRITICAL: Ensure no NaN/inf values before dot product
+        features = sanitize_array(features, 0.0)
+        weights = sanitize_array(self.pattern_weights, 0.05)
+
+        # Safe dot product with bounds checking
+        quality = np.dot(features, weights)
+        quality = ensure_scalar(quality, 0.0)
+
+        # STRICT bounds to prevent explosions
         return max(0.0, min(1.0, quality))
 
     def _is_sequence_complete(self, sequence: List[GameState]) -> bool:
@@ -776,28 +939,44 @@ class BaitPunishDetector:
         if len(sequence) < 15:
             return 0.0
 
-        # Base reward for completion
-        base_reward = 0.5
+        # Smaller base reward for completion
+        base_reward = 0.1  # Reduced from 0.5
 
-        # Quality multipliers
-        bait_quality = self._assess_bait_quality(sequence)
-        defense_quality = self._assess_defense_quality(sequence)
-        punish_quality = self._assess_punish_quality(sequence)
+        # Quality multipliers with safety bounds (all normalized 0-1)
+        bait_quality = normalize_feature(
+            self._assess_bait_quality(sequence), 0.0, 1.0, 0.0, 1.0
+        )
+        defense_quality = normalize_feature(
+            self._assess_defense_quality(sequence), 0.0, 1.0, 0.0, 1.0
+        )
+        punish_quality = normalize_feature(
+            self._assess_punish_quality(sequence), 0.0, 1.0, 0.0, 1.0
+        )
 
-        # Timing bonus
+        # Timing bonus with safety (normalized)
         sequence_length = len(sequence)
-        timing_bonus = 1.0 if 15 <= sequence_length <= 35 else 0.8
+        timing_bonus = normalize_feature(sequence_length, 15, 35, 0.8, 1.0)
 
-        # Damage efficiency bonus
+        # Damage efficiency bonus with overflow protection (normalized)
         damage_dealt = sum(ensure_scalar(s.opponent_damage_taken, 0) for s in sequence)
         damage_received = sum(ensure_scalar(s.player_damage_taken, 0) for s in sequence)
-        damage_ratio = damage_dealt / max(damage_received + 1, 1)
-        damage_bonus = min(damage_ratio * 0.1, 0.3)
 
-        total_reward = (
-            base_reward * (bait_quality + defense_quality + punish_quality) / 3.0
-        )
-        total_reward = total_reward * timing_bonus + damage_bonus
+        # Normalize damage values
+        damage_dealt = normalize_feature(damage_dealt, 0.0, 100.0, 0.0, 1.0)
+        damage_received = normalize_feature(damage_received, 0.0, 100.0, 0.0, 1.0)
+
+        # Safe damage ratio calculation
+        damage_ratio = damage_dealt / max(damage_received + 0.1, 0.1)
+        damage_bonus = normalize_feature(
+            damage_ratio, 0.0, 5.0, 0.0, 0.05
+        )  # Small bonus
+
+        # Calculate total with normalized components
+        avg_quality = (bait_quality + defense_quality + punish_quality) / 3.0
+        total_reward = base_reward * avg_quality * timing_bonus + damage_bonus
+
+        # Final normalization - keep rewards small
+        total_reward = normalize_feature(total_reward, 0.0, 0.3, 0.0, 0.2)
 
         return ensure_scalar(total_reward, 0.0)
 
@@ -942,44 +1121,108 @@ class BaitPunishDetector:
 
         for outcome in recent_outcomes:
             if outcome["success"]:
-                successful_features.append(outcome["features"])
+                # Sanitize and normalize features before adding
+                features = sanitize_array(outcome["features"], 0.0)
+                # Ensure features are already normalized from extract_sequence_features
+                successful_features.append(features)
             else:
-                failed_features.append(outcome["features"])
+                features = sanitize_array(outcome["features"], 0.0)
+                failed_features.append(features)
 
         if len(successful_features) < 5 or len(failed_features) < 5:
             return
 
-        # Calculate feature importance
-        successful_mean = np.mean(successful_features, axis=0)
-        failed_mean = np.mean(failed_features, axis=0)
+        try:
+            # Calculate feature importance with overflow protection
+            successful_mean = np.mean(successful_features, axis=0)
+            failed_mean = np.mean(failed_features, axis=0)
 
-        # Update weights based on feature discrimination
-        feature_diff = successful_mean - failed_mean
+            # Sanitize means (should already be normalized)
+            successful_mean = sanitize_array(successful_mean, 0.0)
+            failed_mean = sanitize_array(failed_mean, 0.0)
 
-        # Smooth weight updates
-        learning_rate = 0.01
-        self.pattern_weights = (
-            1 - learning_rate
-        ) * self.pattern_weights + learning_rate * feature_diff
+            # Update weights based on feature discrimination
+            feature_diff = successful_mean - failed_mean
+            feature_diff = sanitize_array(feature_diff, 0.0)
 
-        # Ensure weights stay reasonable
-        self.pattern_weights = np.clip(self.pattern_weights, 0.0, 0.2)
+            # VERY CONSERVATIVE learning rate for normalized features
+            learning_rate = 0.0005  # Much smaller for normalized inputs
+            old_weights = sanitize_array(self.pattern_weights, 0.0)
+
+            # Safe weight update with normalization
+            new_weights = (
+                1 - learning_rate
+            ) * old_weights + learning_rate * feature_diff
+            new_weights = sanitize_array(new_weights, 0.0)
+
+            # STRICT normalized bounds to prevent weight explosions
+            self.pattern_weights = np.clip(new_weights, -0.05, 0.05)
+
+        except Exception as e:
+            # If anything goes wrong, reset to safe defaults
+            print(f"Pattern learning error: {e}")
+            self.pattern_weights = np.zeros(20, dtype=np.float32)
 
     def get_pattern_confidence(self, sequence: List[GameState]) -> float:
         """Get confidence score for current pattern recognition."""
         if len(sequence) < 10:
             return 0.0
 
-        features = self.pattern_learner.extract_sequence_features(sequence)
-        confidence = np.dot(features, self.pattern_weights)
+        try:
+            features = self.pattern_learner.extract_sequence_features(sequence)
+            features = sanitize_array(features, 0.0)
+            weights = sanitize_array(self.pattern_weights, 0.05)
 
-        return max(0.0, min(1.0, confidence))
+            confidence = np.dot(features, weights)
+            confidence = ensure_scalar(confidence, 0.0)
+
+            # STRICT bounds
+            return max(0.0, min(1.0, confidence))
+        except Exception:
+            return 0.0
 
     def reset_sequence(self):
         """Reset sequence tracking (e.g., on round end)."""
         self.current_phase = "neutral"
         self.sequence_start_frame = -1
         self.sequence_quality_score = 0.0
+
+    def _validate_system_state(self):
+        """Validate system state and fix any issues."""
+        try:
+            # Ensure pattern weights are valid and normalized
+            if not isinstance(self.pattern_weights, np.ndarray):
+                self.pattern_weights = np.zeros(20, dtype=np.float32)
+
+            if self.pattern_weights.shape[0] != 20:
+                self.pattern_weights = np.zeros(20, dtype=np.float32)
+
+            # Check for NaN/inf values
+            if not np.all(np.isfinite(self.pattern_weights)):
+                print("WARNING: Invalid pattern weights detected, resetting...")
+                self.pattern_weights = np.zeros(20, dtype=np.float32)
+
+            # NORMALIZE weights to [-0.05, 0.05] range (very conservative)
+            self.pattern_weights = np.clip(self.pattern_weights, -0.05, 0.05)
+
+            # Validate other numeric values with normalization
+            self.sequence_quality_score = normalize_feature(
+                self.sequence_quality_score, 0.0, 1.0, 0.0, 1.0
+            )
+
+            # Normalize reward statistics
+            self.reward_mean = normalize_feature(self.reward_mean, -1.0, 1.0, -0.5, 0.5)
+            self.reward_std = max(
+                0.01, min(2.0, self.reward_std)
+            )  # Keep std reasonable
+
+        except Exception as e:
+            print(f"System validation error: {e}")
+            # Reset to safe normalized defaults
+            self.pattern_weights = np.zeros(20, dtype=np.float32)
+            self.sequence_quality_score = 0.0
+            self.reward_mean = 0.0
+            self.reward_std = 1.0
 
     def get_learning_stats(self) -> Dict:
         """Get statistics about the learning process."""
@@ -989,8 +1232,19 @@ class BaitPunishDetector:
             "total_outcomes": len(self.sequence_outcomes),
             "pattern_weights_sum": float(np.sum(self.pattern_weights)),
             "avg_pattern_weight": float(np.mean(self.pattern_weights)),
+            "pattern_weights_range": [
+                float(np.min(self.pattern_weights)),
+                float(np.max(self.pattern_weights)),
+            ],
             "current_phase": self.current_phase,
-            "sequence_quality": ensure_scalar(self.sequence_quality_score, 0.0),
+            "sequence_quality": normalize_feature(
+                self.sequence_quality_score, 0.0, 1.0, 0.0, 1.0
+            ),
+            "reward_stats": {
+                "mean": self.reward_mean,
+                "std": self.reward_std,
+                "history_length": len(self.reward_history),
+            },
         }
 
 
@@ -1024,10 +1278,24 @@ if __name__ == "__main__":
         if frame % 20 == 0:
             print(
                 f"Frame {frame}: Phase={result['sequence_phase']}, "
-                f"Reward={result['bait_punish_reward']:.3f}, "
-                f"Quality={result['sequence_quality']:.3f}"
+                f"Reward={result['bait_punish_reward']:.4f}, "
+                f"Quality={result['sequence_quality']:.4f}"
             )
 
     # Print learning stats
     stats = detector.get_learning_stats()
-    print(f"\nLearning Stats: {stats}")
+    print(f"\nLearning Stats:")
+    print(f"  Successful sequences: {stats['successful_sequences']}")
+    print(f"  Pattern weights range: {stats['pattern_weights_range']}")
+    print(f"  Reward stats: {stats['reward_stats']}")
+    print(f"  Current phase: {stats['current_phase']}")
+
+    # Test normalization functions
+    print(f"\nNormalization Tests:")
+    print(f"  normalize_feature(50, 0, 100): {normalize_feature(50, 0, 100)}")
+    print(
+        f"  normalize_feature(150, 0, 100): {normalize_feature(150, 0, 100)}"
+    )  # Should clamp
+    print(
+        f"  normalize_feature(-10, 0, 100): {normalize_feature(-10, 0, 100)}"
+    )  # Should clamp
