@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-wrapper_fixed.py - COMPLETE ARRAY AMBIGUITY FIX
+wrapper_fixed.py - COMPLETE ARRAY AMBIGUITY FIX + DIMENSION CONSISTENCY
 FIXES: All remaining boolean array operations that cause "truth value of an array" errors
 SOLUTION: Comprehensive array-to-scalar conversion at every potential boolean operation point
+NEW FIX: Consistent feature dimension handling (45 base, optionally 52 with bait-punish)
 """
 
 import cv2
@@ -59,7 +60,20 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
-VECTOR_FEATURE_DIM = 52 if BAIT_PUNISH_AVAILABLE else 45
+
+# CRITICAL FIX: Dynamic feature dimension based on bait-punish availability
+BASE_VECTOR_FEATURE_DIM = 45  # Base features without bait-punish
+ENHANCED_VECTOR_FEATURE_DIM = 52  # Enhanced features with bait-punish
+VECTOR_FEATURE_DIM = (
+    ENHANCED_VECTOR_FEATURE_DIM if BAIT_PUNISH_AVAILABLE else BASE_VECTOR_FEATURE_DIM
+)
+
+print(f"🔧 Feature Dimension Configuration:")
+print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
+print(f"   - Enhanced features: {ENHANCED_VECTOR_FEATURE_DIM}")
+print(
+    f"   - Current mode: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
+)
 
 
 # CRITICAL: Enhanced safe operations with more aggressive scalar conversion
@@ -219,6 +233,39 @@ def safe_comparison(value1, value2, operator="==", default=False):
             return default
     except:
         return default
+
+
+def ensure_feature_dimension(features, target_dim):
+    """CRITICAL NEW FIX: Ensure features match target dimension exactly."""
+    if not isinstance(features, np.ndarray):
+        if isinstance(features, (int, float)):
+            features = np.array([features], dtype=np.float32)
+        else:
+            print(f"⚠️  Features is not array-like: {type(features)}, creating zeros")
+            return np.zeros(target_dim, dtype=np.float32)
+
+    # Handle 0-dimensional arrays
+    if features.ndim == 0:
+        features = np.array([features.item()], dtype=np.float32)
+
+    # Get current length safely
+    try:
+        current_length = len(features)
+    except TypeError:
+        print(f"⚠️  Cannot get length of features: {type(features)}, using zeros")
+        return np.zeros(target_dim, dtype=np.float32)
+
+    # Adjust to target dimension
+    if current_length == target_dim:
+        return features.astype(np.float32)
+    elif current_length < target_dim:
+        # Pad with zeros
+        padding = np.zeros(target_dim - current_length, dtype=np.float32)
+        return np.concatenate([features, padding]).astype(np.float32)
+    else:
+        # Truncate
+        print(f"⚠️  Truncating features from {current_length} to {target_dim}")
+        return features[:target_dim].astype(np.float32)
 
 
 class OscillationTracker:
@@ -565,11 +612,7 @@ class OscillationTracker:
                 print(
                     f"⚠️  Oscillation features wrong dimension: got {len(features)}, expected 12"
                 )
-                if len(features) < 12:
-                    padding = np.zeros(12 - len(features), dtype=np.float32)
-                    features = np.concatenate([features, padding])
-                else:
-                    features = features[:12]
+                return ensure_feature_dimension(features, 12)
 
             return features.astype(np.float32)
 
@@ -715,39 +758,16 @@ class StrategicFeatureTracker:
         self.prev_score = None
         self._bait_punish_integrated = False
 
+        # CRITICAL NEW FIX: Track current feature dimension mode
+        self.current_feature_dim = VECTOR_FEATURE_DIM
+        print(
+            f"🔧 StrategicFeatureTracker initialized with {self.current_feature_dim} features"
+        )
+
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        # CRITICAL FIX: Handle case where features is not an array
-        if not isinstance(features, np.ndarray):
-            if isinstance(features, (int, float)):
-                print(f"⚠️  Features is scalar ({features}), creating array")
-                features = np.array([features], dtype=np.float32)
-            else:
-                print(f"⚠️  Features is not array-like: {type(features)}, using zeros")
-                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        if not isinstance(features, np.ndarray):
-            features = np.array(features, dtype=np.float32)
-
-        # CRITICAL FIX: Ensure features is at least 1D
-        if features.ndim == 0:
-            features = np.array([features.item()], dtype=np.float32)
-
-        # CRITICAL FIX: Ensure features match expected dimension
-        try:
-            current_dim = len(features)
-        except TypeError:
-            print(f"⚠️  Cannot get len() of features: {type(features)}, using zeros")
-            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        if current_dim != VECTOR_FEATURE_DIM:
-            print(
-                f"⚠️  Normalizer feature dimension mismatch: got {current_dim}, expected {VECTOR_FEATURE_DIM}"
-            )
-            if current_dim < VECTOR_FEATURE_DIM:
-                padding = np.zeros(VECTOR_FEATURE_DIM - current_dim, dtype=np.float32)
-                features = np.concatenate([features, padding])
-            else:
-                features = features[:VECTOR_FEATURE_DIM]
+        """CRITICAL FIX: Normalize features with consistent dimension handling."""
+        # CRITICAL FIX: Ensure features match current dimension
+        features = ensure_feature_dimension(features, self.current_feature_dim)
 
         nan_mask = ~np.isfinite(features)
         if np.any(nan_mask):
@@ -757,14 +777,22 @@ class StrategicFeatureTracker:
             features = sanitize_array(features, 0.0)
 
         if self.feature_rolling_mean is None:
-            self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+            self.feature_rolling_mean = np.zeros(
+                self.current_feature_dim, dtype=np.float32
+            )
+            self.feature_rolling_std = np.ones(
+                self.current_feature_dim, dtype=np.float32
+            )
 
         # CRITICAL FIX: Handle dimension mismatch in rolling statistics
-        if len(self.feature_rolling_mean) != VECTOR_FEATURE_DIM:
-            print(f"⚠️  Rolling mean dimension mismatch, reinitializing")
-            self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
+        if len(self.feature_rolling_mean) != self.current_feature_dim:
+            print(f"⚠️  Rolling statistics dimension mismatch, reinitializing")
+            self.feature_rolling_mean = np.zeros(
+                self.current_feature_dim, dtype=np.float32
+            )
+            self.feature_rolling_std = np.ones(
+                self.current_feature_dim, dtype=np.float32
+            )
 
         self.feature_rolling_mean = (
             self.normalization_alpha * self.feature_rolling_mean
@@ -794,7 +822,7 @@ class StrategicFeatureTracker:
                     normalized = np.array([normalized], dtype=np.float32)
         except Exception as e:
             print(f"⚠️  Normalization division error: {e}, using zeros")
-            normalized = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            normalized = np.zeros(self.current_feature_dim, dtype=np.float32)
 
         if isinstance(normalized, np.ndarray):
             normalized = np.clip(normalized, -3.0, 3.0)
@@ -804,18 +832,7 @@ class StrategicFeatureTracker:
         normalized = sanitize_array(normalized, 0.0)
 
         # CRITICAL FIX: Final dimension check after normalization
-        if len(normalized) != VECTOR_FEATURE_DIM:
-            print(
-                f"⚠️  Normalized features wrong dimension: got {len(normalized)}, expected {VECTOR_FEATURE_DIM}"
-            )
-            if len(normalized) < VECTOR_FEATURE_DIM:
-                padding = np.zeros(
-                    VECTOR_FEATURE_DIM - len(normalized), dtype=np.float32
-                )
-                normalized = np.concatenate([normalized, padding])
-            else:
-                normalized = normalized[:VECTOR_FEATURE_DIM]
-
+        normalized = ensure_feature_dimension(normalized, self.current_feature_dim)
         return normalized.astype(np.float32)
 
     def update(self, info: Dict, button_features: np.ndarray) -> np.ndarray:
@@ -910,42 +927,19 @@ class StrategicFeatureTracker:
             ):
                 self.close_combat_count += 1
 
-            # CRITICAL FIX: Ensure _calculate_enhanced_features returns proper array
+            # CRITICAL FIX: Calculate features based on current mode
             features = self._calculate_enhanced_features(
                 info, distance, oscillation_analysis
             )
 
-            # CRITICAL FIX: Validate features before normalization
-            if not isinstance(features, np.ndarray):
-                print(
-                    f"⚠️  Features from _calculate_enhanced_features is not array: {type(features)}"
-                )
-                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            elif features.size == 0:
-                print(f"⚠️  Features array is empty, using zeros")
-                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            elif len(features) != VECTOR_FEATURE_DIM:
-                print(
-                    f"⚠️  Features wrong dimension: got {len(features)}, expected {VECTOR_FEATURE_DIM}"
-                )
-                if len(features) < VECTOR_FEATURE_DIM:
-                    padding = np.zeros(
-                        VECTOR_FEATURE_DIM - len(features), dtype=np.float32
-                    )
-                    features = np.concatenate([features, padding])
-                else:
-                    features = features[:VECTOR_FEATURE_DIM]
+            # CRITICAL FIX: Ensure features match current dimension before normalization
+            features = ensure_feature_dimension(features, self.current_feature_dim)
 
             # Now normalize the features
             features = self._normalize_features(features)
 
             # CRITICAL FIX: Final validation before return
-            if (
-                not isinstance(features, np.ndarray)
-                or len(features) != VECTOR_FEATURE_DIM
-            ):
-                print(f"⚠️  Final features validation failed, using zeros")
-                features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            features = ensure_feature_dimension(features, self.current_feature_dim)
 
             self.prev_player_health = player_health
             self.prev_opponent_health = opponent_health
@@ -956,8 +950,13 @@ class StrategicFeatureTracker:
                 try:
                     integrate_bait_punish_system(self)
                     self._bait_punish_integrated = True
+                    # Update current feature dim to enhanced mode
+                    self.current_feature_dim = ENHANCED_VECTOR_FEATURE_DIM
+                    # Reinitialize normalization statistics for new dimension
+                    self.feature_rolling_mean = None
+                    self.feature_rolling_std = None
                     print(
-                        "✅ Bait-Punish system integrated into StrategicFeatureTracker"
+                        f"✅ Bait-Punish system integrated, features expanded to {self.current_feature_dim}"
                     )
                 except Exception as e:
                     print(
@@ -972,19 +971,15 @@ class StrategicFeatureTracker:
             import traceback
 
             traceback.print_exc()
-            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            return np.zeros(self.current_feature_dim, dtype=np.float32)
 
     def _calculate_enhanced_features(
         self, info, distance, oscillation_analysis
     ) -> np.ndarray:
-        # CRITICAL FIX: Determine actual feature count based on bait-punish availability
-        base_features = 45
-        if BAIT_PUNISH_AVAILABLE and self._bait_punish_integrated:
-            expected_features = 52  # 45 + 7 bait-punish features
-        else:
-            expected_features = 45
+        """CRITICAL FIX: Calculate features with dimension awareness."""
 
-        features = np.zeros(expected_features, dtype=np.float32)
+        # Always start with base features (45)
+        features = np.zeros(BASE_VECTOR_FEATURE_DIM, dtype=np.float32)
 
         try:
             # CRITICAL FIX: Ensure all extracted values are scalars
@@ -1001,6 +996,7 @@ class StrategicFeatureTracker:
 
             distance = distance if np.isfinite(distance) else 80.0
 
+            # Calculate base features (0-44)
             # CRITICAL FIX: Safe comparisons for health danger zones
             features[0] = (
                 1.0
@@ -1105,7 +1101,7 @@ class StrategicFeatureTracker:
                 else 0.0
             )
 
-            # CRITICAL FIX: Safe oscillation feature extraction
+            # CRITICAL FIX: Safe oscillation feature extraction (21-32)
             try:
                 oscillation_features = (
                     self.oscillation_tracker.get_oscillation_features()
@@ -1124,7 +1120,7 @@ class StrategicFeatureTracker:
                 print(f"⚠️  Error getting oscillation features: {e}")
                 features[21:33] = np.zeros(12, dtype=np.float32)
 
-            # CRITICAL FIX: Safe button features extraction
+            # CRITICAL FIX: Safe button features extraction (33-44)
             try:
                 if len(self.button_features_history) > 0:
                     button_hist = self.button_features_history[-1]
@@ -1141,12 +1137,20 @@ class StrategicFeatureTracker:
                 print(f"⚠️  Error getting button features: {e}")
                 features[33:45] = np.zeros(12, dtype=np.float32)
 
-            # CRITICAL FIX: Add bait-punish features if available and integrated
+            features = sanitize_array(features, 0.0)
+
+            # CRITICAL NEW FIX: Handle bait-punish features expansion properly
             if (
                 BAIT_PUNISH_AVAILABLE
                 and self._bait_punish_integrated
-                and expected_features > 45
+                and self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM
             ):
+                # Expand to enhanced features (45-51: 7 additional features)
+                enhanced_features = np.zeros(
+                    ENHANCED_VECTOR_FEATURE_DIM, dtype=np.float32
+                )
+                enhanced_features[:BASE_VECTOR_FEATURE_DIM] = features
+
                 try:
                     # Add 7 additional bait-punish features
                     bait_punish_features = getattr(
@@ -1156,58 +1160,24 @@ class StrategicFeatureTracker:
                         isinstance(bait_punish_features, np.ndarray)
                         and len(bait_punish_features) == 7
                     ):
-                        features[45:52] = bait_punish_features
+                        enhanced_features[45:52] = bait_punish_features
                     else:
-                        features[45:52] = np.zeros(7, dtype=np.float32)
+                        enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
                 except Exception as e:
                     print(f"⚠️  Error adding bait-punish features: {e}")
-                    features[45:52] = np.zeros(7, dtype=np.float32)
+                    enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
 
-            features = sanitize_array(features, 0.0)
+                return enhanced_features
+            else:
+                # Return base features only
+                return features
 
         except Exception as e:
             print(f"⚠️  Error in _calculate_enhanced_features: {e}")
             import traceback
 
             traceback.print_exc()
-            features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        # CRITICAL FIX: Ensure features is a proper numpy array
-        if not isinstance(features, np.ndarray):
-            print(f"⚠️  Features is not array after sanitization: {type(features)}")
-            features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        # CRITICAL FIX: Ensure features is at least 1D
-        if features.ndim == 0:
-            print(f"⚠️  Features is 0-dimensional: {features}")
-            features = np.array([features.item()], dtype=np.float32)
-
-        # CRITICAL FIX: Final dimension check with proper error handling
-        try:
-            current_length = len(features)
-        except TypeError:
-            print(f"⚠️  Cannot get length of features: {type(features)}, using zeros")
-            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        if current_length != VECTOR_FEATURE_DIM:
-            print(
-                f"⚠️  Final feature dimension mismatch: got {current_length}, expected {VECTOR_FEATURE_DIM}"
-            )
-            if current_length < VECTOR_FEATURE_DIM:
-                padding = np.zeros(
-                    VECTOR_FEATURE_DIM - current_length, dtype=np.float32
-                )
-                features = np.concatenate([features, padding])
-            else:
-                features = features[:VECTOR_FEATURE_DIM]
-
-        # CRITICAL FIX: Final safety check
-        if not isinstance(features, np.ndarray) or features.size == 0:
-            print(f"⚠️  Features final check failed, using zeros")
-            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        # FIX: The error was here. Removed extra parenthesis and the duplicated code block that followed.
-        return features.astype(np.float32)
+            return np.zeros(self.current_feature_dim, dtype=np.float32)
 
     def _calculate_momentum(self, history):
         if len(history) < 2:
@@ -1253,6 +1223,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_space = observation_space["vector_obs"]
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
+
         print(f"🔧 ENHANCED FeatureExtractor Configuration (NaN-SAFE):")
         print(f"   - Visual channels: {n_input_channels}")
         print(
@@ -1260,6 +1231,9 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         )
         print(
             f"   - Vector sequence: {seq_length} x {vector_feature_count} (NaN-protected)"
+        )
+        print(
+            f"   - Vector features: {vector_feature_count} ({'Enhanced' if vector_feature_count == 52 else 'Base'})"
         )
         print(f"   - Output features: {features_dim}")
 
@@ -1496,6 +1470,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
+        # CRITICAL NEW FIX: Dynamic observation space based on feature mode
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -1511,6 +1486,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     dtype=np.float32,
                 ),
             }
+        )
+
+        print(f"🔧 Observation space configured:")
+        print(f"   - Visual: {self.observation_space['visual_obs'].shape}")
+        print(f"   - Vector: {self.observation_space['vector_obs'].shape}")
+        print(
+            f"   - Vector features: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
         )
 
         self.frame_buffer = deque(maxlen=frame_stack)
@@ -1550,29 +1532,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 sanitized_info, initial_button_features
             )
 
-            # CRITICAL FIX: Handle case where update returns scalar instead of array
-            if not isinstance(initial_features, np.ndarray):
-                print(
-                    f"⚠️  Initial features is not an array: {type(initial_features)}, creating fallback"
-                )
-                initial_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            else:
-                initial_features = sanitize_array(initial_features, 0.0)
-
-            # CRITICAL FIX: Ensure correct shape for vector features
-            if len(initial_features) != VECTOR_FEATURE_DIM:
-                print(
-                    f"⚠️  Feature dimension mismatch: got {len(initial_features)}, expected {VECTOR_FEATURE_DIM}"
-                )
-                # Pad or truncate to match expected dimension
-                if len(initial_features) < VECTOR_FEATURE_DIM:
-                    padding = np.zeros(
-                        VECTOR_FEATURE_DIM - len(initial_features), dtype=np.float32
-                    )
-                    initial_features = np.concatenate([initial_features, padding])
-                else:
-                    initial_features = initial_features[:VECTOR_FEATURE_DIM]
-
+            # CRITICAL FIX: Ensure features match current dimension
+            initial_features = ensure_feature_dimension(
+                initial_features, VECTOR_FEATURE_DIM
+            )
             return initial_features
         except Exception as e:
             print(f"⚠️  Error creating initial features: {e}, using zeros")
@@ -1657,28 +1620,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 sanitized_info, button_features
             )
 
-            # CRITICAL FIX: Handle case where update returns scalar instead of array
-            if not isinstance(vector_features, np.ndarray):
-                print(
-                    f"⚠️  Vector features is not an array: {type(vector_features)}, creating fallback"
-                )
-                vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            else:
-                vector_features = sanitize_array(vector_features, 0.0)
-
-            # CRITICAL FIX: Ensure consistent vector feature dimensions
-            if len(vector_features) != VECTOR_FEATURE_DIM:
-                print(
-                    f"⚠️  Runtime feature dimension mismatch: got {len(vector_features)}, expected {VECTOR_FEATURE_DIM}"
-                )
-                # Pad or truncate to match expected dimension
-                if len(vector_features) < VECTOR_FEATURE_DIM:
-                    padding = np.zeros(
-                        VECTOR_FEATURE_DIM - len(vector_features), dtype=np.float32
-                    )
-                    vector_features = np.concatenate([vector_features, padding])
-                else:
-                    vector_features = vector_features[:VECTOR_FEATURE_DIM]
+            # CRITICAL NEW FIX: Ensure vector features match current dimension
+            vector_features = ensure_feature_dimension(
+                vector_features, VECTOR_FEATURE_DIM
+            )
 
         except Exception as e:
             print(f"⚠️  Vector feature update error: {e}, using zeros")
@@ -1739,6 +1684,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     ),
                     "space_control_score": combo_stats.get("space_control_score", 0.0),
                     "episode_steps": self.episode_steps,
+                    "current_feature_dim": self.strategic_tracker.current_feature_dim,
                 }
             )
         except Exception as e:
@@ -1837,6 +1783,21 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
             vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
 
+            # CRITICAL NEW FIX: Ensure vector_obs matches expected dimension
+            expected_shape = (self.frame_stack, VECTOR_FEATURE_DIM)
+            if vector_obs.shape != expected_shape:
+                print(
+                    f"⚠️  Vector obs shape mismatch: got {vector_obs.shape}, expected {expected_shape}"
+                )
+                # Create properly shaped vector observation
+                corrected_vector_obs = np.zeros(expected_shape, dtype=np.float32)
+                min_frames = min(vector_obs.shape[0], expected_shape[0])
+                min_features = min(vector_obs.shape[1], expected_shape[1])
+                corrected_vector_obs[:min_frames, :min_features] = vector_obs[
+                    :min_frames, :min_features
+                ]
+                vector_obs = corrected_vector_obs
+
             return {"visual_obs": visual_obs, "vector_obs": vector_obs}
         except Exception as e:
             print(f"⚠️  Error constructing observation: {e}, using fallback")
@@ -1889,7 +1850,7 @@ def verify_gradient_flow(model, env, device=None):
     print(f"🔍 Vector Feature Analysis (NaN-SAFE):")
     print(f"   - Shape: {vector_obs.shape}")
     print(
-        f"   - Features: {vector_obs.shape[-1]} ({'52 with bait-punish' if BAIT_PUNISH_AVAILABLE else '45 original'})"
+        f"   - Features: {vector_obs.shape[-1]} ({'Enhanced with bait-punish' if vector_obs.shape[-1] == 52 else 'Base features'})"
     )
     print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
     print(f"   - NaN count: {torch.sum(~torch.isfinite(vector_obs)).item()}")
@@ -1993,6 +1954,10 @@ __all__ = [
     "ensure_scalar",
     "safe_bool_check",
     "safe_comparison",
+    "ensure_feature_dimension",
+    "VECTOR_FEATURE_DIM",
+    "BASE_VECTOR_FEATURE_DIM",
+    "ENHANCED_VECTOR_FEATURE_DIM",
 ]
 
 if BAIT_PUNISH_AVAILABLE:

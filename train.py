@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-train.py - STABILIZED TRAINING SCRIPT with fixes for training instability AND array ambiguity - FULL SIZE FRAMES
+train.py - STABILIZED TRAINING SCRIPT with DIMENSION CONSISTENCY FIX
 FIXES: High value loss (35+→<8), Low explained variance (0.11→>0.3), Low clip fraction (0.04→0.1-0.3), Array ambiguity errors
 SOLUTION: Conservative hyperparameters, enhanced monitoring, stability-focused training, proper scalar handling
 MODIFICATION: Adapted for full-size frames (224x320) with adjusted hyperparameters for increased memory usage
+NEW FIX: Dynamic feature dimension handling for bait-punish system integration
 """
 
 import os
@@ -25,6 +26,10 @@ from wrapper import (
     verify_gradient_flow,
     ensure_scalar,
     safe_bool_check,
+    VECTOR_FEATURE_DIM,
+    BASE_VECTOR_FEATURE_DIM,
+    ENHANCED_VECTOR_FEATURE_DIM,
+    BAIT_PUNISH_AVAILABLE,
 )
 
 # Configure logging
@@ -34,10 +39,10 @@ logger = logging.getLogger(__name__)
 
 class StabilityCallback(BaseCallback):
     """
-    STABILIZED callback with focus on training stability metrics AND array safety - UPDATED for full-size frames.
+    STABILIZED callback with focus on training stability metrics AND array safety - UPDATED for dynamic dimensions.
     Monitors value loss, explained variance, clip fraction for stability issues.
     Additional monitoring for memory usage with larger frames.
-    CRITICAL FIX: Proper handling of array values from metrics.
+    CRITICAL FIX: Proper handling of array values from metrics + dimension awareness.
     """
 
     def __init__(self, save_freq=50000, save_path="./models/", verbose=1):
@@ -71,12 +76,16 @@ class StabilityCallback(BaseCallback):
         self.memory_warnings = 0
         self.peak_memory_usage = 0.0
 
+        # NEW: Feature dimension tracking
+        self.feature_dimension_changes = 0
+        self.current_feature_dim = VECTOR_FEATURE_DIM
+
     def _on_training_start(self):
-        """Initialize training with stability focus - UPDATED for full-size frames."""
+        """Initialize training with stability focus - UPDATED for dynamic dimensions."""
         self.training_start_time = datetime.now()
         self.device = next(self.model.policy.parameters()).device
 
-        print(f"🚀 STABILIZED Training Started (FULL SIZE FRAMES)")
+        print(f"🚀 STABILIZED Training Started (FULL SIZE FRAMES + DYNAMIC FEATURES)")
         print(f"🎯 STABILITY TARGETS:")
         print(f"   - Value Loss: <8.0 (currently expecting 35+)")
         print(f"   - Explained Variance: >0.3 (currently 0.11)")
@@ -86,6 +95,12 @@ class StabilityCallback(BaseCallback):
         )
         print(f"🔧 Device: {self.device}")
         print(f"🛡️  Array Safety: Enhanced scalar conversion for metrics")
+        print(f"🧠 Feature Dimensions:")
+        print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
+        print(f"   - Enhanced features: {ENHANCED_VECTOR_FEATURE_DIM}")
+        print(
+            f"   - Current mode: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
+        )
 
         # Check memory availability
         if torch.cuda.is_available() and self.device.type == "cuda":
@@ -100,18 +115,30 @@ class StabilityCallback(BaseCallback):
         self._perform_initial_stability_check()
 
     def _perform_initial_stability_check(self):
-        """Check initial model stability before training - UPDATED for full-size frames."""
-        print("\n🔬 Initial Stability Assessment (FULL SIZE)")
+        """Check initial model stability before training - UPDATED for dynamic dimensions."""
+        print("\n🔬 Initial Stability Assessment (DYNAMIC FEATURES)")
 
         env = self._get_env()
         if env:
             try:
                 stable = verify_gradient_flow(self.model, env, self.device)
                 if stable:
-                    print("   ✅ Initial stability verified for full-size frames")
+                    print("   ✅ Initial stability verified for dynamic feature system")
                 else:
                     print("   ⚠️  Initial stability issues detected")
                     print("   🔧 Proceeding with enhanced monitoring")
+
+                # Check feature dimensions
+                obs, _ = env.reset()
+                vector_shape = obs["vector_obs"].shape
+                expected_dim = VECTOR_FEATURE_DIM
+                if vector_shape[-1] != expected_dim:
+                    print(
+                        f"   ⚠️  Feature dimension mismatch: got {vector_shape[-1]}, expected {expected_dim}"
+                    )
+                else:
+                    print(f"   ✅ Feature dimensions consistent: {expected_dim}")
+
             except Exception as e:
                 print(f"   ❌ Stability check failed: {e}")
 
@@ -125,7 +152,7 @@ class StabilityCallback(BaseCallback):
             return self.training_env
 
     def _on_step(self) -> bool:
-        """Monitor training stability each step - UPDATED for memory monitoring."""
+        """Monitor training stability each step - UPDATED for dynamic features."""
 
         # Extract training metrics with array safety
         self._extract_training_metrics()
@@ -135,6 +162,9 @@ class StabilityCallback(BaseCallback):
 
         # Monitor memory usage for full-size frames
         self._monitor_memory_usage()
+
+        # Monitor feature dimension consistency
+        self._monitor_feature_dimensions()
 
         # Periodic stability monitoring
         if self.num_timesteps % 10000 == 0:
@@ -149,6 +179,27 @@ class StabilityCallback(BaseCallback):
             self._save_stability_checkpoint()
 
         return True
+
+    def _monitor_feature_dimensions(self):
+        """Monitor feature dimension consistency during training."""
+        try:
+            # Check if we have access to environment info
+            if hasattr(self.locals, "infos") and self.locals["infos"]:
+                for info in self.locals["infos"]:
+                    if "current_feature_dim" in info:
+                        current_dim = ensure_scalar(
+                            info["current_feature_dim"], VECTOR_FEATURE_DIM
+                        )
+                        if current_dim != self.current_feature_dim:
+                            self.feature_dimension_changes += 1
+                            print(
+                                f"🔄 Feature dimension changed: {self.current_feature_dim} → {current_dim}"
+                            )
+                            self.current_feature_dim = current_dim
+                        break
+        except Exception as e:
+            # Silently handle errors in dimension monitoring
+            pass
 
     def _monitor_memory_usage(self):
         """Monitor memory usage for full-size frames."""
@@ -293,15 +344,24 @@ class StabilityCallback(BaseCallback):
         return score
 
     def _log_stability_report(self):
-        """Log detailed stability report - UPDATED for full-size frames."""
-        print(f"\n📊 STABILITY REPORT (FULL SIZE) - Step {self.num_timesteps:,}")
-        print("=" * 65)
+        """Log detailed stability report - UPDATED for dynamic dimensions."""
+        print(f"\n📊 STABILITY REPORT (DYNAMIC FEATURES) - Step {self.num_timesteps:,}")
+        print("=" * 75)
 
         # Training time
         if self.training_start_time:
             elapsed = datetime.now() - self.training_start_time
             hours = elapsed.total_seconds() / 3600
             print(f"⏱️  Training Time: {hours:.1f} hours")
+
+        # Feature dimension info
+        print(f"🧠 Feature System:")
+        print(f"   - Current dimension: {self.current_feature_dim}")
+        print(
+            f"   - Mode: {'Enhanced (bait-punish)' if self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM else 'Base'}"
+        )
+        if self.feature_dimension_changes > 0:
+            print(f"   - Dimension changes: {self.feature_dimension_changes}")
 
         # Memory usage for full-size frames
         if torch.cuda.is_available() and self.device.type == "cuda":
@@ -419,8 +479,13 @@ class StabilityCallback(BaseCallback):
             np.mean(self.clip_fractions[-10:]) if self.clip_fractions else 0
         )
 
-        # Simple checkpoint naming
-        model_name = f"model_{self.num_timesteps}"
+        # Simple checkpoint naming with feature dimension info
+        feature_suffix = (
+            "enhanced"
+            if self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM
+            else "base"
+        )
+        model_name = f"model_{self.num_timesteps}_{feature_suffix}"
         model_path = os.path.join(self.save_path, f"{model_name}.zip")
 
         self.model.save(model_path)
@@ -429,13 +494,17 @@ class StabilityCallback(BaseCallback):
         # Track and save best models
         if current_explained_var > self.best_explained_variance:
             self.best_explained_variance = current_explained_var
-            best_path = os.path.join(self.save_path, "best_explained_variance.zip")
+            best_path = os.path.join(
+                self.save_path, f"best_explained_variance_{feature_suffix}.zip"
+            )
             self.model.save(best_path)
             print(f"   🎯 NEW BEST explained variance: {current_explained_var:.3f}")
 
         if current_value_loss < self.best_value_loss:
             self.best_value_loss = current_value_loss
-            best_path = os.path.join(self.save_path, "best_value_loss.zip")
+            best_path = os.path.join(
+                self.save_path, f"best_value_loss_{feature_suffix}.zip"
+            )
             self.model.save(best_path)
             print(f"   🎯 NEW BEST value loss: {current_value_loss:.2f}")
 
@@ -444,6 +513,7 @@ class StabilityCallback(BaseCallback):
             current_value_loss, current_explained_var, current_clip_frac
         )
         print(f"   📊 Current stability: {stability_score:.0f}/100")
+        print(f"   🧠 Feature dimension: {self.current_feature_dim}")
 
         # Log memory usage
         if torch.cuda.is_available() and self.device.type == "cuda":
@@ -456,14 +526,18 @@ def make_env(
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create the Street Fighter environment with stability wrapper - UPDATED for full-size frames."""
+    """Create the Street Fighter environment with stability wrapper - UPDATED for dynamic dimensions."""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = Monitor(env)
         env = StreetFighterVisionWrapper(
             env, frame_stack=8, rendering=(render_mode is not None)
         )
-        print(f"✅ Environment created with full-size frames and array safety")
+        print(f"✅ Environment created with dynamic feature system")
+        print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
+        print(
+            f"   - Mode: {'Enhanced (bait-punish)' if BAIT_PUNISH_AVAILABLE else 'Base'}"
+        )
         return env
     except Exception as e:
         print(f"❌ Error creating environment: {e}")
@@ -472,7 +546,7 @@ def make_env(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="STABILIZED Street Fighter Training - Full Size + Array Safety"
+        description="STABILIZED Street Fighter Training - Dynamic Features + Array Safety"
     )
     parser.add_argument(
         "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
@@ -491,7 +565,7 @@ def main():
         "--test-stability", action="store_true", help="Test stability before training"
     )
 
-    # STABILITY-FOCUSED HYPERPARAMETERS - ADJUSTED FOR FULL-SIZE FRAMES
+    # STABILITY-FOCUSED HYPERPARAMETERS - ADJUSTED FOR DYNAMIC FEATURES
     parser.add_argument(
         "--learning-rate",
         type=float,
@@ -531,8 +605,8 @@ def main():
 
     args = parser.parse_args()
 
-    print("🔧 STABILIZED STREET FIGHTER TRAINING - FULL SIZE FRAMES + ARRAY SAFETY")
-    print("=" * 80)
+    print("🔧 STABILIZED STREET FIGHTER TRAINING - DYNAMIC FEATURES + ARRAY SAFETY")
+    print("=" * 85)
     print("🎯 ADDRESSING TRAINING INSTABILITY:")
     print("   - HIGH Value Loss: 35+ → Target <8.0")
     print("   - LOW Explained Variance: 0.11 → Target >0.3")
@@ -546,13 +620,26 @@ def main():
     print("   - Rollout Steps: Reduced to 4096 (from 8192)")
     print("   - Learning Rate: Reduced to 8e-5 (from 1e-4)")
     print()
+    print("🧠 DYNAMIC FEATURE SYSTEM:")
+    print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
+    print(f"   - Enhanced features: {ENHANCED_VECTOR_FEATURE_DIM}")
+    print(
+        f"   - Current mode: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
+    )
+    print(
+        f"   - Bait-punish system: {'Available' if BAIT_PUNISH_AVAILABLE else 'Not available'}"
+    )
+    print()
     print("🛡️  ARRAY SAFETY ENHANCEMENTS:")
     print("   - ensure_scalar() for all metric extractions")
     print("   - safe_bool_check() for array boolean operations")
+    print("   - ensure_feature_dimension() for consistent dimensions")
     print("   - Proper vectorized env info handling")
     print()
     print("🔧 STABILIZED HYPERPARAMETERS:")
-    print(f"   - Learning Rate: {args.learning_rate} (conservative for full-size)")
+    print(
+        f"   - Learning Rate: {args.learning_rate} (conservative for dynamic features)"
+    )
     print(f"   - Batch Size: {args.batch_size} (reduced for memory)")
     print(f"   - Rollout Steps: {args.n_steps} (reduced for memory)")
     print(f"   - Epochs: {args.n_epochs} (fewer for stability)")
@@ -587,29 +674,43 @@ def main():
     render_mode = "human" if args.render else None
     env = make_env(args.game, args.state, render_mode)
 
-    # Test environment with full-size frames
-    print("🧪 Testing environment with full-size frames and array safety...")
+    # Test environment with dynamic features
+    print("🧪 Testing environment with dynamic feature system...")
     obs = env.reset()
     if isinstance(obs, tuple):
         obs = obs[0]
 
     # Check frame dimensions
     visual_shape = obs["visual_obs"].shape
+    vector_shape = obs["vector_obs"].shape
     print(f"   ✅ Visual obs shape: {visual_shape}")
     print(
         f"   🖼️  Frame size: {visual_shape[1]}x{visual_shape[2]} (confirmed full-size)"
     )
+    print(f"   ✅ Vector obs shape: {vector_shape}")
+    print(
+        f"   🧠 Feature dimension: {vector_shape[-1]} ({'Enhanced' if vector_shape[-1] == ENHANCED_VECTOR_FEATURE_DIM else 'Base'})"
+    )
+
+    # Validate feature dimensions
+    if vector_shape[-1] != VECTOR_FEATURE_DIM:
+        print(f"   ⚠️  WARNING: Feature dimension mismatch!")
+        print(f"       Expected: {VECTOR_FEATURE_DIM}")
+        print(f"       Got: {vector_shape[-1]}")
+    else:
+        print(f"   ✅ Feature dimensions consistent")
 
     # Estimate memory usage
     frame_memory_mb = np.prod(visual_shape) * 4 / 1024 / 1024  # 4 bytes per float32
-    batch_memory_mb = frame_memory_mb * args.batch_size
+    vector_memory_mb = np.prod(vector_shape) * 4 / 1024 / 1024
+    batch_memory_mb = (frame_memory_mb + vector_memory_mb) * args.batch_size
     print(f"   📊 Estimated batch memory: {batch_memory_mb:.1f} MB")
     print(f"   🛡️  Array safety: All metrics will be converted to scalars")
 
     # Create or load model
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
-        print("🔄 Applying new hyperparameters for continued full-size training...")
+        print("🔄 Applying new hyperparameters for continued dynamic training...")
         try:
             # Pass hyperparameters directly into the .load() method.
             model = PPO.load(
@@ -624,7 +725,7 @@ def main():
                 vf_coef=args.vf_coef,
             )
             print(
-                f"   ✅ Model loaded on {device} with updated hyperparameters for full-size."
+                f"   ✅ Model loaded on {device} with updated hyperparameters for dynamic features."
             )
 
         except Exception as e:
@@ -635,7 +736,7 @@ def main():
         model = None
 
     if model is None:
-        print("🆕 Creating new STABILIZED model for full-size frames...")
+        print("🆕 Creating new STABILIZED model for dynamic features...")
         model = PPO(
             FixedStreetFighterPolicy,
             env,
@@ -659,22 +760,23 @@ def main():
 
     # Test stability if requested
     if args.test_stability:
-        print("\n🔬 Testing training stability with full-size frames...")
+        print("\n🔬 Testing training stability with dynamic features...")
         stable = verify_gradient_flow(model, env, device)
         if not stable:
             print("⚠️  Stability issues detected but proceeding with monitoring")
         else:
-            print("✅ Stability verified - ready for stable full-size training!")
+            print("✅ Stability verified - ready for stable dynamic training!")
 
-    # Create stability-focused callback with memory monitoring and array safety
+    # Create stability-focused callback with dimension monitoring
     callback = StabilityCallback(save_freq=50000, save_path="./models/")
 
-    print("\n🚀 STARTING STABILIZED FULL-SIZE TRAINING WITH ARRAY SAFETY...")
+    print("\n🚀 STARTING STABILIZED DYNAMIC TRAINING WITH ARRAY SAFETY...")
     print("📊 Real-time monitoring of:")
     print("   - Value Loss (target: <8.0)")
     print("   - Explained Variance (target: >0.3)")
     print("   - Clip Fraction (target: 0.1-0.3)")
     print("   - GPU Memory Usage (full-size frames)")
+    print("   - Feature Dimension Consistency")
     print("   - Array Safety (scalar conversion)")
     print("💾 Auto-saving best stability models")
     print()
@@ -687,20 +789,21 @@ def main():
             progress_bar=True,
         )
 
-        # Save final model
-        final_path = "./models/final_stabilized_fullsize_arraysafe_model.zip"
+        # Save final model with feature info
+        feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
+        final_path = f"./models/final_stabilized_dynamic_{feature_suffix}_model.zip"
         model.save(final_path)
-        print(f"🎉 Full-size training with array safety completed successfully!")
+        print(f"🎉 Dynamic training with array safety completed successfully!")
         print(f"💾 Final model saved: {final_path}")
 
         # Final stability report
-        print(f"\n📊 FINAL STABILITY RESULTS (FULL SIZE + ARRAY SAFE):")
+        print(f"\n📊 FINAL STABILITY RESULTS (DYNAMIC FEATURES + ARRAY SAFE):")
         if callback.value_losses:
             final_value_loss = np.mean(callback.value_losses[-20:])
             print(f"📉 Final Value Loss: {final_value_loss:.2f}")
             if final_value_loss < 8.0:
                 print(
-                    f"   ✅ SUCCESS: Value loss target achieved with full-size frames!"
+                    f"   ✅ SUCCESS: Value loss target achieved with dynamic features!"
                 )
             else:
                 improvement = 35.0 - final_value_loss  # Assuming started at 35
@@ -711,7 +814,7 @@ def main():
             print(f"📈 Final Explained Variance: {final_explained_var:.3f}")
             if final_explained_var > 0.3:
                 print(
-                    f"   ✅ SUCCESS: Explained variance target achieved with full-size!"
+                    f"   ✅ SUCCESS: Explained variance target achieved with dynamic features!"
                 )
             else:
                 improvement = final_explained_var - 0.11  # Assuming started at 0.11
@@ -726,6 +829,14 @@ def main():
         final_stability = callback.best_stability_score
         print(f"🏥 Best Stability Score: {final_stability:.0f}/100")
 
+        # Feature system summary
+        print(f"🧠 Feature System Performance:")
+        print(f"   - Final dimension: {callback.current_feature_dim}")
+        print(f"   - Dimension changes: {callback.feature_dimension_changes}")
+        print(
+            f"   - Mode: {'Enhanced (bait-punish)' if callback.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM else 'Base'}"
+        )
+
         # Memory usage summary
         if callback.peak_memory_usage > 0:
             print(f"📊 Peak GPU Memory: {callback.peak_memory_usage:.1f} GB")
@@ -735,13 +846,14 @@ def main():
         print(f"🛡️  Array Safety: No 'truth value of array' errors encountered!")
 
         if final_stability >= 60:
-            print("🎉 FULL-SIZE TRAINING STABILIZATION WITH ARRAY SAFETY SUCCESSFUL!")
+            print("🎉 DYNAMIC TRAINING STABILIZATION WITH ARRAY SAFETY SUCCESSFUL!")
         else:
             print("📈 PARTIAL IMPROVEMENT - Continue training for full stabilization")
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
-        interrupted_path = "./models/interrupted_fullsize_arraysafe_model.zip"
+        feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
+        interrupted_path = f"./models/interrupted_dynamic_{feature_suffix}_model.zip"
         model.save(interrupted_path)
         print(f"💾 Model saved: {interrupted_path}")
 
@@ -757,7 +869,16 @@ def main():
             print("   This suggests the error is coming from a different location.")
             print("   Check for any remaining numpy array boolean operations.")
 
-        error_path = "./models/error_fullsize_arraysafe_model.zip"
+        # Check for dimension-related errors
+        if "could not broadcast" in str(e) or "shape" in str(e):
+            print("🚨 CRITICAL: Dimension mismatch error detected!")
+            print("   This suggests feature dimension inconsistency.")
+            print(
+                "   Check feature dimension handling in wrapper and bait-punish system."
+            )
+
+        feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
+        error_path = f"./models/error_dynamic_{feature_suffix}_model.zip"
         try:
             model.save(error_path)
             print(f"💾 Model saved: {error_path}")
@@ -767,7 +888,7 @@ def main():
 
     finally:
         env.close()
-        print("🔚 Full-size training session with array safety ended")
+        print("🔚 Dynamic training session with array safety ended")
 
 
 if __name__ == "__main__":
