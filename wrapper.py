@@ -41,6 +41,7 @@ except ImportError:
 _original_retro_make = retro.make
 
 
+# feed stat file to retro env
 def _patched_retro_make(game, state=None, **kwargs):
     if not state:
         state = "ken_bison_12.state"
@@ -59,7 +60,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
+# for max health and screen size
 MAX_HEALTH = 176
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
@@ -944,6 +945,7 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
+# energy base + cnn
 class EnergyBasedStreetFighterCNN(nn.Module):
     """
     CNN feature extractor for Energy-Based Transformer.
@@ -952,9 +954,13 @@ class EnergyBasedStreetFighterCNN(nn.Module):
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
+        # visual
         visual_space = observation_space["visual_obs"]
+        # strategy
         vector_space = observation_space["vector_obs"]
+        # channel
         n_input_channels = visual_space.shape[0]
+        # seq len and feature num
         seq_length, vector_feature_count = vector_space.shape
 
         print(f"🔧 Energy-Based CNN Feature Extractor Configuration:")
@@ -964,6 +970,7 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         print(f"   - Output features: {features_dim}")
 
         # Conservative CNN architecture for energy stability
+        # 32 -> 64 -> 128
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
@@ -980,12 +987,14 @@ class EnergyBasedStreetFighterCNN(nn.Module):
             nn.Flatten(),
         )
 
+        # dummy visual with zeros
         with torch.no_grad():
             dummy_visual = torch.zeros(
                 1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
+        # vector embed
         self.vector_embed = nn.Linear(vector_feature_count, 64)
         self.vector_norm = nn.LayerNorm(64)
         self.vector_dropout = nn.Dropout(0.2)
@@ -1104,6 +1113,7 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         return output
 
 
+# transformer with verifer
 class EnergyBasedStreetFighterVerifier(nn.Module):
     """
     Energy-Based Transformer Verifier for Street Fighter.
@@ -1118,11 +1128,13 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
     ):
         super().__init__()
 
+        # obs, action space, feature dim, action dim
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
+        # energy base cnn (state)
         # Feature extractor for context (state)
         self.features_extractor = EnergyBasedStreetFighterCNN(
             observation_space, features_dim
