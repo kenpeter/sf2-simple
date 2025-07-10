@@ -272,51 +272,33 @@ class SimpleBlockPunishDetector:
             return 0.0
 
     def _enhanced_opponent_attack_detection_v2(
-        self,
-        info: Dict,
-        damage_received: int,
-        opponent_status: int,
-        player_x: float,
-        opponent_x: float,
-    ) -> bool:
-        """
-        FIX 2: Enhanced opponent attack detection with multiple indicators.
-        """
+        self, info, damage_received, opponent_status, player_x, opponent_x
+    ):
         attack_detected = False
 
-        # Primary indicator: we received damage
+        # METHOD 1: We received damage (most reliable)
         if damage_received > 0:
             attack_detected = True
 
-        # Secondary indicator: significant opponent status change (animation states)
+        # METHOD 2: Opponent animation state changes
         if (
             self.last_opponent_status != 0
             and opponent_status != self.last_opponent_status
         ):
             status_diff = abs(opponent_status - self.last_opponent_status)
-            if status_diff > 20:  # Increased threshold for better detection
+            if status_diff > 20:
                 attack_detected = True
 
-        # NEW: Opponent approaching aggressively
+        # METHOD 3: Opponent approaching aggressively
         if self._opponent_approaching_aggressively(player_x, opponent_x):
             attack_detected = True
 
-        # NEW: Multi-frame attack pattern detection
+        # METHOD 4: Multi-frame attack pattern
         self.opponent_attack_frames.append(damage_received > 0)
         if len(self.opponent_attack_frames) >= 3:
             recent_attacks = sum(self.opponent_attack_frames[-3:])
-            if (
-                recent_attacks >= 2
-            ):  # Multiple recent attacks indicate ongoing aggression
+            if recent_attacks >= 2:
                 attack_detected = True
-
-        # Score change patterns (opponent might have attacked)
-        score_change = info.get("score", 0) - info.get("prev_score", 0)
-        if score_change < -10:  # Significant score decrease
-            attack_detected = True
-
-        # Store attack indicator for pattern analysis
-        self.opponent_attack_indicators.append(attack_detected)
 
         return attack_detected
 
