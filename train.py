@@ -22,6 +22,7 @@ import logging
 import time
 import json
 import pickle
+from tqdm import tqdm  # Add progress bar
 
 # Import energy-based components
 from wrapper import (
@@ -315,7 +316,7 @@ class EnergyTrainingCallback:
         print()
 
     def _save_energy_checkpoint(self, episode_num: int):
-        """Save Energy-Based Transformer checkpoint."""
+        """Save Energy-Based Transformer checkpoint with model files."""
         current_energy_loss = (
             np.mean(self.energy_losses[-10:]) if self.energy_losses else float("inf")
         )
@@ -353,6 +354,20 @@ class EnergyTrainingCallback:
         print(
             f"   📊 Current Energy Landscape Quality: {self.energy_landscape_quality:.1f}/100"
         )
+
+        # Return checkpoint info for trainer to save actual model
+        return {
+            "checkpoint_name": checkpoint_name,
+            "feature_suffix": feature_suffix,
+            "episode_num": episode_num,
+            "energy_loss": current_energy_loss,
+            "win_rate": current_win_rate,
+            "thinking_improvement": current_thinking_improvement,
+            "is_best_energy": current_energy_loss < self.best_energy_loss,
+            "is_best_win_rate": current_win_rate > self.best_win_rate,
+            "is_best_thinking": current_thinking_improvement
+            > self.best_thinking_improvement,
+        }
 
     def get_training_stats(self) -> dict:
         """Get comprehensive training statistics."""
@@ -924,6 +939,8 @@ def main():
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
+        if "pbar" in locals():
+            pbar.close()
         feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
         interrupted_path = (
             f"./models/interrupted_energy_transformer_{feature_suffix}.pt"
@@ -933,6 +950,8 @@ def main():
 
     except Exception as e:
         print(f"\n❌ Training failed: {e}")
+        if "pbar" in locals():
+            pbar.close()
         import traceback
 
         traceback.print_exc()

@@ -1560,9 +1560,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.frame_buffer.append(processed_frame)
             self.vector_features_history.append(initial_vector_features.copy())
 
-        self.strategic_tracker = StrategicFeatureTracker(
-            history_length=self.frame_stack
-        )
+        # DON'T reinitialize strategic_tracker - keep the learned experience!
+        # Only reset episode-specific stats
+        if hasattr(self, "strategic_tracker"):
+            # Reset only episode-specific counters, keep learning stats
+            pass
+        else:
+            self.strategic_tracker = StrategicFeatureTracker(
+                history_length=self.frame_stack
+            )
 
         return self._get_observation(), info
 

@@ -6,8 +6,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --total-episodes 1000 --learning-rate 4e-4 --render
-
+python train.py --total-episodes 500 --save-freq 100 --learning-rate 2e-4 --thinking-steps 7
 
   ta.json 
 {
