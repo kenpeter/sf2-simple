@@ -6,19 +6,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --resume ./models/ppo_stable_600000_enhanced.zip  --total-timesteps 1000000 --learning-rate 4e-4  --render
-
-python train.py --total-timesteps 1000000 --learning-rate 4e-4 --render
-
-
-
-python train.py \
-    --resume ./models/model_500000.zip \
-    --total-timesteps 1000000 \
-    --learning-rate 2e-4 \
-    --clip-range 0.15 \
-    --render
-
+python train.py --total-episodes 1000 --learning-rate 4e-4 --render
 
 
   ta.json 

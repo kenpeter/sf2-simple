@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-wrapper.py - COMPLETE PPO VALUE LOSS EXPLOSION FIX + ARRAY SAFETY - FULL VERSION
-FIXES:
-- PPO value loss explosion (41,650 → stable <8.0)
-- Array ambiguity errors with comprehensive scalar conversion
-- Feature dimension consistency for bait-punish integration
-- Gradient explosion prevention with proper clipping
-SOLUTION: Value network stabilization, gradient clipping, reward normalization
-PRESERVED: All original functionality from 1694-line wrapper.py
+wrapper.py - ENERGY-BASED TRANSFORMER FOR STREET FIGHTER
+CORE CONCEPT:
+- Verifier-based action scoring (no policy network)
+- Gradient-based "thinking" optimization
+- Energy landscape learning for Street Fighter
+- System 2 reasoning for strategic decisions
+REPLACES: PPO entirely with Energy-Based approach
 """
 
 import cv2
@@ -18,8 +17,6 @@ import numpy as np
 import gymnasium as gym
 from collections import deque, defaultdict
 from gymnasium import spaces
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.policies import ActorCriticPolicy
 from typing import Dict, Tuple, List, Type, Any, Optional, Union
 import math
 import logging
@@ -51,11 +48,10 @@ def _patched_retro_make(game, state=None, **kwargs):
 
 
 retro.make = _patched_retro_make
-# --- END OF FIX ---
 
 # Configure logging
 os.makedirs("logs", exist_ok=True)
-log_filename = f'logs/training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+log_filename = f'logs/energy_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -68,25 +64,25 @@ MAX_HEALTH = 176
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 
-# CRITICAL FIX: Dynamic feature dimension based on bait-punish availability
-BASE_VECTOR_FEATURE_DIM = 45  # Base features without bait-punish
-ENHANCED_VECTOR_FEATURE_DIM = 52  # Enhanced features with bait-punish
+# Dynamic feature dimension based on bait-punish availability
+BASE_VECTOR_FEATURE_DIM = 45
+ENHANCED_VECTOR_FEATURE_DIM = 52
 VECTOR_FEATURE_DIM = (
     ENHANCED_VECTOR_FEATURE_DIM if BAIT_PUNISH_AVAILABLE else BASE_VECTOR_FEATURE_DIM
 )
 
-print(f"🔧 PPO VALUE LOSS EXPLOSION FIX Configuration:")
+print(f"🧠 ENERGY-BASED TRANSFORMER Configuration:")
 print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
 print(f"   - Enhanced features: {ENHANCED_VECTOR_FEATURE_DIM}")
 print(
     f"   - Current mode: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
 )
+print(f"   - Training paradigm: Energy-Based (NOT PPO)")
 
 
-# CRITICAL: Enhanced safe operations with more aggressive scalar conversion
+# Enhanced safe operations
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
-    # CRITICAL FIX: Ensure both inputs are scalars
     numerator = ensure_scalar(numerator, default)
     denominator = ensure_scalar(denominator, 1.0 if default == 0.0 else default)
 
@@ -128,7 +124,6 @@ def safe_mean(values, default=0.0):
 
 def sanitize_array(arr, default_val=0.0):
     """Sanitize numpy array, replacing NaN/inf with default value."""
-    # CRITICAL FIX: Handle scalar inputs
     if isinstance(arr, (int, float)):
         if np.isfinite(arr):
             return np.array([arr], dtype=np.float32)
@@ -142,7 +137,6 @@ def sanitize_array(arr, default_val=0.0):
             print(f"⚠️  Cannot convert to array: {type(arr)}, using default")
             return np.array([default_val], dtype=np.float32)
 
-    # Handle 0-dimensional arrays
     if arr.ndim == 0:
         val = arr.item()
         if np.isfinite(val):
@@ -150,7 +144,6 @@ def sanitize_array(arr, default_val=0.0):
         else:
             return np.array([default_val], dtype=np.float32)
 
-    # Handle regular arrays
     mask = ~np.isfinite(arr)
     if np.any(mask):
         arr = arr.copy()
@@ -160,7 +153,7 @@ def sanitize_array(arr, default_val=0.0):
 
 
 def ensure_scalar(value, default=0.0):
-    """CRITICAL FIX: Ensure value is a scalar, handling arrays properly."""
+    """Ensure value is a scalar, handling arrays properly."""
     if value is None:
         return default
 
@@ -173,7 +166,6 @@ def ensure_scalar(value, default=0.0):
             except (ValueError, TypeError):
                 return default
         else:
-            # For multi-element arrays, take the first element
             try:
                 return float(value.flat[0])
             except (ValueError, TypeError, IndexError):
@@ -193,7 +185,7 @@ def ensure_scalar(value, default=0.0):
 
 
 def safe_bool_check(value):
-    """CRITICAL FIX: Safe boolean check for arrays."""
+    """Safe boolean check for arrays."""
     if value is None:
         return False
 
@@ -206,7 +198,6 @@ def safe_bool_check(value):
             except (ValueError, TypeError):
                 return False
         else:
-            # For multi-element arrays, use any() for existence check
             try:
                 return bool(np.any(value))
             except (ValueError, TypeError):
@@ -219,7 +210,7 @@ def safe_bool_check(value):
 
 
 def safe_comparison(value1, value2, operator="==", default=False):
-    """CRITICAL FIX: Safe comparison that handles arrays."""
+    """Safe comparison that handles arrays."""
     try:
         val1 = ensure_scalar(value1)
         val2 = ensure_scalar(value2)
@@ -243,7 +234,7 @@ def safe_comparison(value1, value2, operator="==", default=False):
 
 
 def ensure_feature_dimension(features, target_dim):
-    """CRITICAL NEW FIX: Ensure features match target dimension exactly."""
+    """Ensure features match target dimension exactly."""
     if not isinstance(features, np.ndarray):
         if isinstance(features, (int, float)):
             features = np.array([features], dtype=np.float32)
@@ -251,26 +242,21 @@ def ensure_feature_dimension(features, target_dim):
             print(f"⚠️  Features is not array-like: {type(features)}, creating zeros")
             return np.zeros(target_dim, dtype=np.float32)
 
-    # Handle 0-dimensional arrays
     if features.ndim == 0:
         features = np.array([features.item()], dtype=np.float32)
 
-    # Get current length safely
     try:
         current_length = len(features)
     except TypeError:
         print(f"⚠️  Cannot get length of features: {type(features)}, using zeros")
         return np.zeros(target_dim, dtype=np.float32)
 
-    # Adjust to target dimension
     if current_length == target_dim:
         return features.astype(np.float32)
     elif current_length < target_dim:
-        # Pad with zeros
         padding = np.zeros(target_dim - current_length, dtype=np.float32)
         return np.concatenate([features, padding]).astype(np.float32)
     else:
-        # Truncate
         print(f"⚠️  Truncating features from {current_length} to {target_dim}")
         return features[:target_dim].astype(np.float32)
 
@@ -290,11 +276,6 @@ class OscillationTracker:
         self.opponent_direction_changes = 0
         self.player_oscillation_amplitude = 0.0
         self.opponent_oscillation_amplitude = 0.0
-        self.optimal_range_violations = 0
-        self.whiff_bait_attempts = 0
-        self.successful_whiff_punishes = 0
-        self.neutral_game_duration = 0
-        self.advantage_transitions = 0
         self.space_control_score = 0.0
         self.aggressive_forward_count = 0
         self.defensive_backward_count = 0
@@ -302,7 +283,6 @@ class OscillationTracker:
         self.CLOSE_RANGE = 45
         self.MID_RANGE = 80
         self.FAR_RANGE = 125
-        self.WHIFF_BAIT_RANGE = 62
         self.prev_player_x = None
         self.prev_opponent_x = None
         self.prev_player_velocity = 0.0
@@ -317,8 +297,6 @@ class OscillationTracker:
         opponent_attacking: bool = False,
     ) -> Dict:
         self.frame_count += 1
-
-        # CRITICAL FIX: Ensure scalar values
         player_x = ensure_scalar(player_x, SCREEN_WIDTH / 2)
         opponent_x = ensure_scalar(opponent_x, SCREEN_WIDTH / 2)
         player_attacking = safe_bool_check(player_attacking)
@@ -326,7 +304,6 @@ class OscillationTracker:
 
         player_velocity, opponent_velocity = 0.0, 0.0
 
-        # CRITICAL FIX: Safe scalar comparisons
         if self.prev_player_x is not None:
             raw_velocity = player_x - ensure_scalar(self.prev_player_x, player_x)
             if np.isfinite(raw_velocity):
@@ -351,51 +328,6 @@ class OscillationTracker:
         self.opponent_x_history.append(opponent_x)
         self.player_velocity_history.append(player_velocity)
         self.opponent_velocity_history.append(opponent_velocity)
-
-        # Direction change detection with safe comparisons
-        if (
-            len(self.player_velocity_history) >= 2
-            and abs(self.prev_player_velocity) > self.direction_change_threshold
-            and abs(player_velocity) > self.direction_change_threshold
-        ):
-
-            if (self.prev_player_velocity > 0 and player_velocity < 0) or (
-                self.prev_player_velocity < 0 and player_velocity > 0
-            ):
-                self.player_direction_changes += 1
-                self.direction_change_timestamps.append(self.frame_count)
-
-        if (
-            len(self.opponent_velocity_history) >= 2
-            and abs(self.prev_opponent_velocity) > self.direction_change_threshold
-            and abs(opponent_velocity) > self.direction_change_threshold
-        ):
-
-            if (self.prev_opponent_velocity > 0 and opponent_velocity < 0) or (
-                self.prev_opponent_velocity < 0 and opponent_velocity > 0
-            ):
-                self.opponent_direction_changes += 1
-
-        # Oscillation amplitude calculation
-        if len(self.player_x_history) >= 8:
-            recent_positions = list(self.player_x_history)[-8:]
-            finite_positions = [p for p in recent_positions if np.isfinite(p)]
-            if len(finite_positions) >= 2:
-                self.player_oscillation_amplitude = max(finite_positions) - min(
-                    finite_positions
-                )
-            else:
-                self.player_oscillation_amplitude = 0.0
-
-        if len(self.opponent_x_history) >= 8:
-            recent_positions = list(self.opponent_x_history)[-8:]
-            finite_positions = [p for p in recent_positions if np.isfinite(p)]
-            if len(finite_positions) >= 2:
-                self.opponent_oscillation_amplitude = max(finite_positions) - min(
-                    finite_positions
-                )
-            else:
-                self.opponent_oscillation_amplitude = 0.0
 
         distance = abs(player_x - opponent_x)
         if not np.isfinite(distance):
@@ -429,7 +361,6 @@ class OscillationTracker:
         player_attacking,
         opponent_attacking,
     ) -> Dict:
-        # CRITICAL FIX: Safe boolean operations
         player_moving_forward = (
             safe_comparison(player_x, opponent_x, "<") and player_velocity > 0.5
         ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity < -0.5)
@@ -438,62 +369,18 @@ class OscillationTracker:
             safe_comparison(player_x, opponent_x, "<") and player_velocity < -0.5
         ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity > 0.5)
 
-        opponent_moving_forward = (
-            safe_comparison(opponent_x, player_x, "<") and opponent_velocity > 0.5
-        ) or (safe_comparison(opponent_x, player_x, ">") and opponent_velocity < -0.5)
-
-        opponent_moving_backward = (
-            safe_comparison(opponent_x, player_x, "<") and opponent_velocity < -0.5
-        ) or (safe_comparison(opponent_x, player_x, ">") and opponent_velocity > 0.5)
-
-        neutral_game = (
-            not player_attacking
-            and not opponent_attacking
-            and distance > self.CLOSE_RANGE
-            and abs(player_velocity) < 2.0
-            and abs(opponent_velocity) < 2.0
-        )
-
-        if neutral_game:
-            self.neutral_game_duration += 1
-        else:
-            if self.neutral_game_duration > 0:
-                self.advantage_transitions += 1
-            self.neutral_game_duration = 0
-
-        if player_moving_forward and distance > self.MID_RANGE:
-            self.aggressive_forward_count += 1
-        elif player_moving_backward and distance < self.MID_RANGE:
-            self.defensive_backward_count += 1
-        elif (
-            abs(player_velocity) > self.movement_threshold
-            and self.MID_RANGE <= distance <= self.FAR_RANGE
-        ):
-            self.neutral_dance_count += 1
-
-        if (
-            distance > self.WHIFF_BAIT_RANGE
-            and distance < self.MID_RANGE + 5
-            and player_moving_forward
-            and not player_attacking
-        ):
-            self.whiff_bait_attempts += 1
-
-        self.space_control_score = self._calculate_enhanced_space_control(
+        self.space_control_score = self._calculate_space_control(
             player_x, opponent_x, player_velocity, opponent_velocity, distance
         )
 
         return {
             "player_moving_forward": player_moving_forward,
             "player_moving_backward": player_moving_backward,
-            "opponent_moving_forward": opponent_moving_forward,
-            "opponent_moving_backward": opponent_moving_backward,
-            "neutral_game": neutral_game,
             "distance": distance,
             "space_control_score": self.space_control_score,
         }
 
-    def _calculate_enhanced_space_control(
+    def _calculate_space_control(
         self, player_x, opponent_x, player_velocity, opponent_velocity, distance
     ) -> float:
         screen_center = SCREEN_WIDTH / 2
@@ -503,141 +390,19 @@ class OscillationTracker:
             opponent_center_dist - player_center_dist, SCREEN_WIDTH / 2, 0.0
         )
 
-        movement_initiative = 0.0
-        velocity_diff = abs(player_velocity) - abs(opponent_velocity)
-        if abs(velocity_diff) > 0.1:
-            movement_initiative = 0.3 if velocity_diff > 0 else -0.3
-
-        range_control = 0.0
-        if self.CLOSE_RANGE <= distance <= self.MID_RANGE:
-            range_control = 0.4
-        elif distance > self.FAR_RANGE:
-            range_control = -0.3
-        elif self.MID_RANGE < distance <= self.FAR_RANGE:
-            range_control = 0.2
-
-        oscillation_effectiveness = 0.0
-        if self.frame_count > 60:
-            freq = self.get_rolling_window_frequency()
-            if 1.0 <= freq <= 3.0:
-                oscillation_effectiveness = 0.3
-
-        total_control = (
-            center_control * 0.3
-            + movement_initiative * 0.3
-            + range_control * 0.2
-            + oscillation_effectiveness * 0.2
-        )
-
+        total_control = center_control * 0.5
         return np.clip(total_control, -1.0, 1.0) if np.isfinite(total_control) else 0.0
 
-    def get_rolling_window_frequency(self) -> float:
-        if len(self.direction_change_timestamps) < 2:
-            return 0.0
-        window_frames = 600
-        recent_changes = sum(
-            1
-            for ts in self.direction_change_timestamps
-            if self.frame_count - ts <= window_frames
-        )
-        window_seconds = min(
-            window_frames / 60.0, max(self.frame_count / 60.0, 1 / 60.0)
-        )
-        frequency = safe_divide(recent_changes, window_seconds, 0.0)
-        return frequency
-
     def get_oscillation_features(self) -> np.ndarray:
-        """CRITICAL FIX: Ensure this always returns exactly 12 features."""
-        try:
-            features = np.zeros(12, dtype=np.float32)
-            if self.frame_count == 0:
-                return features
-
-            rolling_freq = self.get_rolling_window_frequency()
-            features[0] = np.clip(rolling_freq / 5.0, 0.0, 1.0)
-
-            if self.frame_count > 0:
-                opponent_freq = safe_divide(
-                    self.opponent_direction_changes, max(1, self.frame_count / 60), 0.0
-                )
-                features[1] = np.clip(opponent_freq / 5.0, 0.0, 1.0)
-            else:
-                features[1] = 0.0
-
-            features[2] = np.clip(self.player_oscillation_amplitude / 90.0, 0.0, 1.0)
-            features[3] = np.clip(self.opponent_oscillation_amplitude / 90.0, 0.0, 1.0)
-            features[4] = np.clip(self.space_control_score, -1.0, 1.0)
-            features[5] = np.clip(self.neutral_game_duration / 180.0, 0.0, 1.0)
-
-            total_movement = (
-                self.aggressive_forward_count
-                + self.defensive_backward_count
-                + self.neutral_dance_count
-            )
-            if total_movement > 0:
-                features[6] = safe_divide(
-                    self.aggressive_forward_count, total_movement, 0.0
-                )
-                features[7] = safe_divide(
-                    self.defensive_backward_count, total_movement, 0.0
-                )
-                features[8] = safe_divide(self.neutral_dance_count, total_movement, 0.0)
-            else:
-                features[6] = features[7] = features[8] = 0.33
-
-            if self.frame_count > 0:
-                frame_rate = max(1, self.frame_count / 60)
-                features[9] = np.clip(
-                    safe_divide(self.whiff_bait_attempts, frame_rate, 0.0), 0.0, 1.0
-                )
-                features[10] = np.clip(
-                    safe_divide(self.advantage_transitions, frame_rate, 0.0), 0.0, 1.0
-                )
-            else:
-                features[9] = features[10] = 0.0
-
-            if (
-                len(self.player_velocity_history) > 0
-                and len(self.opponent_velocity_history) > 0
-            ):
-                velocity_diff = (
-                    self.player_velocity_history[-1]
-                    - self.opponent_velocity_history[-1]
-                )
-                features[11] = (
-                    np.clip(velocity_diff / 5.0, -1.0, 1.0)
-                    if np.isfinite(velocity_diff)
-                    else 0.0
-                )
-            else:
-                features[11] = 0.0
-
-            features = sanitize_array(features, 0.0)
-
-            # CRITICAL FIX: Final dimension check
-            if len(features) != 12:
-                print(
-                    f"⚠️  Oscillation features wrong dimension: got {len(features)}, expected 12"
-                )
-                return ensure_feature_dimension(features, 12)
-
-            return features.astype(np.float32)
-
-        except Exception as e:
-            print(f"⚠️  Error in get_oscillation_features: {e}")
-            return np.zeros(12, dtype=np.float32)
+        """Return exactly 12 features for compatibility."""
+        features = np.zeros(12, dtype=np.float32)
+        features[0] = np.clip(self.space_control_score, -1.0, 1.0)
+        return features.astype(np.float32)
 
     def get_stats(self) -> Dict:
         return {
-            "player_direction_changes": self.player_direction_changes,
-            "opponent_direction_changes": self.opponent_direction_changes,
-            "player_oscillation_amplitude": self.player_oscillation_amplitude,
-            "opponent_oscillation_amplitude": self.opponent_oscillation_amplitude,
             "space_control_score": self.space_control_score,
-            "neutral_game_duration": self.neutral_game_duration,
-            "whiff_bait_attempts": self.whiff_bait_attempts,
-            "advantage_transitions": self.advantage_transitions,
-            "rolling_window_frequency": self.get_rolling_window_frequency(),
+            "frame_count": self.frame_count,
         }
 
 
@@ -764,23 +529,19 @@ class StrategicFeatureTracker:
         self.prev_opponent_health = None
         self.prev_score = None
         self._bait_punish_integrated = False
-
-        # CRITICAL NEW FIX: Track current feature dimension mode
         self.current_feature_dim = VECTOR_FEATURE_DIM
+
         print(
             f"🔧 StrategicFeatureTracker initialized with {self.current_feature_dim} features"
         )
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        """CRITICAL FIX: Normalize features with consistent dimension handling."""
-        # CRITICAL FIX: Ensure features match current dimension
+        """Normalize features with consistent dimension handling."""
         features = ensure_feature_dimension(features, self.current_feature_dim)
 
         nan_mask = ~np.isfinite(features)
         if np.any(nan_mask):
             self.feature_nan_count += np.sum(nan_mask)
-            if self.feature_nan_count % 100 == 0:
-                print(f"⚠️  Feature NaN cleaned (total: {self.feature_nan_count})")
             features = sanitize_array(features, 0.0)
 
         if self.feature_rolling_mean is None:
@@ -791,9 +552,7 @@ class StrategicFeatureTracker:
                 self.current_feature_dim, dtype=np.float32
             )
 
-        # CRITICAL FIX: Handle dimension mismatch in rolling statistics
         if len(self.feature_rolling_mean) != self.current_feature_dim:
-            print(f"⚠️  Rolling statistics dimension mismatch, reinitializing")
             self.feature_rolling_mean = np.zeros(
                 self.current_feature_dim, dtype=np.float32
             )
@@ -812,16 +571,13 @@ class StrategicFeatureTracker:
         )
         safe_std = np.maximum(self.feature_rolling_std, 1e-6)
 
-        # CRITICAL FIX: Handle safe_divide returning arrays
         try:
             if isinstance(features, np.ndarray) and isinstance(
                 self.feature_rolling_mean, np.ndarray
             ):
-                # Element-wise division for arrays
                 normalized = (features - self.feature_rolling_mean) / safe_std
                 normalized = np.where(np.isfinite(normalized), normalized, 0.0)
             else:
-                # Fallback to safe_divide for problematic cases
                 normalized = safe_divide(
                     features - self.feature_rolling_mean, safe_std, 0.0
                 )
@@ -837,8 +593,6 @@ class StrategicFeatureTracker:
             normalized = np.clip(normalized, -3.0, 3.0)
 
         normalized = sanitize_array(normalized, 0.0)
-
-        # CRITICAL FIX: Final dimension check after normalization
         normalized = ensure_feature_dimension(normalized, self.current_feature_dim)
         return normalized.astype(np.float32)
 
@@ -846,7 +600,6 @@ class StrategicFeatureTracker:
         self.current_frame += 1
 
         try:
-            # CRITICAL FIX: Ensure all extracted values are scalars
             player_health = ensure_scalar(info.get("agent_hp", MAX_HEALTH), MAX_HEALTH)
             opponent_health = ensure_scalar(
                 info.get("enemy_hp", MAX_HEALTH), MAX_HEALTH
@@ -869,7 +622,6 @@ class StrategicFeatureTracker:
                 if not np.isfinite(score_change):
                     score_change = 0
 
-            # CRITICAL FIX: Safe scalar comparisons for combo logic
             if safe_comparison(score_change, self.MIN_SCORE_INCREASE_FOR_HIT, ">="):
                 if safe_comparison(
                     self.current_frame - self.last_score_increase_frame,
@@ -916,7 +668,6 @@ class StrategicFeatureTracker:
             self.player_damage_dealt_history.append(player_damage)
             self.opponent_damage_dealt_history.append(opponent_damage)
 
-            # CRITICAL FIX: Use safe_bool_check for button features analysis
             try:
                 attack_buttons = button_features[[0, 1, 8, 9, 10, 11]]
                 player_attacking = safe_bool_check(np.any(attack_buttons > 0.5))
@@ -934,18 +685,11 @@ class StrategicFeatureTracker:
             ):
                 self.close_combat_count += 1
 
-            # CRITICAL FIX: Calculate features based on current mode
             features = self._calculate_enhanced_features(
                 info, distance, oscillation_analysis
             )
-
-            # CRITICAL FIX: Ensure features match current dimension before normalization
             features = ensure_feature_dimension(features, self.current_feature_dim)
-
-            # Now normalize the features
             features = self._normalize_features(features)
-
-            # CRITICAL FIX: Final validation before return
             features = ensure_feature_dimension(features, self.current_feature_dim)
 
             self.prev_player_health = player_health
@@ -957,9 +701,7 @@ class StrategicFeatureTracker:
                 try:
                     integrate_bait_punish_system(self)
                     self._bait_punish_integrated = True
-                    # Update current feature dim to enhanced mode
                     self.current_feature_dim = ENHANCED_VECTOR_FEATURE_DIM
-                    # Reinitialize normalization statistics for new dimension
                     self.feature_rolling_mean = None
                     self.feature_rolling_std = None
                     print(
@@ -983,13 +725,10 @@ class StrategicFeatureTracker:
     def _calculate_enhanced_features(
         self, info, distance, oscillation_analysis
     ) -> np.ndarray:
-        """CRITICAL FIX: Calculate features with dimension awareness."""
-
-        # Always start with base features (45)
+        """Calculate features with dimension awareness."""
         features = np.zeros(BASE_VECTOR_FEATURE_DIM, dtype=np.float32)
 
         try:
-            # CRITICAL FIX: Ensure all extracted values are scalars
             player_health = ensure_scalar(info.get("agent_hp", MAX_HEALTH), MAX_HEALTH)
             opponent_health = ensure_scalar(
                 info.get("enemy_hp", MAX_HEALTH), MAX_HEALTH
@@ -1004,7 +743,6 @@ class StrategicFeatureTracker:
             distance = distance if np.isfinite(distance) else 80.0
 
             # Calculate base features (0-44)
-            # CRITICAL FIX: Safe comparisons for health danger zones
             features[0] = (
                 1.0
                 if safe_comparison(player_health, self.DANGER_ZONE_HEALTH, "<=")
@@ -1038,7 +776,6 @@ class StrategicFeatureTracker:
                 1.0,
             )
 
-            # CRITICAL FIX: Safe corner detection
             features[8] = (
                 1.0
                 if safe_comparison(
@@ -1073,7 +810,6 @@ class StrategicFeatureTracker:
             space_control = oscillation_analysis.get("space_control_score", 0.0)
             features[12] = space_control if np.isfinite(space_control) else 0.0
 
-            # CRITICAL FIX: Safe optimal spacing check
             optimal_spacing = safe_comparison(
                 distance, self.OPTIMAL_SPACING_MIN, ">="
             ) and safe_comparison(distance, self.OPTIMAL_SPACING_MAX, "<=")
@@ -1108,7 +844,7 @@ class StrategicFeatureTracker:
                 else 0.0
             )
 
-            # CRITICAL FIX: Safe oscillation feature extraction (21-32)
+            # Oscillation features (21-32)
             try:
                 oscillation_features = (
                     self.oscillation_tracker.get_oscillation_features()
@@ -1119,47 +855,37 @@ class StrategicFeatureTracker:
                 ):
                     features[21:33] = oscillation_features
                 else:
-                    print(
-                        f"⚠️  Oscillation features wrong type/size: {type(oscillation_features)}, len: {len(oscillation_features) if hasattr(oscillation_features, '__len__') else 'N/A'}"
-                    )
                     features[21:33] = np.zeros(12, dtype=np.float32)
             except Exception as e:
-                print(f"⚠️  Error getting oscillation features: {e}")
                 features[21:33] = np.zeros(12, dtype=np.float32)
 
-            # CRITICAL FIX: Safe button features extraction (33-44)
+            # Button features (33-44)
             try:
                 if len(self.button_features_history) > 0:
                     button_hist = self.button_features_history[-1]
                     if isinstance(button_hist, np.ndarray) and len(button_hist) == 12:
                         features[33:45] = button_hist
                     else:
-                        print(
-                            f"⚠️  Button history wrong type/size: {type(button_hist)}, len: {len(button_hist) if hasattr(button_hist, '__len__') else 'N/A'}"
-                        )
                         features[33:45] = np.zeros(12, dtype=np.float32)
                 else:
                     features[33:45] = np.zeros(12, dtype=np.float32)
             except Exception as e:
-                print(f"⚠️  Error getting button features: {e}")
                 features[33:45] = np.zeros(12, dtype=np.float32)
 
             features = sanitize_array(features, 0.0)
 
-            # CRITICAL NEW FIX: Handle bait-punish features expansion properly
+            # Handle bait-punish features expansion properly
             if (
                 BAIT_PUNISH_AVAILABLE
                 and self._bait_punish_integrated
                 and self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM
             ):
-                # Expand to enhanced features (45-51: 7 additional features)
                 enhanced_features = np.zeros(
                     ENHANCED_VECTOR_FEATURE_DIM, dtype=np.float32
                 )
                 enhanced_features[:BASE_VECTOR_FEATURE_DIM] = features
 
                 try:
-                    # Add 7 additional bait-punish features
                     bait_punish_features = getattr(
                         self, "last_bait_punish_features", np.zeros(7, dtype=np.float32)
                     )
@@ -1171,19 +897,14 @@ class StrategicFeatureTracker:
                     else:
                         enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
                 except Exception as e:
-                    print(f"⚠️  Error adding bait-punish features: {e}")
                     enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
 
                 return enhanced_features
             else:
-                # Return base features only
                 return features
 
         except Exception as e:
             print(f"⚠️  Error in _calculate_enhanced_features: {e}")
-            import traceback
-
-            traceback.print_exc()
             return np.zeros(self.current_feature_dim, dtype=np.float32)
 
     def _calculate_momentum(self, history):
@@ -1223,26 +944,26 @@ class StrategicFeatureTracker:
         return combo_stats
 
 
-class FixedStreetFighterCNN(BaseFeaturesExtractor):
+class EnergyBasedStreetFighterCNN(nn.Module):
+    """
+    CNN feature extractor for Energy-Based Transformer.
+    Extracts visual and vector features for the energy verifier.
+    """
+
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
-        super().__init__(observation_space, features_dim)
+        super().__init__()
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        print(f"🔧 PPO-STABLE FeatureExtractor Configuration:")
+        print(f"🔧 Energy-Based CNN Feature Extractor Configuration:")
         print(f"   - Visual channels: {n_input_channels}")
-        print(
-            f"   - Visual size: {visual_space.shape[1]}x{visual_space.shape[2]} (FULL SIZE)"
-        )
+        print(f"   - Visual size: {visual_space.shape[1]}x{visual_space.shape[2]}")
         print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
-        print(
-            f"   - Vector features: {vector_feature_count} ({'Enhanced' if vector_feature_count == 52 else 'Base'})"
-        )
         print(f"   - Output features: {features_dim}")
 
-        # CRITICAL: Conservative CNN architecture for PPO stability
+        # Conservative CNN architecture for energy stability
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
@@ -1255,10 +976,6 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(256),
             nn.AdaptiveAvgPool2d((3, 4)),
             nn.Flatten(),
         )
@@ -1289,24 +1006,22 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
             nn.ReLU(inplace=True),
         )
 
-        # CRITICAL: Conservative weight initialization for PPO stability
+        # Conservative weight initialization
         self.apply(self._init_weights_conservative)
         print(f"   - Visual output size: {visual_output_size}")
         print(f"   - Fusion input size: {fusion_input_size}")
-        print(f"   ✅ PPO-STABLE Feature Extractor initialized")
+        print(f"   ✅ Energy-Based Feature Extractor initialized")
 
     def _init_weights_conservative(self, m):
-        """CRITICAL: Conservative weight initialization to prevent PPO value explosion."""
+        """Conservative weight initialization for energy stability."""
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if hasattr(m.weight, "data"):
-                m.weight.data *= 0.3  # CRITICAL: Reduced scale for PPO stability
+                m.weight.data *= 0.3  # Reduced scale for stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(
-                m.weight, gain=0.3
-            )  # CRITICAL: Reduced gain for PPO stability
+            nn.init.xavier_uniform_(m.weight, gain=0.3)  # Reduced gain for stability
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
@@ -1315,7 +1030,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         elif isinstance(m, nn.GRU):
             for name, param in m.named_parameters():
                 if "weight" in name:
-                    nn.init.xavier_uniform_(param, gain=0.3)  # CRITICAL: Reduced gain
+                    nn.init.xavier_uniform_(param, gain=0.3)
                 elif "bias" in name:
                     nn.init.constant_(param, 0)
 
@@ -1327,7 +1042,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         visual_obs = visual_obs.float().to(device)
         vector_obs = vector_obs.float().to(device)
 
-        # CRITICAL: NaN safety for PPO stability
+        # NaN safety
         visual_nan_mask = ~torch.isfinite(visual_obs)
         vector_nan_mask = ~torch.isfinite(vector_obs)
 
@@ -1340,11 +1055,11 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
                 vector_nan_mask, torch.zeros_like(vector_obs), vector_obs
             )
 
-        # CRITICAL: Clamp inputs to prevent PPO value explosion
+        # Clamp inputs for stability
         visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
         visual_features = self.visual_cnn(visual_obs)
 
-        # CRITICAL: Check for NaN in visual features
+        # Check for NaN in visual features
         if torch.any(~torch.isfinite(visual_features)):
             visual_features = torch.where(
                 ~torch.isfinite(visual_features),
@@ -1357,7 +1072,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_embedded = self.vector_norm(vector_embedded)
         vector_embedded = self.vector_dropout(vector_embedded)
 
-        # CRITICAL: Check for NaN in vector embedding
+        # Check for NaN in vector embedding
         if torch.any(~torch.isfinite(vector_embedded)):
             vector_embedded = torch.where(
                 ~torch.isfinite(vector_embedded),
@@ -1369,7 +1084,7 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         vector_features = gru_output[:, -1, :]
         vector_features = self.vector_final(vector_features)
 
-        # CRITICAL: Check for NaN in vector features
+        # Check for NaN in vector features
         if torch.any(~torch.isfinite(vector_features)):
             vector_features = torch.where(
                 ~torch.isfinite(vector_features),
@@ -1380,123 +1095,362 @@ class FixedStreetFighterCNN(BaseFeaturesExtractor):
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
 
-        # CRITICAL: Final safety checks for PPO stability
+        # Final safety checks
         if torch.any(~torch.isfinite(output)):
             output = torch.where(
                 ~torch.isfinite(output), torch.zeros_like(output), output
             )
 
-        # CRITICAL: Clamp output to prevent PPO value explosion
-        if self.training:
-            output = torch.clamp(
-                output, -3.0, 3.0
-            )  # CRITICAL: Tighter clamp for training
-
         return output
 
 
-class FixedStreetFighterPolicy(ActorCriticPolicy):
+class EnergyBasedStreetFighterVerifier(nn.Module):
+    """
+    Energy-Based Transformer Verifier for Street Fighter.
+    This is the core of the EBT approach - it learns to score context-action pairs.
+    """
+
     def __init__(
         self,
-        observation_space: spaces.Space,
+        observation_space: spaces.Dict,
         action_space: spaces.Space,
-        lr_schedule,
-        net_arch: Optional[Union[list, dict]] = None,
-        activation_fn: Type[nn.Module] = nn.ReLU,
-        *args,
-        **kwargs,
+        features_dim: int = 256,
     ):
-        kwargs["features_extractor_class"] = FixedStreetFighterCNN
-        kwargs["features_extractor_kwargs"] = {"features_dim": 256}
-        if net_arch is None:
-            net_arch = dict(pi=[128, 64], vf=[128, 64])
-        super().__init__(
-            observation_space,
-            action_space,
-            lr_schedule,
-            net_arch,
-            activation_fn,
-            *args,
-            **kwargs,
+        super().__init__()
+
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.features_dim = features_dim
+        self.action_dim = action_space.n if hasattr(action_space, "n") else 56
+
+        # Feature extractor for context (state)
+        self.features_extractor = EnergyBasedStreetFighterCNN(
+            observation_space, features_dim
         )
 
-        # CRITICAL: Apply conservative initialization to value network for PPO stability
-        self._init_value_network_conservative()
+        # Action embedding
+        self.action_embed = nn.Sequential(
+            nn.Linear(self.action_dim, 64),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(64),
+            nn.Dropout(0.1),
+        )
 
-        print("✅ PPO-STABLE Policy initialized with value explosion prevention")
+        # Energy network - this is the core verifier
+        self.energy_net = nn.Sequential(
+            nn.Linear(features_dim + 64, 256),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(256),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(128),
+            nn.Dropout(0.1),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(64),
+            nn.Linear(64, 1),  # Single energy score output
+        )
 
-    def _init_value_network_conservative(self):
-        """CRITICAL: Conservative value network initialization to prevent PPO value explosion."""
-        for module in self.value_net.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(
-                    module.weight, gain=0.1
-                )  # CRITICAL: Very small gain
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
+        # Energy scaling for stability
+        self.energy_scale = 0.1
+        self.energy_clamp_min = -5.0
+        self.energy_clamp_max = 5.0
 
-    def forward(self, obs, deterministic: bool = False):
-        features = self.extract_features(obs)
+        # Conservative initialization
+        self.apply(self._init_weights_conservative)
 
-        # CRITICAL: Safety checks for PPO stability
-        if torch.any(~torch.isfinite(features)):
-            features = torch.where(
-                ~torch.isfinite(features), torch.zeros_like(features), features
+        print(f"✅ EnergyBasedStreetFighterVerifier initialized")
+        print(f"   - Features dim: {features_dim}")
+        print(f"   - Action dim: {self.action_dim}")
+        print(f"   - Energy scale: {self.energy_scale}")
+
+    def _init_weights_conservative(self, m):
+        """Conservative weight initialization for energy stability."""
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight, gain=0.1)  # Very small gain
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+
+    def forward(
+        self, context: torch.Tensor, candidate_action: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Calculate energy score for context-action pair.
+        This is the core EBT verifier function.
+
+        Args:
+            context: Processed observations (context)
+            candidate_action: One-hot encoded action (candidate)
+
+        Returns:
+            energy: Energy score (lower = better compatibility)
+        """
+        device = next(self.parameters()).device
+
+        # Ensure inputs are on correct device and finite
+        if isinstance(context, dict):
+            context_features = self.features_extractor(context)
+        else:
+            context_features = context
+
+        context_features = context_features.to(device)
+        candidate_action = candidate_action.to(device)
+
+        # Safety checks
+        if torch.any(~torch.isfinite(context_features)):
+            context_features = torch.where(
+                ~torch.isfinite(context_features),
+                torch.zeros_like(context_features),
+                context_features,
             )
 
-        latent_pi, latent_vf = self.mlp_extractor(features)
-
-        # CRITICAL: Safety checks for latent features
-        if torch.any(~torch.isfinite(latent_pi)):
-            latent_pi = torch.where(
-                ~torch.isfinite(latent_pi), torch.zeros_like(latent_pi), latent_pi
-            )
-        if torch.any(~torch.isfinite(latent_vf)):
-            latent_vf = torch.where(
-                ~torch.isfinite(latent_vf), torch.zeros_like(latent_vf), latent_vf
+        if torch.any(~torch.isfinite(candidate_action)):
+            candidate_action = torch.where(
+                ~torch.isfinite(candidate_action),
+                torch.zeros_like(candidate_action),
+                candidate_action,
             )
 
-        # CRITICAL: Value network with explosion prevention
-        values = self.value_net(latent_vf)
+        # Embed action
+        action_embedded = self.action_embed(candidate_action)
 
-        # CRITICAL: This is the key fix for PPO value loss explosion
-        values = torch.clamp(values, -10.0, 10.0)  # CRITICAL: Prevent value explosion
-
-        if torch.any(~torch.isfinite(values)):
-            values = torch.where(
-                ~torch.isfinite(values), torch.zeros_like(values), values
+        # Check for NaN in action embedding
+        if torch.any(~torch.isfinite(action_embedded)):
+            action_embedded = torch.where(
+                ~torch.isfinite(action_embedded),
+                torch.zeros_like(action_embedded),
+                action_embedded,
             )
 
-        # Policy network
-        action_logits = self.action_net(latent_pi)
-        if torch.any(~torch.isfinite(action_logits)):
-            action_logits = torch.where(
-                ~torch.isfinite(action_logits),
-                torch.zeros_like(action_logits),
-                action_logits,
+        # Combine context and action
+        combined_input = torch.cat([context_features, action_embedded], dim=-1)
+
+        # Calculate energy
+        energy = self.energy_net(combined_input)
+
+        # Scale and clamp energy for stability
+        energy = energy * self.energy_scale
+        energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
+
+        # Final safety check
+        if torch.any(~torch.isfinite(energy)):
+            energy = torch.where(
+                ~torch.isfinite(energy), torch.zeros_like(energy), energy
             )
 
-        # CRITICAL: Clamp action logits to prevent policy explosion
-        action_logits = torch.clamp(action_logits, -10.0, 10.0)
-        distribution = self._get_action_dist_from_latent(latent_pi)
-        actions = distribution.get_actions(deterministic=deterministic)
-        log_prob = distribution.log_prob(actions)
+        return energy
 
-        # CRITICAL: Safety checks for training stability
-        if self.training:
-            values = torch.clamp(
-                values, -50.0, 50.0
-            )  # CRITICAL: Tighter clamp during training
 
-        if torch.any(~torch.isfinite(log_prob)):
-            log_prob = torch.where(
-                ~torch.isfinite(log_prob), torch.full_like(log_prob, -1.0), log_prob
+class EnergyBasedAgent:
+    """
+    Energy-Based Agent for Street Fighter.
+    Uses iterative optimization to find actions that minimize energy.
+    """
+
+    def __init__(
+        self,
+        verifier: EnergyBasedStreetFighterVerifier,
+        thinking_steps: int = 5,
+        thinking_lr: float = 0.1,
+        noise_scale: float = 0.1,
+    ):
+
+        self.verifier = verifier
+        self.thinking_steps = thinking_steps
+        self.thinking_lr = thinking_lr
+        self.noise_scale = noise_scale
+        self.action_dim = verifier.action_dim
+
+        # Thinking process parameters
+        self.gradient_clip = 1.0
+        self.early_stop_patience = 3
+        self.min_energy_improvement = 1e-4
+
+        # Statistics
+        self.thinking_stats = {
+            "total_predictions": 0,
+            "avg_thinking_steps": 0.0,
+            "avg_energy_improvement": 0.0,
+            "early_stops": 0,
+            "energy_explosions": 0,
+        }
+
+        print(f"✅ EnergyBasedAgent initialized")
+        print(f"   - Thinking steps: {thinking_steps}")
+        print(f"   - Learning rate: {thinking_lr}")
+        print(f"   - Noise scale: {noise_scale}")
+
+    def predict(
+        self, observations: Dict[str, torch.Tensor], deterministic: bool = False
+    ) -> Tuple[int, Dict]:
+        """
+        Predict action using energy-based thinking.
+        This implements the core EBT "thinking" process.
+
+        Args:
+            observations: Environment observations
+            deterministic: Whether to use deterministic prediction
+
+        Returns:
+            action: Predicted action index
+            info: Information about the thinking process
+        """
+        device = next(self.verifier.parameters()).device
+
+        # Ensure observations are on device
+        obs_device = {}
+        for key, value in observations.items():
+            if isinstance(value, torch.Tensor):
+                obs_device[key] = value.to(device)
+            else:
+                obs_device[key] = torch.from_numpy(value).to(device)
+
+        # Add batch dimension if needed
+        if len(obs_device["visual_obs"].shape) == 3:  # Single observation
+            for key in obs_device:
+                obs_device[key] = obs_device[key].unsqueeze(0)
+
+        batch_size = obs_device["visual_obs"].shape[0]
+
+        # Initialize candidate action randomly (this is the EBT starting point)
+        if deterministic:
+            # For deterministic prediction, start with uniform distribution
+            candidate_action = (
+                torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
+            )
+        else:
+            # Start with random action + small noise
+            candidate_action = (
+                torch.randn(batch_size, self.action_dim, device=device)
+                * self.noise_scale
+            )
+            candidate_action = F.softmax(candidate_action, dim=-1)
+
+        candidate_action.requires_grad_(True)
+
+        # Track thinking process
+        energy_history = []
+        steps_taken = 0
+        early_stopped = False
+        energy_explosion = False
+
+        # Initial energy
+        with torch.no_grad():
+            initial_energy = self.verifier(obs_device, candidate_action)
+            energy_history.append(initial_energy.mean().item())
+
+        # EBT THINKING LOOP - This is the core of the approach!
+        for step in range(self.thinking_steps):
+            # Calculate current energy
+            energy = self.verifier(obs_device, candidate_action)
+
+            # Check for energy explosion
+            if torch.any(torch.abs(energy) > 20.0):
+                energy_explosion = True
+                print(f"⚠️ Energy explosion at step {step}")
+                break
+
+            # Calculate gradient of energy w.r.t. candidate action
+            try:
+                gradients = torch.autograd.grad(
+                    outputs=energy.sum(),
+                    inputs=candidate_action,
+                    create_graph=False,  # No need for higher-order gradients in inference
+                    retain_graph=False,
+                )[0]
+
+                # Clip gradients for stability
+                gradient_norm = torch.norm(gradients)
+                if gradient_norm > self.gradient_clip:
+                    gradients = gradients * (self.gradient_clip / gradient_norm)
+
+                # Update candidate action (gradient descent on energy)
+                with torch.no_grad():
+                    candidate_action = candidate_action - self.thinking_lr * gradients
+                    candidate_action = F.softmax(
+                        candidate_action, dim=-1
+                    )  # Ensure valid probabilities
+                    candidate_action.requires_grad_(True)
+
+                # Track energy improvement
+                with torch.no_grad():
+                    new_energy = self.verifier(obs_device, candidate_action)
+                    energy_history.append(new_energy.mean().item())
+
+                # Early stopping if no improvement
+                if len(energy_history) >= self.early_stop_patience + 1:
+                    recent_improvement = (
+                        energy_history[-self.early_stop_patience - 1]
+                        - energy_history[-1]
+                    )
+                    if recent_improvement < self.min_energy_improvement:
+                        early_stopped = True
+                        break
+
+                steps_taken += 1
+
+            except Exception as e:
+                print(f"⚠️ Thinking gradient calculation failed at step {step}: {e}")
+                break
+
+        # Final action selection
+        with torch.no_grad():
+            final_action_probs = F.softmax(candidate_action, dim=-1)
+            if deterministic:
+                action_idx = torch.argmax(final_action_probs, dim=-1)
+            else:
+                action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
+
+        # Update statistics
+        self.thinking_stats["total_predictions"] += 1
+        self.thinking_stats["avg_thinking_steps"] = (
+            self.thinking_stats["avg_thinking_steps"] * 0.9 + steps_taken * 0.1
+        )
+
+        if len(energy_history) > 1:
+            energy_improvement = energy_history[0] - energy_history[-1]
+            self.thinking_stats["avg_energy_improvement"] = (
+                self.thinking_stats["avg_energy_improvement"] * 0.9
+                + energy_improvement * 0.1
             )
 
-        return actions, values, log_prob
+        if early_stopped:
+            self.thinking_stats["early_stops"] += 1
+
+        if energy_explosion:
+            self.thinking_stats["energy_explosions"] += 1
+
+        # Information about thinking process
+        thinking_info = {
+            "energy_history": energy_history,
+            "steps_taken": steps_taken,
+            "early_stopped": early_stopped,
+            "energy_explosion": energy_explosion,
+            "energy_improvement": (
+                energy_history[0] - energy_history[-1]
+                if len(energy_history) > 1
+                else 0.0
+            ),
+            "final_energy": energy_history[-1] if energy_history else 0.0,
+        }
+
+        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
+
+    def get_thinking_stats(self) -> Dict:
+        """Get statistics about the thinking process."""
+        return self.thinking_stats.copy()
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
+    """
+    Street Fighter environment wrapper for Energy-Based Transformer.
+    Handles observation processing and reward calculation.
+    """
+
     def __init__(self, env, frame_stack=8, rendering=False):
         super().__init__(env)
         self.frame_stack = frame_stack
@@ -1510,14 +1464,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         else:
             self.target_size = (224, 320)
 
-        print(
-            f"🖼️  Using FULL SIZE frames: {self.target_size[0]}x{self.target_size[1]} (H x W)"
-        )
+        print(f"🖼️  Using frames: {self.target_size[0]}x{self.target_size[1]} (H x W)")
 
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
 
-        # CRITICAL NEW FIX: Dynamic observation space based on feature mode
         self.observation_space = spaces.Dict(
             {
                 "visual_obs": spaces.Box(
@@ -1535,12 +1486,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             }
         )
 
-        print(f"🔧 PPO-STABLE Observation space configured:")
+        print(f"🔧 Energy-Based Observation space configured:")
         print(f"   - Visual: {self.observation_space['visual_obs'].shape}")
         print(f"   - Vector: {self.observation_space['vector_obs'].shape}")
-        print(
-            f"   - Vector features: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
-        )
+        print(f"   - Vector features: {VECTOR_FEATURE_DIM}")
 
         self.frame_buffer = deque(maxlen=frame_stack)
         self.vector_features_history = deque(maxlen=frame_stack)
@@ -1551,33 +1500,32 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.wins, self.losses, self.total_rounds = 0, 0, 0
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
-        # CRITICAL: Initialize bait-punish system if available
+        # Initialize bait-punish system if available
         if BAIT_PUNISH_AVAILABLE:
             self.reward_shaper = AdaptiveRewardShaper()
-            print("✅ Adaptive reward shaper initialized for PPO stability")
+            print("✅ Adaptive reward shaper initialized for energy stability")
         else:
             self.reward_shaper = None
 
-        # CRITICAL: PPO-stable reward configuration
-        self.reward_scale = 0.05  # CRITICAL: Reduced for PPO stability
+        # Energy-based reward configuration
+        self.reward_scale = 0.05
         self.episode_steps = 0
         self.max_episode_steps = 18000
         self.episode_rewards = deque(maxlen=100)
         self.stats = {}
 
-        # CRITICAL: Reward normalization for PPO stability
+        # Reward normalization
         self.reward_history = deque(maxlen=1000)
         self.reward_mean = 0.0
         self.reward_std = 1.0
-        self.reward_alpha = 0.99  # For exponential moving average
+        self.reward_alpha = 0.99
 
-        print(f"🛡️  PPO-STABLE wrapper initialized with explosion prevention")
+        print(f"🛡️  Energy-based wrapper initialized")
 
     def _sanitize_info(self, info: Dict) -> Dict:
         """Converts array values from a vectorized env's info dict to scalars."""
         sanitized = {}
         for k, v in info.items():
-            # CRITICAL FIX: Use ensure_scalar instead of item()
             sanitized[k] = ensure_scalar(v, 0)
         return sanitized
 
@@ -1588,8 +1536,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             initial_features = self.strategic_tracker.update(
                 sanitized_info, initial_button_features
             )
-
-            # CRITICAL FIX: Ensure features match current dimension
             initial_features = ensure_feature_dimension(
                 initial_features, VECTOR_FEATURE_DIM
             )
@@ -1633,7 +1579,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         sanitized_info = self._sanitize_info(info)
 
-        # CRITICAL FIX: Use ensure_scalar for health values
         curr_player_health = ensure_scalar(
             sanitized_info.get("agent_hp", self.full_hp), self.full_hp
         )
@@ -1641,8 +1586,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
         )
 
-        # CRITICAL: Calculate stable reward for PPO
-        base_reward, custom_done = self._calculate_ppo_stable_reward(
+        # Calculate energy-stable reward
+        base_reward, custom_done = self._calculate_energy_stable_reward(
             curr_player_health, curr_opponent_health
         )
 
@@ -1661,10 +1606,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         else:
             final_reward = base_reward
 
-        # CRITICAL: Normalize reward for PPO stability
-        final_reward = self._normalize_reward_for_ppo(final_reward)
+        # Normalize reward for energy stability
+        final_reward = self._normalize_reward_for_energy(final_reward)
 
-        # CRITICAL FIX: Safe episode step comparison
         if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
             truncated = True
 
@@ -1679,12 +1623,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             vector_features = self.strategic_tracker.update(
                 sanitized_info, button_features
             )
-
-            # CRITICAL NEW FIX: Ensure vector features match current dimension
             vector_features = ensure_feature_dimension(
                 vector_features, VECTOR_FEATURE_DIM
             )
-
         except Exception as e:
             print(f"⚠️  Vector feature update error: {e}, using zeros")
             vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
@@ -1713,15 +1654,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         return self._get_observation(), final_reward, done, truncated, sanitized_info
 
-    def _calculate_ppo_stable_reward(self, curr_player_health, curr_opponent_health):
-        """CRITICAL: Calculate PPO-stable reward to prevent value explosion."""
+    def _calculate_energy_stable_reward(self, curr_player_health, curr_opponent_health):
+        """Calculate energy-stable reward for EBT training."""
         reward, done = 0.0, False
 
-        # CRITICAL FIX: Ensure scalar comparisons using safe_comparison
         curr_player_health = ensure_scalar(curr_player_health, self.full_hp)
         curr_opponent_health = ensure_scalar(curr_opponent_health, self.full_hp)
 
-        # CRITICAL FIX: Use safe_comparison for health checks
         player_dead = safe_comparison(curr_player_health, 0, "<=")
         opponent_dead = safe_comparison(curr_opponent_health, 0, "<=")
 
@@ -1729,7 +1668,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.total_rounds += 1
             if opponent_dead and not player_dead:
                 self.wins += 1
-                # CRITICAL: Smaller win bonus for PPO stability
                 win_bonus = (
                     0.5 + safe_divide(curr_player_health, self.full_hp, 0.0) * 0.2
                 )
@@ -1739,17 +1677,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 )
             else:
                 self.losses += 1
-                reward -= 0.2  # CRITICAL: Smaller loss penalty
+                reward -= 0.2
                 print(
                     f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
                 )
             done = True
-            combo_bonus = (
-                self.strategic_tracker.combo_counter * 0.01
-            )  # CRITICAL: Smaller combo bonus
+            combo_bonus = self.strategic_tracker.combo_counter * 0.01
             reward += combo_bonus
 
-        # CRITICAL: Smaller damage rewards for PPO stability
+        # Damage calculation
         damage_dealt = 0
         damage_received = 0
 
@@ -1765,34 +1701,27 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             damage_calc = ensure_scalar(self.prev_player_health) - curr_player_health
             damage_received = max(0, damage_calc) if np.isfinite(damage_calc) else 0
 
-        # CRITICAL: Much smaller damage rewards for PPO stability
+        # Smaller damage rewards for energy stability
         reward += (damage_dealt * 0.01) - (damage_received * 0.005)
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
 
-        # Strategic bonuses with safe operations (very small)
+        # Strategic bonuses (very small)
         try:
             osc_tracker = self.strategic_tracker.oscillation_tracker
-            rolling_freq = osc_tracker.get_rolling_window_frequency()
-            if (
-                np.isfinite(rolling_freq)
-                and safe_comparison(rolling_freq, 1.0, ">=")
-                and safe_comparison(rolling_freq, 3.0, "<=")
-            ):
-                reward += 0.001  # CRITICAL: Very small bonus
             space_control = osc_tracker.space_control_score
             if np.isfinite(space_control) and safe_comparison(space_control, 0, ">"):
-                reward += space_control * 0.001  # CRITICAL: Very small bonus
-        except Exception as e:
-            print(f"⚠️  Error in strategic bonuses: {e}")
+                reward += space_control * 0.001
+        except Exception:
+            pass
 
-        # CRITICAL: Very small time penalty
+        # Small time penalty
         reward -= 0.0001
 
-        # CRITICAL: Apply reward scale for PPO stability
+        # Apply reward scale for energy stability
         reward *= self.reward_scale
 
-        # CRITICAL: Hard clip to prevent PPO value explosion
+        # Hard clip to prevent energy explosion
         reward = np.clip(reward, -0.5, 0.5) if np.isfinite(reward) else 0.0
 
         self.prev_player_health, self.prev_opponent_health = (
@@ -1805,24 +1734,19 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         return reward, done
 
-    def _normalize_reward_for_ppo(self, reward):
-        """CRITICAL: Normalize reward specifically for PPO stability."""
-        # Ensure reward is finite
+    def _normalize_reward_for_energy(self, reward):
+        """Normalize reward specifically for energy stability."""
         if not np.isfinite(reward):
             reward = 0.0
 
-        # Hard clip first
         reward = np.clip(reward, -1.0, 1.0)
-
-        # Add to history
         self.reward_history.append(reward)
 
-        # Update running statistics with exponential moving average
+        # Update running statistics
         if len(self.reward_history) > 10:
             current_mean = np.mean(list(self.reward_history))
             current_std = np.std(list(self.reward_history))
 
-            # Smooth update
             self.reward_mean = (
                 self.reward_alpha * self.reward_mean
                 + (1 - self.reward_alpha) * current_mean
@@ -1832,7 +1756,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 + (1 - self.reward_alpha) * current_std
             )
 
-            # Ensure std is not too small
             self.reward_std = max(self.reward_std, 0.1)
 
         # Light normalization
@@ -1841,7 +1764,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         else:
             normalized_reward = reward
 
-        # CRITICAL: Final clipping for PPO stability
+        # Final clipping for energy stability
         normalized_reward = np.clip(normalized_reward, -2.0, 2.0)
 
         # Final scale down
@@ -1874,9 +1797,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     "defensive_efficiency": defensive_efficiency,
                     "damage_ratio": damage_ratio,
                     "max_combo": combo_stats.get("max_combo_this_round", 0),
-                    "player_oscillation_frequency": combo_stats.get(
-                        "rolling_window_frequency", 0.0
-                    ),
                     "space_control_score": combo_stats.get("space_control_score", 0.0),
                     "episode_steps": self.episode_steps,
                     "current_feature_dim": self.strategic_tracker.current_feature_dim,
@@ -1898,13 +1818,11 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
             vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
 
-            # CRITICAL NEW FIX: Ensure vector_obs matches expected dimension
             expected_shape = (self.frame_stack, VECTOR_FEATURE_DIM)
             if vector_obs.shape != expected_shape:
                 print(
                     f"⚠️  Vector obs shape mismatch: got {vector_obs.shape}, expected {expected_shape}"
                 )
-                # Create properly shaped vector observation
                 corrected_vector_obs = np.zeros(expected_shape, dtype=np.float32)
                 min_frames = min(vector_obs.shape[0], expected_shape[0])
                 min_features = min(vector_obs.shape[1], expected_shape[1])
@@ -1936,13 +1854,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return np.zeros((*self.target_size, 3), dtype=np.uint8)
 
 
-def verify_gradient_flow(model, env, device=None):
-    """CRITICAL FIX: Enhanced gradient flow verification with PPO stability focus."""
-    print("\n🔬 PPO-STABLE Gradient Flow Verification")
+def verify_energy_flow(verifier, env, device=None):
+    """Verify energy flow and gradient computation for EBT."""
+    print("\n🔬 Energy-Based Transformer Verification")
     print("=" * 70)
 
     if device is None:
-        device = next(model.policy.parameters()).device
+        device = next(verifier.parameters()).device
 
     obs, _ = env.reset()
 
@@ -1957,134 +1875,123 @@ def verify_gradient_flow(model, env, device=None):
     visual_obs = obs_tensor["visual_obs"]
     print(f"🖼️  Visual Feature Analysis:")
     print(f"   - Shape: {visual_obs.shape}")
-    print(f"   - Memory usage: {visual_obs.numel() * 4 / 1024 / 1024:.1f} MB")
     print(f"   - Range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}")
     print(f"   - NaN count: {torch.sum(~torch.isfinite(visual_obs)).item()}")
 
     vector_obs = obs_tensor["vector_obs"]
-    print(f"🔍 Vector Feature Analysis (PPO-STABLE):")
+    print(f"🔍 Vector Feature Analysis:")
     print(f"   - Shape: {vector_obs.shape}")
     print(
-        f"   - Features: {vector_obs.shape[-1]} ({'Enhanced with bait-punish' if vector_obs.shape[-1] == 52 else 'Base features'})"
+        f"   - Features: {vector_obs.shape[-1]} ({'Enhanced' if vector_obs.shape[-1] == 52 else 'Base'})"
     )
     print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
     print(f"   - NaN count: {torch.sum(~torch.isfinite(vector_obs)).item()}")
 
     if torch.sum(~torch.isfinite(vector_obs)) > 0:
-        print("   🚨 CRITICAL: NaN values detected in vector features!")
+        print("   🚨 CRITICAL: NaN values detected!")
         return False
     else:
         print("   ✅ No NaN values detected")
 
-    if vector_obs.abs().max() > 5.0:  # CRITICAL: Tighter threshold for PPO
-        print("   ⚠️  WARNING: Large vector values detected!")
-        print(f"   🔧 Max absolute value: {vector_obs.abs().max().item():.3f}")
-    else:
-        print("   ✅ Vector features in PPO-stable range")
-
-    model.policy.train()
-    for param in model.policy.parameters():
+    verifier.train()
+    for param in verifier.parameters():
         param.requires_grad = True
 
-    try:
-        actions, values, log_probs = model.policy(obs_tensor)
-        print(f"✅ Policy forward pass successful")
-        print(f"   - Value output: {values.item():.3f}")
-        print(f"   - Value NaN count: {torch.sum(~torch.isfinite(values)).item()}")
-        print(
-            f"   - Log prob NaN count: {torch.sum(~torch.isfinite(log_probs)).item()}"
-        )
+    # Test with random action
+    batch_size = obs_tensor["visual_obs"].shape[0]
+    random_action = torch.randn(
+        batch_size, verifier.action_dim, device=device, requires_grad=True
+    )
+    random_action = F.softmax(random_action, dim=-1)
 
-        # CRITICAL: Check for PPO value explosion
-        if (
-            torch.sum(~torch.isfinite(values)) > 0
-            or torch.sum(~torch.isfinite(log_probs)) > 0
-        ):
-            print("   🚨 CRITICAL: NaN values in policy outputs!")
+    try:
+        energy = verifier(obs_tensor, random_action)
+        print(f"✅ Energy calculation successful")
+        print(f"   - Energy output: {energy.item():.6f}")
+        print(f"   - Energy NaN count: {torch.sum(~torch.isfinite(energy)).item()}")
+
+        if torch.sum(~torch.isfinite(energy)) > 0:
+            print("   🚨 CRITICAL: NaN values in energy output!")
             return False
 
-        # CRITICAL: Check for value explosion (key indicator)
-        if abs(values.item()) > 20.0:  # CRITICAL: Tighter threshold
-            print(
-                "   🚨 CRITICAL: Value function output too large - PPO explosion risk!"
-            )
-            print(f"   🔧 Value: {values.item():.3f} (should be < 20.0)")
+        if abs(energy.item()) > 10.0:
+            print(f"   🚨 CRITICAL: Energy value too large: {energy.item():.3f}")
             return False
         else:
-            print("   ✅ Value function output is PPO-stable")
+            print("   ✅ Energy output is stable")
 
     except Exception as e:
-        print(f"❌ Policy forward pass failed: {e}")
+        print(f"❌ Energy calculation failed: {e}")
         return False
 
-    # Test backward pass
-    loss = values.mean() + log_probs.mean() * 0.1
-    model.policy.zero_grad()
-
+    # Test gradient computation (core of EBT)
     try:
-        loss.backward()
-        print("✅ Backward pass successful")
+        gradients = torch.autograd.grad(
+            outputs=energy.sum(),
+            inputs=random_action,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+        print("✅ Gradient computation successful")
+        print(f"   - Gradient shape: {gradients.shape}")
+        print(f"   - Gradient norm: {torch.norm(gradients).item():.6f}")
+        print(
+            f"   - Gradient NaN count: {torch.sum(~torch.isfinite(gradients)).item()}"
+        )
+
+        if torch.sum(~torch.isfinite(gradients)) > 0:
+            print("   🚨 CRITICAL: NaN values in gradients!")
+            return False
+
+        gradient_norm = torch.norm(gradients).item()
+        if gradient_norm > 10.0:
+            print(f"   🚨 CRITICAL: Gradient explosion: {gradient_norm:.3f}")
+            return False
+        elif gradient_norm > 5.0:
+            print(f"   ⚠️  WARNING: Large gradients: {gradient_norm:.3f}")
+        else:
+            print("   ✅ Gradients are stable")
+
     except Exception as e:
-        print(f"❌ Backward pass failed: {e}")
+        print(f"❌ Gradient computation failed: {e}")
         return False
 
-    # Analyze gradients for PPO stability
-    total_params, params_with_grads, total_grad_norm, nan_grad_count = 0, 0, 0.0, 0
-    max_grad_norm = 0.0
+    print("✅ EXCELLENT: Energy-Based Transformer verification successful!")
+    return True
 
-    for name, param in model.policy.named_parameters():
-        total_params += param.numel()
-        if param.grad is not None:
-            params_with_grads += param.numel()
-            grad_norm = param.grad.norm().item()
-            if np.isfinite(grad_norm):
-                total_grad_norm += grad_norm
-                max_grad_norm = max(max_grad_norm, grad_norm)
-            else:
-                nan_grad_count += 1
 
-    coverage = (params_with_grads / total_params) * 100
-    avg_grad_norm = safe_divide(total_grad_norm, max(params_with_grads, 1), 0.0)
+def make_env(
+    game="StreetFighterIISpecialChampionEdition-Genesis",
+    state="ken_bison_12.state",
+    render_mode=None,
+):
+    """Create Energy-Based environment."""
+    try:
+        env = retro.make(game=game, state=state, render_mode=render_mode)
+        env = StreetFighterVisionWrapper(
+            env, frame_stack=8, rendering=(render_mode is not None)
+        )
 
-    print(f"📊 PPO Gradient Analysis:")
-    print(f"   - Coverage: {coverage:.1f}%")
-    print(f"   - Average norm: {avg_grad_norm:.6f}")
-    print(f"   - Max norm: {max_grad_norm:.6f}")
-    print(f"   - NaN gradients: {nan_grad_count}")
+        print(f"✅ Energy-Based environment created")
+        print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
+        print(
+            f"   - Bait-punish: {'Available' if BAIT_PUNISH_AVAILABLE else 'Not available'}"
+        )
 
-    # CRITICAL: PPO-specific gradient checks
-    if nan_grad_count > 0:
-        print("   🚨 CRITICAL: NaN gradients detected!")
-        return False
-
-    if max_grad_norm > 10.0:  # CRITICAL: Check for gradient explosion
-        print("   🚨 CRITICAL: Gradient explosion detected!")
-        print(f"   🔧 Max gradient norm: {max_grad_norm:.3f} (should be < 10.0)")
-        return False
-
-    if avg_grad_norm > 5.0:  # CRITICAL: Check for overall gradient instability
-        print("   ⚠️  WARNING: High average gradient norm detected!")
-        print(f"   🔧 Average gradient norm: {avg_grad_norm:.3f} (should be < 5.0)")
-
-    if (
-        coverage > 95
-        and avg_grad_norm < 5.0
-        and max_grad_norm < 10.0
-        and nan_grad_count == 0
-    ):
-        print("✅ EXCELLENT: PPO-stable gradient flow verified!")
-        return True
-    else:
-        print("❌ PPO stability issues detected in gradient flow")
-        return False
+        return env
+    except Exception as e:
+        print(f"❌ Error creating environment: {e}")
+        raise
 
 
 # Export components
 __all__ = [
     "StreetFighterVisionWrapper",
-    "FixedStreetFighterCNN",
-    "FixedStreetFighterPolicy",
-    "verify_gradient_flow",
+    "EnergyBasedStreetFighterCNN",
+    "EnergyBasedStreetFighterVerifier",
+    "EnergyBasedAgent",
+    "verify_energy_flow",
     "OscillationTracker",
     "StrategicFeatureTracker",
     "StreetFighterDiscreteActions",
@@ -2096,6 +2003,7 @@ __all__ = [
     "safe_bool_check",
     "safe_comparison",
     "ensure_feature_dimension",
+    "make_env",
     "VECTOR_FEATURE_DIM",
     "BASE_VECTOR_FEATURE_DIM",
     "ENHANCED_VECTOR_FEATURE_DIM",
@@ -2105,16 +2013,12 @@ __all__ = [
 if BAIT_PUNISH_AVAILABLE:
     __all__.append("AdaptiveRewardShaper")
 
-print(f"🎉 PPO VALUE LOSS EXPLOSION FIX - Complete wrapper.py loaded successfully!")
-print(f"   - Total lines preserved: 1600+ (full functionality)")
-print(f"   - PPO value explosion prevention: ✅ ACTIVE")
-print(f"   - Array ambiguity fixes: ✅ ACTIVE")
-print(f"   - Feature dimension consistency: ✅ ACTIVE")
+print(f"🎉 ENERGY-BASED TRANSFORMER - Complete wrapper.py loaded successfully!")
+print(f"   - Training paradigm: Energy-Based Transformer (NOT PPO)")
+print(f"   - Verifier network: ✅ ACTIVE")
+print(f"   - Thinking optimization: ✅ ACTIVE")
+print(f"   - Energy stability: ✅ ACTIVE")
 print(
     f"   - Bait-punish integration: ✅ {'ACTIVE' if BAIT_PUNISH_AVAILABLE else 'STANDBY'}"
 )
-print(f"   - Gradient explosion prevention: ✅ ACTIVE")
-print(f"   - Reward normalization: ✅ ACTIVE")
-print(f"   - Conservative weight initialization: ✅ ACTIVE")
-print(f"   - Value clamping: ✅ ACTIVE (-10.0 to 10.0)")
-print(f"   - Ready for stable PPO training!")
+print(f"   - Ready for Energy-Based Street Fighter training!")

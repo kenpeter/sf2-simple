@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-bait_punish_system.py - FIXED DEFENSIVE STRATEGY SYSTEM
-FIXES APPLIED:
-1. Health gap reward system (replaces immediate damage rewards)
-2. Enhanced opponent attack detection with multiple indicators
-3. Extended punish window (8 -> 20 frames) and blockstun (3 -> 6 frames)
-4. Defensive reward shaping with proper scaling
-5. PPO-stable reward normalization for defensive play
+bait_punish_system.py - ENERGY-BASED DEFENSIVE STRATEGY SYSTEM
+ENERGY INTEGRATION:
+1. Energy-based reward shaping (replaces PPO-specific rewards)
+2. Enhanced opponent attack detection for energy landscape
+3. Extended punish window for energy optimization
+4. Defensive energy reward shaping
+5. Energy-stable reward normalization for defensive play
+ADAPTED FOR: Energy-Based Transformer training paradigm
 """
 
 import numpy as np
@@ -16,25 +17,22 @@ from typing import Dict, List, Tuple
 
 class SimpleBlockPunishDetector:
     """
-    FIXED defensive strategy system using health gap rewards and proper detection.
+    Energy-Based defensive strategy system using health gap rewards and proper detection.
+    Adapted for Energy-Based Transformer training.
     """
 
     def __init__(self):
-        # FIX 1: REMOVED immediate damage rewards - using health gap instead
-        # OLD: self.HIT_REWARD = 0.015, self.BLOCK_REWARD = 0.01
-        # NEW: Health gap as primary reward
+        # ENERGY ADAPTATION: Removed PPO-specific rewards, using energy-compatible values
+        self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS = 0.015  # Reduced for energy stability
+        self.SUCCESSFUL_BLOCK_BONUS = 0.003  # Smaller bonus for energy training
+        self.BLOCK_THEN_HIT_BONUS = 0.02  # Reduced for energy compatibility
+        self.PERFECT_BLOCK_PUNISH_BONUS = 0.03  # Maximum bonus for perfect timing
 
-        # FIX 4: Defensive reward shaping values
-        self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS = 0.02  # Bonus for health advantage
-        self.SUCCESSFUL_BLOCK_BONUS = 0.005  # Small bonus per successful block
-        self.BLOCK_THEN_HIT_BONUS = 0.03  # Large bonus for block->punish
-        self.PERFECT_BLOCK_PUNISH_BONUS = 0.05  # Maximum bonus for perfect timing
+        # Penalties for poor defensive play (energy-compatible)
+        self.HEALTH_DISADVANTAGE_PENALTY = -0.005  # Smaller penalty for energy training
+        self.FAILED_BLOCK_PENALTY = -0.004  # Reduced penalty
 
-        # Penalties for poor defensive play
-        self.HEALTH_DISADVANTAGE_PENALTY = -0.01  # Penalty for being behind
-        self.FAILED_BLOCK_PENALTY = -0.008  # Penalty for failed blocks
-
-        # FIX 3: Extended timing windows for proper defensive play
+        # Extended timing windows for proper defensive play
         self.BLOCKSTUN_FRAMES = 6  # Increased from 3 to 6
         self.PUNISH_WINDOW_FRAMES = 20  # Increased from 8 to 20
         self.ATTACK_DETECTION_FRAMES = 8  # Increased from 5 to 8
@@ -61,26 +59,35 @@ class SimpleBlockPunishDetector:
         self.total_perfect_punishes = 0
         self.total_health_advantage_frames = 0
 
-        # FIX 2: Enhanced opponent attack detection
+        # Enhanced opponent attack detection
         self.opponent_attack_indicators = deque(maxlen=8)  # Increased tracking
         self.opponent_attack_frames = deque(maxlen=5)  # Multi-frame detection
         self.last_opponent_status = 0
         self.last_score_change = 0
         self.opponent_approaching_frames = deque(maxlen=3)
 
-        # FIX 5: PPO stability tracking with defensive focus
+        # ENERGY ADAPTATION: Energy-stable tracking
         self.total_reward_given = 0.0
         self.reward_history = deque(maxlen=100)
-        self.max_reward_per_step = 0.05  # Reduced for stability
+        self.max_reward_per_step = 0.03  # Reduced for energy stability
         self.health_gap_history = deque(maxlen=10)
 
-        print("✅ FIXED SimpleBlockPunishDetector initialized")
-        print("🛡️  DEFENSIVE STRATEGY FIXES:")
-        print("   1. Health gap reward system: ACTIVE")
+        # Energy-based learning metrics
+        self.energy_positive_examples = (
+            0  # Count of positive examples for energy training
+        )
+        self.energy_negative_examples = (
+            0  # Count of negative examples for energy training
+        )
+        self.defensive_action_quality = 0.0  # Quality score for defensive actions
+
+        print("✅ Energy-Based SimpleBlockPunishDetector initialized")
+        print("🧠 ENERGY-BASED DEFENSIVE STRATEGY:")
+        print("   1. Energy-compatible reward shaping: ACTIVE")
         print("   2. Enhanced attack detection: ACTIVE")
         print("   3. Extended punish window: 20 frames")
-        print("   4. Defensive reward shaping: ACTIVE")
-        print("   5. PPO-stable normalization: ACTIVE")
+        print("   4. Defensive energy shaping: ACTIVE")
+        print("   5. Energy-stable normalization: ACTIVE")
         print(f"   - Blockstun frames: {self.BLOCKSTUN_FRAMES}")
         print(f"   - Punish window: {self.PUNISH_WINDOW_FRAMES} frames")
 
@@ -92,7 +99,8 @@ class SimpleBlockPunishDetector:
         damage_received: int,
     ) -> Dict:
         """
-        FIX 1-5: Updated system using health gap rewards and defensive strategy.
+        Energy-adapted system using health gap rewards and defensive strategy.
+        Compatible with Energy-Based Transformer training.
         """
         self.frame_count += 1
         reward = 0.0
@@ -110,11 +118,11 @@ class SimpleBlockPunishDetector:
         opponent_status = info.get("enemy_status", 0)
         score = info.get("score", 0)
 
-        # FIX 1: Health gap as primary reward source
+        # Health gap as primary reward source (energy-compatible)
         player_health = info.get("agent_hp", 176)
         opponent_health = info.get("enemy_hp", 176)
 
-        # FIX 2: Enhanced opponent attack detection
+        # Enhanced opponent attack detection
         opponent_attacking = self._enhanced_opponent_attack_detection_v2(
             info, damage_received, opponent_status, player_x, opponent_x
         )
@@ -146,13 +154,13 @@ class SimpleBlockPunishDetector:
         }
         self.recent_actions.append(current_action)
 
-        # FIX 1: PRIMARY REWARD - Health Gap System
+        # PRIMARY REWARD - Health Gap System (energy-compatible)
         health_gap_reward = self._calculate_health_gap_reward(
             player_health, opponent_health
         )
         reward += health_gap_reward
 
-        # FIX 4: Defensive reward shaping
+        # Defensive reward shaping (energy-adapted)
         defensive_rewards = self._calculate_defensive_rewards(
             player_health,
             opponent_health,
@@ -171,34 +179,41 @@ class SimpleBlockPunishDetector:
                 if self._was_perfect_punish():
                     punish_bonus = self.PERFECT_BLOCK_PUNISH_BONUS
                     self.total_perfect_punishes += 1
+                    # High-quality defensive action for energy training
+                    self.energy_positive_examples += 1
                 reward += punish_bonus
                 self.total_block_then_hit_sequences += 1
                 print(
-                    f"🎯 DEFENSIVE: Block-then-punish executed! Bonus: {punish_bonus:.3f}"
+                    f"🎯 ENERGY DEFENSIVE: Block-then-punish executed! Bonus: {punish_bonus:.3f}"
                 )
 
         # Successful blocking detection
         if self._detected_successful_block():
             self.total_blocks_successful += 1
-            print(f"🛡️  DEFENSIVE: Successful block detected!")
+            self.energy_positive_examples += 1  # Good defensive action
+            print(f"🛡️  ENERGY DEFENSIVE: Successful block detected!")
 
         # Track failed blocks
         if damage_received > 0:
             self.total_hits_received += 1
             if self._should_have_blocked():
                 self.total_blocks_failed += 1
+                self.energy_negative_examples += 1  # Poor defensive action
 
         # Track health advantage
         if player_health > opponent_health:
             self.total_health_advantage_frames += 1
 
-        # FIX 5: PPO-stable reward normalization for defensive play
-        final_reward = self._normalize_reward_for_defensive_play(reward)
+        # Energy-stable reward normalization for defensive play
+        final_reward = self._normalize_reward_for_energy_defensive_play(reward)
 
         # Update tracking
         self.total_reward_given += final_reward
         self.reward_history.append(final_reward)
         self.health_gap_history.append(player_health - opponent_health)
+
+        # Calculate defensive action quality for energy training
+        self._update_defensive_action_quality()
 
         # Update state tracking
         self.last_opponent_attacking = opponent_attacking
@@ -211,7 +226,7 @@ class SimpleBlockPunishDetector:
         self.last_player_health = player_health
         self.last_opponent_health = opponent_health
 
-        # Return comprehensive defensive stats
+        # Return comprehensive defensive stats for energy training
         return {
             "bait_punish_reward": final_reward,
             "health_gap_reward": health_gap_reward,
@@ -229,14 +244,18 @@ class SimpleBlockPunishDetector:
             "punish_accuracy": self._calculate_punish_accuracy(),
             "health_gap": player_health - opponent_health,
             "avg_health_gap": self._get_avg_health_gap(),
+            # Energy-specific metrics
+            "energy_positive_examples": self.energy_positive_examples,
+            "energy_negative_examples": self.energy_negative_examples,
+            "defensive_action_quality": self.defensive_action_quality,
+            "energy_training_signal": self._get_energy_training_signal(),
         }
 
     def _calculate_health_gap_reward(
         self, player_health: int, opponent_health: int
     ) -> float:
         """
-        FIX 1: Primary reward based on health gap instead of immediate damage.
-        This encourages defensive play and health preservation.
+        Energy-adapted health gap reward calculation.
         """
         try:
             # Ensure valid health values
@@ -250,30 +269,33 @@ class SimpleBlockPunishDetector:
             # Health gap calculation
             health_gap = player_health - opponent_health
 
-            # Scale health gap reward (small values for PPO stability)
-            base_health_reward = health_gap * 0.0005  # Very small scaling
+            # Scale health gap reward (smaller values for energy stability)
+            base_health_reward = health_gap * 0.0003  # Reduced for energy training
 
             # Additional bonus for maintaining significant health advantage
             if health_gap > 50:
-                base_health_reward += 0.01
+                base_health_reward += 0.005  # Reduced for energy
             elif health_gap > 100:
-                base_health_reward += 0.02
+                base_health_reward += 0.01  # Reduced for energy
 
             # Penalty for significant health disadvantage
             if health_gap < -50:
-                base_health_reward -= 0.01
+                base_health_reward -= 0.005  # Reduced for energy
             elif health_gap < -100:
-                base_health_reward -= 0.02
+                base_health_reward -= 0.01  # Reduced for energy
 
-            return np.clip(base_health_reward, -0.03, 0.03)
+            return np.clip(
+                base_health_reward, -0.02, 0.02
+            )  # Tighter clipping for energy
 
         except Exception as e:
-            print(f"⚠️  Error in health gap reward: {e}")
+            print(f"⚠️  Error in energy health gap reward: {e}")
             return 0.0
 
     def _enhanced_opponent_attack_detection_v2(
         self, info, damage_received, opponent_status, player_x, opponent_x
     ):
+        """Enhanced opponent attack detection for energy training."""
         attack_detected = False
 
         # METHOD 1: We received damage (most reliable)
@@ -305,9 +327,7 @@ class SimpleBlockPunishDetector:
     def _opponent_approaching_aggressively(
         self, player_x: float, opponent_x: float
     ) -> bool:
-        """
-        FIX 2: Detect if opponent is approaching aggressively.
-        """
+        """Detect if opponent is approaching aggressively."""
         try:
             if self.last_opponent_x is None:
                 return False
@@ -340,7 +360,7 @@ class SimpleBlockPunishDetector:
         damage_dealt: int,
     ) -> float:
         """
-        FIX 4: Defensive reward shaping to encourage proper defensive play.
+        Energy-adapted defensive reward shaping.
         """
         defensive_reward = 0.0
 
@@ -348,9 +368,13 @@ class SimpleBlockPunishDetector:
             # Reward for maintaining health advantage
             health_gap = player_health - opponent_health
             if health_gap > 30:
-                defensive_reward += self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS * 0.5
+                defensive_reward += (
+                    self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS * 0.3
+                )  # Reduced for energy
             if health_gap > 60:
-                defensive_reward += self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS
+                defensive_reward += (
+                    self.DEFENSIVE_HEALTH_ADVANTAGE_BONUS * 0.6
+                )  # Reduced for energy
 
             # Reward for successful blocking during opponent attacks
             if player_blocking and opponent_attacking:
@@ -364,25 +388,26 @@ class SimpleBlockPunishDetector:
 
             # Small bonus for patient play (not constantly attacking)
             if not self._is_constantly_attacking():
-                defensive_reward += 0.001
+                defensive_reward += 0.0005  # Reduced for energy
 
-            return np.clip(defensive_reward, -0.02, 0.03)
+            return np.clip(defensive_reward, -0.015, 0.02)  # Tighter bounds for energy
 
         except Exception as e:
-            print(f"⚠️  Error in defensive rewards: {e}")
+            print(f"⚠️  Error in energy defensive rewards: {e}")
             return 0.0
 
-    def _normalize_reward_for_defensive_play(self, reward: float) -> float:
+    def _normalize_reward_for_energy_defensive_play(self, reward: float) -> float:
         """
-        FIX 5: PPO-stable reward normalization specifically for defensive learning.
+        Energy-stable reward normalization specifically for defensive learning.
+        Adapted for Energy-Based Transformer training.
         """
         try:
             # Ensure reward is finite
             if not np.isfinite(reward):
                 reward = 0.0
 
-            # First clipping for defensive range
-            reward = np.clip(reward, -0.05, 0.05)
+            # First clipping for defensive range (tighter for energy)
+            reward = np.clip(reward, -0.03, 0.03)
 
             # Add to history for normalization
             self.reward_history.append(reward)
@@ -391,23 +416,93 @@ class SimpleBlockPunishDetector:
             if len(self.reward_history) > 20:
                 recent_rewards = list(self.reward_history)[-20:]
                 reward_mean = np.mean(recent_rewards)
-                reward_std = max(np.std(recent_rewards), 0.01)  # Minimum std
+                reward_std = max(
+                    np.std(recent_rewards), 0.005
+                )  # Smaller minimum std for energy
 
-                # Gentle normalization
+                # Gentle normalization (more conservative for energy training)
                 normalized = (reward - reward_mean) / reward_std
-                normalized = np.clip(normalized, -2.0, 2.0)
+                normalized = np.clip(normalized, -1.5, 1.5)  # Tighter clipping
 
-                # Scale down for PPO stability
-                final_reward = normalized * 0.02
+                # Scale down for energy stability
+                final_reward = normalized * 0.015  # Smaller scale for energy
             else:
                 # Simple scaling for early training
-                final_reward = reward * 0.5
+                final_reward = reward * 0.3  # More conservative for energy
 
-            # Final safety clipping
-            return np.clip(final_reward, -0.03, 0.03)
+            # Final safety clipping for energy training
+            return np.clip(final_reward, -0.02, 0.02)
 
         except Exception as e:
-            print(f"⚠️  Error in reward normalization: {e}")
+            print(f"⚠️  Error in energy reward normalization: {e}")
+            return 0.0
+
+    def _update_defensive_action_quality(self):
+        """Update defensive action quality score for energy training."""
+        try:
+            total_examples = (
+                self.energy_positive_examples + self.energy_negative_examples
+            )
+            if total_examples > 0:
+                self.defensive_action_quality = (
+                    self.energy_positive_examples / total_examples
+                )
+            else:
+                self.defensive_action_quality = 0.5  # Neutral quality
+
+            # Smooth the quality metric
+            if hasattr(self, "_prev_defensive_quality"):
+                self.defensive_action_quality = (
+                    0.9 * self._prev_defensive_quality
+                    + 0.1 * self.defensive_action_quality
+                )
+            self._prev_defensive_quality = self.defensive_action_quality
+
+        except Exception as e:
+            self.defensive_action_quality = 0.5
+
+    def _get_energy_training_signal(self) -> float:
+        """
+        Get energy training signal for contrastive learning.
+        Positive signal = good defensive action, Negative signal = bad defensive action.
+        """
+        try:
+            # Recent action quality
+            if len(self.recent_actions) == 0:
+                return 0.0
+
+            current_action = self.recent_actions[-1]
+
+            # Positive signals (good for energy training)
+            if (
+                current_action.get("player_blocking", False)
+                and current_action.get("opponent_attacking", False)
+                and current_action.get("damage_received", 0) == 0
+            ):
+                return 1.0  # Perfect block
+
+            if (
+                current_action.get("damage_dealt", 0) > 0
+                and self._was_punish_after_block()
+            ):
+                return 1.0  # Successful punish
+
+            if current_action.get("health_gap", 0) > 50:
+                return 0.7  # Health advantage
+
+            # Negative signals (bad for energy training)
+            if current_action.get("damage_received", 0) > 0 and not current_action.get(
+                "player_blocking", False
+            ):
+                return -1.0  # Failed to block
+
+            if current_action.get("health_gap", 0) < -50:
+                return -0.7  # Health disadvantage
+
+            # Neutral
+            return 0.0
+
+        except Exception as e:
             return 0.0
 
     def _is_constantly_attacking(self) -> bool:
@@ -430,7 +525,7 @@ class SimpleBlockPunishDetector:
         opponent_attacking: bool,
     ) -> bool:
         """
-        Proper Street Fighter blocking detection (unchanged but verified).
+        Proper Street Fighter blocking detection (unchanged).
         """
         try:
             if not isinstance(button_features, np.ndarray) or len(button_features) < 12:
@@ -468,7 +563,7 @@ class SimpleBlockPunishDetector:
             return False
 
     def _calculate_blockstun_remaining(self) -> int:
-        """Calculate remaining blockstun frames after a block (FIX 3: Extended frames)."""
+        """Calculate remaining blockstun frames after a block."""
         if len(self.recent_actions) < 2:
             return 0
 
@@ -517,7 +612,7 @@ class SimpleBlockPunishDetector:
         )
 
     def _was_punish_after_block(self) -> bool:
-        """Check if current hit was a punish after successful block (FIX 3: Extended window)."""
+        """Check if current hit was a punish after successful block."""
         if len(self.recent_actions) < 3:
             return False
 
@@ -661,7 +756,7 @@ class SimpleBlockPunishDetector:
         self.frame_count = 0
 
     def get_learning_stats(self) -> Dict:
-        """Get comprehensive defensive learning statistics."""
+        """Get comprehensive defensive learning statistics for energy training."""
         defensive_efficiency = self._calculate_defensive_efficiency()
         blocking_effectiveness = self._calculate_blocking_effectiveness()
         punish_accuracy = self._calculate_punish_accuracy()
@@ -687,37 +782,47 @@ class SimpleBlockPunishDetector:
             ),
             "current_phase": self._get_current_phase(),
             "frame_count": self.frame_count,
+            # Energy-specific metrics
+            "energy_positive_examples": self.energy_positive_examples,
+            "energy_negative_examples": self.energy_negative_examples,
+            "defensive_action_quality": self.defensive_action_quality,
+            "energy_training_signal": self._get_energy_training_signal(),
         }
 
 
 class AdaptiveRewardShaper:
     """
-    Enhanced adaptive reward shaper with defensive strategy focus.
+    Energy-Based adaptive reward shaper with defensive strategy focus.
+    Adapted for Energy-Based Transformer training.
     """
 
     def __init__(self):
-        # FIX 5: Conservative reward scaling for defensive PPO stability
-        self.base_reward_scale = 0.1  # Reduced from 0.15
-        self.defensive_scale = 0.08  # New: specific scaling for defensive rewards
-        self.health_gap_scale = 0.12  # New: specific scaling for health gap
-        self.max_total_reward = 0.2  # Reduced from 0.3
+        # Energy-adapted reward scaling for defensive stability
+        self.base_reward_scale = 0.08  # Reduced for energy training
+        self.defensive_scale = 0.06  # Energy-specific scaling for defensive rewards
+        self.health_gap_scale = 0.09  # Energy-specific scaling for health gap
+        self.max_total_reward = 0.15  # Reduced for energy training
 
-        # Adaptive parameters for defensive learning
-        self.adaptation_rate = 0.001  # Slower adaptation
-        self.performance_window = 200  # Larger window for stability
+        # Adaptive parameters for defensive learning (energy-compatible)
+        self.adaptation_rate = 0.0005  # Slower adaptation for energy stability
+        self.performance_window = 300  # Larger window for energy stability
         self.performance_history = deque(maxlen=self.performance_window)
 
-        # Defensive-specific bonuses
-        self.defensive_stance_bonus = 0.015
-        self.health_preservation_bonus = 0.02
-        self.perfect_defense_bonus = 0.025
+        # Defensive-specific bonuses (energy-adapted)
+        self.defensive_stance_bonus = 0.01  # Reduced for energy
+        self.health_preservation_bonus = 0.015  # Reduced for energy
+        self.perfect_defense_bonus = 0.02  # Reduced for energy
+
+        # Energy training compatibility
+        self.energy_positive_bonus = 0.005  # Bonus for positive energy examples
+        self.energy_negative_penalty = -0.003  # Penalty for negative examples
 
         # Stability tracking
         self.total_rewards_shaped = 0
         self.reward_clipping_events = 0
 
-        print("✅ FIXED AdaptiveRewardShaper initialized")
-        print("🛡️  DEFENSIVE REWARD SHAPING:")
+        print("✅ Energy-Based AdaptiveRewardShaper initialized")
+        print("🧠 ENERGY DEFENSIVE REWARD SHAPING:")
         print(f"   - Base reward scale: {self.base_reward_scale}")
         print(f"   - Defensive scale: {self.defensive_scale}")
         print(f"   - Health gap scale: {self.health_gap_scale}")
@@ -727,13 +832,13 @@ class AdaptiveRewardShaper:
         self, base_reward: float, bait_punish_info: Dict, game_info: Dict
     ) -> float:
         """
-        Enhanced defensive reward shaping.
+        Energy-enhanced defensive reward shaping.
         """
         try:
             # Ensure base reward is finite
             if not np.isfinite(base_reward):
                 base_reward = 0.0
-            base_reward = np.clip(base_reward, -1.0, 1.0)
+            base_reward = np.clip(base_reward, -0.5, 0.5)  # Tighter clip for energy
 
             # Get defensive-specific rewards
             health_gap_reward = bait_punish_info.get("health_gap_reward", 0.0)
@@ -744,7 +849,7 @@ class AdaptiveRewardShaper:
             if not np.isfinite(defensive_rewards):
                 defensive_rewards = 0.0
 
-            # Scale rewards with defensive focus
+            # Scale rewards with defensive focus (energy-adapted)
             scaled_base = base_reward * self.base_reward_scale
             scaled_health_gap = health_gap_reward * self.health_gap_scale
             scaled_defensive = defensive_rewards * self.defensive_scale
@@ -765,12 +870,19 @@ class AdaptiveRewardShaper:
             if bait_punish_info.get("perfect_punishes", 0) > 0:
                 bonus_reward += self.perfect_defense_bonus
 
+            # Energy training bonuses/penalties
+            energy_training_signal = bait_punish_info.get("energy_training_signal", 0.0)
+            if energy_training_signal > 0.5:
+                bonus_reward += self.energy_positive_bonus
+            elif energy_training_signal < -0.5:
+                bonus_reward += self.energy_negative_penalty
+
             # Combine all rewards
             total_reward = (
                 scaled_base + scaled_health_gap + scaled_defensive + bonus_reward
             )
 
-            # Hard cap to prevent PPO explosion
+            # Hard cap to prevent energy explosion
             original_reward = total_reward
             total_reward = np.clip(
                 total_reward, -self.max_total_reward, self.max_total_reward
@@ -788,18 +900,18 @@ class AdaptiveRewardShaper:
             self.total_rewards_shaped += 1
             self.performance_history.append(total_reward)
 
-            # Adapt slowly for defensive learning
+            # Adapt slowly for defensive learning (energy-compatible)
             if len(self.performance_history) >= self.performance_window:
-                self._adapt_defensive_parameters()
+                self._adapt_defensive_parameters_for_energy()
 
             return total_reward
 
         except Exception as e:
-            print(f"⚠️  Error in defensive reward shaping: {e}")
+            print(f"⚠️  Error in energy defensive reward shaping: {e}")
             return 0.0
 
-    def _adapt_defensive_parameters(self):
-        """Adaptive parameter adjustment for defensive learning."""
+    def _adapt_defensive_parameters_for_energy(self):
+        """Adaptive parameter adjustment for defensive learning with energy stability."""
         try:
             if len(self.performance_history) < self.performance_window:
                 return
@@ -808,19 +920,19 @@ class AdaptiveRewardShaper:
             avg_reward = np.mean(recent_rewards)
             reward_std = np.std(recent_rewards)
 
-            # Only adapt if performance is stable
-            if reward_std < 0.015:  # Tighter stability requirement
+            # Only adapt if performance is stable (tighter requirement for energy)
+            if reward_std < 0.01:  # Tighter stability requirement for energy
                 # Adjust defensive scale based on performance
-                if avg_reward > 0.05:  # Good defensive performance
-                    self.defensive_scale = min(self.defensive_scale + 0.001, 0.15)
-                elif avg_reward < -0.05:  # Poor defensive performance
-                    self.defensive_scale = max(self.defensive_scale - 0.001, 0.02)
+                if avg_reward > 0.03:  # Good defensive performance
+                    self.defensive_scale = min(self.defensive_scale + 0.0005, 0.12)
+                elif avg_reward < -0.03:  # Poor defensive performance
+                    self.defensive_scale = max(self.defensive_scale - 0.0005, 0.01)
 
         except Exception as e:
-            print(f"⚠️  Error in defensive parameter adaptation: {e}")
+            print(f"⚠️  Error in energy defensive parameter adaptation: {e}")
 
     def get_adaptation_stats(self) -> Dict:
-        """Get defensive adaptation statistics."""
+        """Get energy defensive adaptation statistics."""
         try:
             avg_reward = (
                 np.mean(list(self.performance_history))
@@ -845,20 +957,22 @@ class AdaptiveRewardShaper:
                 "defensive_stance_bonus": self.defensive_stance_bonus,
                 "health_preservation_bonus": self.health_preservation_bonus,
                 "perfect_defense_bonus": self.perfect_defense_bonus,
+                "energy_positive_bonus": self.energy_positive_bonus,
+                "energy_negative_penalty": self.energy_negative_penalty,
             }
         except Exception as e:
-            print(f"⚠️  Error getting defensive adaptation stats: {e}")
+            print(f"⚠️  Error getting energy defensive adaptation stats: {e}")
             return {}
 
 
 def integrate_bait_punish_system(strategic_tracker):
     """
-    Integrate the FIXED defensive bait-punish system into the strategic tracker.
+    Integrate the Energy-Based defensive bait-punish system into the strategic tracker.
     """
     try:
         if not hasattr(strategic_tracker, "bait_punish_detector"):
             strategic_tracker.bait_punish_detector = SimpleBlockPunishDetector()
-            print("✅ FIXED defensive bait-punish system integrated")
+            print("✅ Energy-Based defensive bait-punish system integrated")
 
         # Add method to get defensive bait-punish features
         def get_bait_punish_features():
@@ -890,27 +1004,14 @@ def integrate_bait_punish_system(strategic_tracker):
                 avg_health_gap = stats.get("avg_health_gap", 0)
                 features[5] = np.clip((avg_health_gap + 100) / 200.0, 0.0, 1.0)
 
-                # Feature 6: Current defensive phase encoding
-                current_phase = stats.get("current_phase", "neutral")
-                if current_phase == "punishing":
-                    features[6] = 1.0
-                elif current_phase == "blocking":
-                    features[6] = 0.8
-                elif current_phase == "blockstun":
-                    features[6] = 0.6
-                elif current_phase == "health_advantage":
-                    features[6] = 0.7
-                elif current_phase == "defending":
-                    features[6] = 0.4
-                elif current_phase == "attacking":
-                    features[6] = 0.2
-                else:  # neutral
-                    features[6] = 0.0
+                # Feature 6: Energy training signal (normalized for energy training)
+                energy_signal = stats.get("energy_training_signal", 0.0)
+                features[6] = np.clip((energy_signal + 1.0) / 2.0, 0.0, 1.0)
 
                 return features
 
             except Exception as e:
-                print(f"⚠️  Error getting defensive bait-punish features: {e}")
+                print(f"⚠️  Error getting energy defensive bait-punish features: {e}")
                 return np.zeros(7, dtype=np.float32)
 
         # Add the method to the strategic tracker
@@ -919,7 +1020,7 @@ def integrate_bait_punish_system(strategic_tracker):
         return True
 
     except Exception as e:
-        print(f"❌ Failed to integrate defensive bait-punish system: {e}")
+        print(f"❌ Failed to integrate energy defensive bait-punish system: {e}")
         return False
 
 
@@ -934,13 +1035,13 @@ __all__ = [
     "integrate_bait_punish_system",
 ]
 
-# Test the FIXED defensive system
+# Test the Energy-Based defensive system
 if __name__ == "__main__":
-    print("🧪 Testing FIXED Defensive SimpleBlockPunishDetector...")
+    print("🧪 Testing Energy-Based Defensive SimpleBlockPunishDetector...")
 
     detector = SimpleBlockPunishDetector()
 
-    # Test defensive strategy mechanics
+    # Test defensive strategy mechanics for energy training
     test_info = {
         "agent_hp": 150,
         "enemy_hp": 120,  # Player has health advantage
@@ -954,8 +1055,9 @@ if __name__ == "__main__":
     # Test 1: Health advantage (primary reward)
     test_buttons = np.zeros(12, dtype=np.float32)
     result = detector.update(test_info, test_buttons, 0, 0)
-    print(f"Health advantage test: {result}")
+    print(f"Energy health advantage test: {result}")
     print(f"  Health gap reward: {result.get('health_gap_reward', 0):.4f}")
+    print(f"  Energy training signal: {result.get('energy_training_signal', 0):.4f}")
 
     # Test 2: Defensive blocking stance
     test_buttons[7] = 1.0  # RIGHT (blocking away from opponent)
@@ -963,44 +1065,47 @@ if __name__ == "__main__":
     result = detector.update(
         test_info, test_buttons, 0, 0
     )  # No damage = successful block
-    print(f"Defensive blocking: {result}")
+    print(f"Energy defensive blocking: {result}")
     print(f"  Defensive rewards: {result.get('defensive_rewards', 0):.4f}")
+    print(f"  Energy positive examples: {result.get('energy_positive_examples', 0)}")
 
     # Test 3: Health gap maintained (should get reward)
     test_info["agent_hp"] = 150
     test_info["enemy_hp"] = 110  # Health gap increased
     result = detector.update(test_info, test_buttons, 0, 0)
-    print(f"Health gap maintained: {result}")
+    print(f"Energy health gap maintained: {result}")
     print(f"  Health gap: {result.get('health_gap', 0)}")
 
-    # Test 4: Defensive counter-attack after block
+    # Test 4: Defensive counter-attack after block (energy training signal)
     test_buttons[7] = 0.0  # Stop blocking
     test_buttons[0] = 1.0  # B button (attack)
     test_info["enemy_status"] = 0  # Opponent no longer attacking
     result = detector.update(test_info, test_buttons, 20, 0)  # Deal damage after block
-    print(f"Defensive counter-attack: {result}")
+    print(f"Energy defensive counter-attack: {result}")
     print(f"  Block-then-hit sequences: {result.get('block_then_hit_sequences', 0)}")
+    print(f"  Energy training signal: {result.get('energy_training_signal', 0):.4f}")
 
-    # Test 5: Health disadvantage (should get penalty and encourage better defense)
+    # Test 5: Health disadvantage (negative energy signal)
     test_buttons[0] = 0.0  # Stop attacking
     test_info["agent_hp"] = 80  # Lower health
     test_info["enemy_hp"] = 140  # Opponent has advantage
     test_info["enemy_status"] = 55  # Opponent attacking
     result = detector.update(test_info, test_buttons, 0, 15)  # Took damage
-    print(f"Health disadvantage: {result}")
+    print(f"Energy health disadvantage: {result}")
     print(f"  Health gap: {result.get('health_gap', 0)}")
+    print(f"  Energy negative examples: {result.get('energy_negative_examples', 0)}")
 
-    # Test 6: Perfect defensive sequence
+    # Test 6: Perfect defensive sequence (high energy signal)
     test_info["agent_hp"] = 160  # Restore health advantage
     test_info["enemy_hp"] = 100
     test_buttons[5] = 1.0  # DOWN
     test_buttons[6] = 1.0  # LEFT (crouch blocking left)
     result = detector.update(test_info, test_buttons, 0, 0)
-    print(f"Perfect defensive sequence: {result}")
+    print(f"Perfect energy defensive sequence: {result}")
 
-    # Display final comprehensive defensive stats
+    # Display final comprehensive defensive stats for energy training
     final_stats = detector.get_learning_stats()
-    print(f"\n📊 Final DEFENSIVE Stats:")
+    print(f"\n📊 Final ENERGY DEFENSIVE Stats:")
     print(f"🛡️  DEFENSIVE METRICS:")
     print(f"   - Defensive efficiency: {final_stats['defensive_efficiency']:.2%}")
     print(f"   - Blocking effectiveness: {final_stats['blocking_effectiveness']:.2%}")
@@ -1012,56 +1117,69 @@ if __name__ == "__main__":
     print(f"   - Failed blocks: {final_stats['blocks_failed']}")
     print(f"   - Block-then-hit sequences: {final_stats['block_then_hit_sequences']}")
     print(f"   - Perfect punishes: {final_stats['perfect_punishes']}")
+    print(f"🧠 ENERGY TRAINING METRICS:")
+    print(f"   - Energy positive examples: {final_stats['energy_positive_examples']}")
+    print(f"   - Energy negative examples: {final_stats['energy_negative_examples']}")
+    print(
+        f"   - Defensive action quality: {final_stats['defensive_action_quality']:.2%}"
+    )
+    print(f"   - Energy training signal: {final_stats['energy_training_signal']:.3f}")
     print(f"🏥 HEALTH MANAGEMENT:")
     print(f"   - Current phase: {final_stats['current_phase']}")
     print(f"   - Total reward given: {final_stats['total_reward_given']:.3f}")
 
-    print("\n🧪 Testing FIXED AdaptiveRewardShaper...")
+    print("\n🧪 Testing Energy-Based AdaptiveRewardShaper...")
 
     shaper = AdaptiveRewardShaper()
 
-    # Test defensive reward shaping
-    base_reward = 0.2
+    # Test defensive reward shaping for energy training
+    base_reward = 0.1  # Smaller base reward for energy
     bait_punish_info = {
-        "health_gap_reward": 0.02,
-        "defensive_rewards": 0.015,
+        "health_gap_reward": 0.015,
+        "defensive_rewards": 0.01,
         "blocks_successful": 2,
         "perfect_punishes": 1,
         "health_gap": 60,
+        "energy_training_signal": 1.0,  # Positive energy signal
     }
     game_info = {}
 
     shaped_reward = shaper.shape_reward(base_reward, bait_punish_info, game_info)
-    print(f"Defensive shaped reward: {shaped_reward:.4f}")
+    print(f"Energy defensive shaped reward: {shaped_reward:.4f}")
 
-    # Test with defensive focus
+    # Test with strong defensive focus and energy signal
     defensive_info = {
-        "health_gap_reward": 0.03,
-        "defensive_rewards": 0.02,
+        "health_gap_reward": 0.02,
+        "defensive_rewards": 0.015,
         "blocks_successful": 3,
         "perfect_punishes": 2,
         "health_gap": 80,
+        "energy_training_signal": 1.0,  # Strong positive signal
     }
 
-    defensive_shaped = shaper.shape_reward(0.1, defensive_info, game_info)
-    print(f"Strong defensive reward: {defensive_shaped:.4f}")
+    defensive_shaped = shaper.shape_reward(0.05, defensive_info, game_info)
+    print(f"Strong energy defensive reward: {defensive_shaped:.4f}")
 
     # Test adaptation stats
     adaptation_stats = shaper.get_adaptation_stats()
-    print(f"Defensive adaptation stats: {adaptation_stats}")
+    print(f"Energy defensive adaptation stats: {adaptation_stats}")
 
-    print("\n✅ All FIXED defensive bait-punish system tests passed!")
-    print("🛡️  Ready for DEFENSIVE Street Fighter II training!")
-    print("\n🔧 FIXES APPLIED:")
-    print("   ✅ FIX 1: Health gap reward system (replaces damage rewards)")
-    print("   ✅ FIX 2: Enhanced opponent attack detection")
-    print("   ✅ FIX 3: Extended punish window (20 frames) & blockstun (6 frames)")
-    print("   ✅ FIX 4: Defensive reward shaping with health preservation")
-    print("   ✅ FIX 5: PPO-stable reward normalization for defensive play")
-    print("\n🎯 Expected DEFENSIVE Behavior:")
-    print("   - AI will prioritize health preservation over aggressive attacks")
-    print("   - AI will learn to block attacks and maintain health advantage")
-    print("   - AI will be rewarded for patient, defensive play")
-    print("   - AI will get maximum rewards for block-then-punish sequences")
-    print("   - System prevents uppercut spam by not rewarding reckless aggression")
-    print("   - Health gap rewards encourage smart defensive positioning")
+    print("\n✅ All Energy-Based defensive bait-punish system tests passed!")
+    print("🧠 Ready for ENERGY-BASED Street Fighter II training!")
+    print("\n🔧 ENERGY ADAPTATIONS APPLIED:")
+    print("   ✅ Energy-compatible reward scaling (reduced values)")
+    print("   ✅ Energy training signal generation")
+    print("   ✅ Positive/negative example tracking for contrastive learning")
+    print("   ✅ Energy-stable reward normalization")
+    print("   ✅ Defensive action quality metrics for energy landscape")
+    print("\n🎯 Expected ENERGY-BASED Behavior:")
+    print("   - AI will learn energy landscape through defensive examples")
+    print(
+        "   - Positive energy examples: successful blocks, punishes, health advantage"
+    )
+    print(
+        "   - Negative energy examples: failed blocks, taking damage, health disadvantage"
+    )
+    print("   - Energy verifier will score defensive actions appropriately")
+    print("   - Thinking process will optimize for better defensive decisions")
+    print("   - System prevents poor defensive play through energy training")

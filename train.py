@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 """
-train.py - PPO VALUE LOSS EXPLOSION FIX
-FIXES:
-- Value loss explosion (41,650 → stable <8.0)
-- Gradient explosion with proper clipping
-- Reward normalization for stability
-- Conservative hyperparameters for PPO stability
-SOLUTION: Value network stabilization, gradient clipping, advantage normalization
+train.py - ENERGY-BASED TRANSFORMER TRAINING FOR STREET FIGHTER
+TRAINING APPROACH:
+- Energy landscape learning (replaces PPO entirely)
+- Contrastive energy training
+- System 2 thinking optimization
+- Verifier-based action scoring
+IMPLEMENTS: Pure Energy-Based Transformer methodology from the paper
 """
 
 import os
 import argparse
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
 from datetime import datetime
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.monitor import Monitor
-import retro
+from collections import deque, defaultdict
 import logging
+import time
+import json
+import pickle
 
-# Import fixed components
+# Import energy-based components
 from wrapper import (
-    FixedStreetFighterPolicy,
+    EnergyBasedStreetFighterVerifier,
+    EnergyBasedAgent,
     StreetFighterVisionWrapper,
-    verify_gradient_flow,
+    verify_energy_flow,
     ensure_scalar,
     safe_bool_check,
+    sanitize_array,
+    make_env,
     VECTOR_FEATURE_DIM,
     BASE_VECTOR_FEATURE_DIM,
     ENHANCED_VECTOR_FEATURE_DIM,
@@ -39,41 +44,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class PPOStabilityCallback(BaseCallback):
+class EnergyTrainingCallback:
     """
-    PPO stability callback with focus on value loss explosion prevention.
+    Callback for monitoring Energy-Based Transformer training.
+    Tracks energy landscape learning and thinking optimization.
     """
 
-    def __init__(self, save_freq=50000, save_path="./models/", verbose=1):
-        super().__init__(verbose)
+    def __init__(self, save_freq=10000, save_path="./models/", verbose=1):
         self.save_freq = save_freq
         self.save_path = save_path
+        self.verbose = verbose
         os.makedirs(save_path, exist_ok=True)
 
-        # Track key PPO stability metrics
-        self.value_losses = []
-        self.explained_variances = []
-        self.clip_fractions = []
-        self.policy_losses = []
-        self.entropy_losses = []
-
-        # Track gradient norms
+        # Energy training metrics
+        self.energy_losses = []
+        self.contrastive_margins = []
+        self.positive_energies = []
+        self.negative_energies = []
         self.gradient_norms = []
+
+        # Thinking process metrics
+        self.thinking_steps_taken = []
+        self.energy_improvements = []
+        self.early_stops = 0
+        self.energy_explosions = 0
+        self.thinking_episodes = 0
 
         # Performance tracking
         self.episode_rewards = []
         self.episode_lengths = []
         self.win_rates = []
 
-        # Stability monitoring
-        self.value_loss_spikes = 0
-        self.gradient_explosions = 0
-        self.stability_warnings = 0
-
         # Best model tracking
-        self.best_value_loss = float("inf")
-        self.best_explained_variance = -float("inf")
-        self.best_stability_score = 0.0
+        self.best_energy_loss = float("inf")
+        self.best_win_rate = 0.0
+        self.best_thinking_improvement = 0.0
 
         # Training start time
         self.training_start_time = None
@@ -82,265 +87,124 @@ class PPOStabilityCallback(BaseCallback):
         self.current_feature_dim = VECTOR_FEATURE_DIM
         self.feature_dimension_changes = 0
 
-    def _on_training_start(self):
-        """Initialize training with PPO stability focus."""
+        # Energy landscape statistics
+        self.energy_landscape_quality = 0.0
+        self.verifier_accuracy = 0.0
+        self.action_diversity = 0.0
+
+    def on_training_start(self):
+        """Initialize Energy-Based Transformer training."""
         self.training_start_time = datetime.now()
 
-        print(f"🚀 PPO VALUE LOSS EXPLOSION FIX - Training Started")
-        print(f"🎯 STABILITY TARGETS:")
-        print(f"   - Value Loss: <8.0 (prevent 41,650 explosions)")
-        print(f"   - Explained Variance: >0.3")
-        print(f"   - Clip Fraction: 0.1-0.3")
-        print(f"   - Gradient Norm: <5.0")
+        print(f"🧠 ENERGY-BASED TRANSFORMER TRAINING STARTED")
+        print(f"🎯 ENERGY TRAINING OBJECTIVES:")
+        print(f"   - Energy Loss: Minimize contrastive energy")
+        print(f"   - Thinking Quality: Improve optimization steps")
+        print(f"   - Action Diversity: Explore energy landscape")
+        print(f"   - Win Rate: Maximize game performance")
         print(f"🧠 Feature System:")
         print(f"   - Current dimension: {VECTOR_FEATURE_DIM}")
         print(
             f"   - Bait-punish: {'Available' if BAIT_PUNISH_AVAILABLE else 'Not available'}"
         )
 
-        # Initial stability check
-        self._perform_stability_check()
+    def on_episode_end(self, episode_num: int, episode_data: dict):
+        """Process end of episode data."""
 
-    def _perform_stability_check(self):
-        """Perform initial stability check."""
-        print("\n🔬 Initial PPO Stability Check")
+        # Extract episode metrics
+        episode_reward = episode_data.get("total_reward", 0.0)
+        episode_length = episode_data.get("episode_length", 0)
+        win = episode_data.get("win", False)
 
-        env = self._get_env()
-        if env:
-            try:
-                stable = verify_gradient_flow(self.model, env)
-                if stable:
-                    print("   ✅ PPO stability verified - ready for training")
-                else:
-                    print("   ⚠️  PPO stability issues detected")
-                    print("   🔧 Proceeding with enhanced monitoring")
-            except Exception as e:
-                print(f"   ❌ Stability check failed: {e}")
+        # Energy metrics
+        energy_loss = episode_data.get("energy_loss", 0.0)
+        positive_energy = episode_data.get("avg_positive_energy", 0.0)
+        negative_energy = episode_data.get("avg_negative_energy", 0.0)
+        gradient_norm = episode_data.get("avg_gradient_norm", 0.0)
 
-    def _get_env(self):
-        """Get environment for testing."""
-        if hasattr(self.training_env, "envs"):
-            return self.training_env.envs[0]
-        elif hasattr(self.training_env, "env"):
-            return self.training_env.env
-        else:
-            return self.training_env
+        # Thinking metrics
+        thinking_data = episode_data.get("thinking_stats", {})
+        avg_thinking_steps = thinking_data.get("avg_thinking_steps", 0.0)
+        avg_energy_improvement = thinking_data.get("avg_energy_improvement", 0.0)
+        episode_early_stops = thinking_data.get("early_stops", 0)
+        episode_energy_explosions = thinking_data.get("energy_explosions", 0)
 
-    def _on_step(self) -> bool:
-        """Monitor PPO stability each step."""
+        # Update tracking
+        self.episode_rewards.append(episode_reward)
+        self.episode_lengths.append(episode_length)
+        self.win_rates.append(1.0 if win else 0.0)
 
-        # Extract training metrics
-        self._extract_ppo_metrics()
+        self.energy_losses.append(energy_loss)
+        self.positive_energies.append(positive_energy)
+        self.negative_energies.append(negative_energy)
+        self.gradient_norms.append(gradient_norm)
 
-        # Extract performance metrics
-        self._extract_performance_metrics()
+        self.thinking_steps_taken.append(avg_thinking_steps)
+        self.energy_improvements.append(avg_energy_improvement)
+        self.early_stops += episode_early_stops
+        self.energy_explosions += episode_energy_explosions
+        self.thinking_episodes += 1
 
-        # Monitor feature dimensions
-        self._monitor_feature_dimensions()
+        # Keep recent history only
+        max_history = 1000
+        for history_list in [
+            self.episode_rewards,
+            self.episode_lengths,
+            self.win_rates,
+            self.energy_losses,
+            self.positive_energies,
+            self.negative_energies,
+            self.gradient_norms,
+            self.thinking_steps_taken,
+            self.energy_improvements,
+        ]:
+            if len(history_list) > max_history:
+                history_list.pop(0)
 
-        # Check for stability issues
-        if self.num_timesteps % 1000 == 0:
-            self._check_ppo_stability()
+        # Calculate energy landscape quality
+        self._calculate_energy_landscape_quality()
 
         # Detailed reporting
-        if self.num_timesteps % 10000 == 0:
-            self._log_ppo_stability_report()
+        if episode_num % 100 == 0:
+            self._log_energy_training_report(episode_num)
 
         # Save checkpoints
-        if self.num_timesteps > 0 and self.num_timesteps % self.save_freq == 0:
-            self._save_ppo_checkpoint()
+        if episode_num > 0 and episode_num % self.save_freq == 0:
+            self._save_energy_checkpoint(episode_num)
 
-        return True
-
-    def _extract_ppo_metrics(self):
-        """Extract PPO-specific metrics with array safety."""
-        if hasattr(self.logger, "name_to_value"):
-            metrics = self.logger.name_to_value
-
-            # CRITICAL: Value loss tracking
-            if "train/value_loss" in metrics:
-                value_loss = ensure_scalar(metrics["train/value_loss"], 0.0)
-                self.value_losses.append(value_loss)
-
-                # Detect value loss explosion
-                if value_loss > 100.0:
-                    self.value_loss_spikes += 1
-                    print(
-                        f"🚨 VALUE LOSS EXPLOSION: {value_loss:.1f} at step {self.num_timesteps}"
-                    )
-
-                    # Emergency intervention
-                    if value_loss > 1000.0:
-                        print(
-                            "🚨 CRITICAL VALUE LOSS EXPLOSION - Emergency intervention needed"
-                        )
-                        self._emergency_intervention()
-
-                # Keep history manageable
-                if len(self.value_losses) > 1000:
-                    self.value_losses.pop(0)
-
-            # Policy loss
-            if "train/policy_gradient_loss" in metrics:
-                policy_loss = ensure_scalar(metrics["train/policy_gradient_loss"], 0.0)
-                self.policy_losses.append(policy_loss)
-                if len(self.policy_losses) > 1000:
-                    self.policy_losses.pop(0)
-
-            # Explained variance
-            if "train/explained_variance" in metrics:
-                explained_var = ensure_scalar(metrics["train/explained_variance"], 0.0)
-                self.explained_variances.append(explained_var)
-                if len(self.explained_variances) > 1000:
-                    self.explained_variances.pop(0)
-
-            # Clip fraction
-            if "train/clip_fraction" in metrics:
-                clip_frac = ensure_scalar(metrics["train/clip_fraction"], 0.0)
-                self.clip_fractions.append(clip_frac)
-                if len(self.clip_fractions) > 1000:
-                    self.clip_fractions.pop(0)
-
-            # Entropy loss
-            if "train/entropy_loss" in metrics:
-                entropy_loss = ensure_scalar(metrics["train/entropy_loss"], 0.0)
-                self.entropy_losses.append(entropy_loss)
-                if len(self.entropy_losses) > 1000:
-                    self.entropy_losses.pop(0)
-
-    def _extract_performance_metrics(self):
-        """Extract performance metrics with array safety."""
-        if hasattr(self.locals, "infos") and self.locals["infos"]:
-            for info in self.locals["infos"]:
-                if "episode" in info:
-                    episode_info = info["episode"]
-                    episode_reward = ensure_scalar(episode_info["r"], 0.0)
-                    episode_length = ensure_scalar(episode_info["l"], 0.0)
-
-                    self.episode_rewards.append(episode_reward)
-                    self.episode_lengths.append(episode_length)
-
-                    # Keep recent episodes only
-                    if len(self.episode_rewards) > 100:
-                        self.episode_rewards.pop(0)
-                        self.episode_lengths.pop(0)
-
-                # Win rate tracking
-                if "win_rate" in info:
-                    win_rate = ensure_scalar(info["win_rate"], 0.0)
-                    self.win_rates.append(win_rate)
-                    if len(self.win_rates) > 100:
-                        self.win_rates.pop(0)
-
-    def _monitor_feature_dimensions(self):
-        """Monitor feature dimension consistency."""
-        try:
-            if hasattr(self.locals, "infos") and self.locals["infos"]:
-                for info in self.locals["infos"]:
-                    if "current_feature_dim" in info:
-                        current_dim = ensure_scalar(
-                            info["current_feature_dim"], VECTOR_FEATURE_DIM
-                        )
-                        if current_dim != self.current_feature_dim:
-                            self.feature_dimension_changes += 1
-                            print(
-                                f"🔄 Feature dimension changed: {self.current_feature_dim} → {current_dim}"
-                            )
-                            self.current_feature_dim = current_dim
-                        break
-        except Exception as e:
-            pass  # Silently handle dimension monitoring errors
-
-    def _check_ppo_stability(self):
-        """Check PPO stability status."""
-        if not self.value_losses:
+    def _calculate_energy_landscape_quality(self):
+        """Calculate the quality of the learned energy landscape."""
+        if len(self.positive_energies) < 10 or len(self.negative_energies) < 10:
+            self.energy_landscape_quality = 0.0
             return
 
-        # Calculate recent metrics
-        recent_value_loss = np.mean(self.value_losses[-10:])
-        recent_explained_var = (
-            np.mean(self.explained_variances[-10:]) if self.explained_variances else 0
+        # Calculate separation between positive and negative energies
+        recent_positive = np.mean(self.positive_energies[-10:])
+        recent_negative = np.mean(self.negative_energies[-10:])
+
+        # Good energy landscape: positive energies < negative energies
+        energy_separation = recent_negative - recent_positive
+
+        # Calculate consistency (lower variance = better)
+        positive_consistency = 1.0 / (1.0 + np.std(self.positive_energies[-10:]))
+        negative_consistency = 1.0 / (1.0 + np.std(self.negative_energies[-10:]))
+
+        # Combine metrics
+        self.energy_landscape_quality = (
+            energy_separation * 0.5
+            + positive_consistency * 0.25
+            + negative_consistency * 0.25
         )
-        recent_clip_frac = (
-            np.mean(self.clip_fractions[-10:]) if self.clip_fractions else 0
+
+        # Normalize to 0-100 scale
+        self.energy_landscape_quality = max(
+            0, min(100, self.energy_landscape_quality * 20)
         )
 
-        # Calculate stability score
-        stability_score = self._calculate_ppo_stability_score(
-            recent_value_loss, recent_explained_var, recent_clip_frac
-        )
-
-        # Issue warnings
-        if stability_score < 40:
-            self.stability_warnings += 1
-            print(
-                f"⚠️  PPO STABILITY WARNING #{self.stability_warnings} at step {self.num_timesteps}"
-            )
-            print(f"   Stability Score: {stability_score:.0f}/100")
-            print(f"   Value Loss: {recent_value_loss:.2f} (target: <8.0)")
-            print(f"   Explained Var: {recent_explained_var:.3f} (target: >0.3)")
-            print(f"   Clip Fraction: {recent_clip_frac:.3f} (target: 0.1-0.3)")
-
-        # Update best stability score
-        self.best_stability_score = max(self.best_stability_score, stability_score)
-
-    def _calculate_ppo_stability_score(self, value_loss, explained_var, clip_frac):
-        """Calculate PPO stability score (0-100)."""
-        score = 0.0
-
-        # Value loss component (50 points max) - CRITICAL for PPO
-        if value_loss < 5.0:
-            score += 50
-        elif value_loss < 8.0:
-            score += 40
-        elif value_loss < 15.0:
-            score += 25
-        elif value_loss < 50.0:
-            score += 10
-        # 0 points for value_loss >= 50
-
-        # Explained variance component (30 points max)
-        if explained_var > 0.5:
-            score += 30
-        elif explained_var > 0.3:
-            score += 20
-        elif explained_var > 0.1:
-            score += 10
-        elif explained_var > 0.0:
-            score += 5
-
-        # Clip fraction component (20 points max)
-        if 0.1 <= clip_frac <= 0.3:
-            score += 20
-        elif 0.05 <= clip_frac <= 0.5:
-            score += 10
-        elif clip_frac > 0:
-            score += 5
-
-        return score
-
-    def _emergency_intervention(self):
-        """Emergency intervention for critical value loss explosion."""
-        print("🚨 EMERGENCY INTERVENTION: Critical value loss explosion detected")
-        print("   - Reducing learning rate by 50%")
-        print("   - Implementing aggressive gradient clipping")
-
-        # Reduce learning rate
-        if hasattr(self.model, "learning_rate"):
-            current_lr = self.model.learning_rate
-            new_lr = current_lr * 0.5
-            self.model.learning_rate = new_lr
-            print(f"   - Learning rate: {current_lr} → {new_lr}")
-
-        # Force gradient clipping
-        if hasattr(self.model.policy, "optimizer"):
-            for param_group in self.model.policy.optimizer.param_groups:
-                param_group["lr"] *= 0.5
-
-    def _log_ppo_stability_report(self):
-        """Log detailed PPO stability report."""
-        print(f"\n📊 PPO STABILITY REPORT - Step {self.num_timesteps:,}")
-        print("=" * 60)
+    def _log_energy_training_report(self, episode_num: int):
+        """Log detailed Energy-Based Transformer training report."""
+        print(f"\n📊 ENERGY-BASED TRANSFORMER REPORT - Episode {episode_num:,}")
+        print("=" * 70)
 
         # Training time
         if self.training_start_time:
@@ -353,67 +217,79 @@ class PPOStabilityCallback(BaseCallback):
         print(f"   - Current dimension: {self.current_feature_dim}")
         print(f"   - Dimension changes: {self.feature_dimension_changes}")
 
-        # Core PPO metrics
-        if self.value_losses:
-            recent_value_loss = np.mean(self.value_losses[-20:])
-            print(f"🎯 Value Loss: {recent_value_loss:.2f}")
+        # Energy landscape metrics
+        if self.energy_losses:
+            recent_energy_loss = np.mean(self.energy_losses[-20:])
+            print(f"⚡ Energy Loss: {recent_energy_loss:.6f}")
 
-            if recent_value_loss < 8.0:
-                print(f"   ✅ EXCELLENT - PPO stable!")
-            elif recent_value_loss < 20.0:
-                print(f"   👍 GOOD - PPO moderately stable")
-            elif recent_value_loss < 100.0:
-                print(f"   ⚠️  FAIR - PPO somewhat unstable")
+            if recent_energy_loss < 0.1:
+                print(f"   ✅ EXCELLENT - Energy landscape well-learned!")
+            elif recent_energy_loss < 0.5:
+                print(f"   👍 GOOD - Energy landscape learning")
+            elif recent_energy_loss < 1.0:
+                print(f"   ⚠️  FAIR - Energy landscape developing")
             else:
-                print(f"   🚨 CRITICAL - PPO highly unstable!")
+                print(f"   🚨 POOR - Energy landscape needs work")
 
-        if self.explained_variances:
-            recent_explained_var = np.mean(self.explained_variances[-20:])
-            print(f"📈 Explained Variance: {recent_explained_var:.3f}")
+        if self.positive_energies and self.negative_energies:
+            recent_positive = np.mean(self.positive_energies[-20:])
+            recent_negative = np.mean(self.negative_energies[-20:])
+            energy_separation = recent_negative - recent_positive
 
-            if recent_explained_var > 0.3:
-                print(
-                    f"   ✅ GOOD - Model explains {recent_explained_var:.1%} of rewards"
-                )
-            elif recent_explained_var > 0.1:
-                print(
-                    f"   ⚠️  FAIR - Model explains {recent_explained_var:.1%} of rewards"
-                )
+            print(f"🎯 Energy Separation: {energy_separation:.6f}")
+            print(f"   - Positive (good actions): {recent_positive:.6f}")
+            print(f"   - Negative (bad actions): {recent_negative:.6f}")
+
+            if energy_separation > 1.0:
+                print(f"   ✅ EXCELLENT - Clear energy distinction!")
+            elif energy_separation > 0.5:
+                print(f"   👍 GOOD - Energy landscape forming")
+            elif energy_separation > 0.0:
+                print(f"   ⚠️  FAIR - Weak energy separation")
             else:
-                print(
-                    f"   🚨 POOR - Model explains only {recent_explained_var:.1%} of rewards"
-                )
+                print(f"   🚨 POOR - No energy separation")
 
-        if self.clip_fractions:
-            recent_clip_frac = np.mean(self.clip_fractions[-20:])
-            print(f"✂️  Clip Fraction: {recent_clip_frac:.3f}")
+        print(f"🏔️  Energy Landscape Quality: {self.energy_landscape_quality:.1f}/100")
 
-            if 0.1 <= recent_clip_frac <= 0.3:
-                print(f"   ✅ EXCELLENT - Healthy policy updates")
-            elif 0.05 <= recent_clip_frac <= 0.5:
-                print(f"   👍 GOOD - Moderate policy updates")
+        # Thinking process metrics
+        if self.thinking_steps_taken:
+            recent_thinking_steps = np.mean(self.thinking_steps_taken[-20:])
+            print(f"🤔 Thinking Process:")
+            print(f"   - Average steps: {recent_thinking_steps:.2f}")
+
+            if recent_thinking_steps > 3.0:
+                print(f"   🧠 DEEP thinking - thorough optimization")
+            elif recent_thinking_steps > 1.5:
+                print(f"   👍 GOOD thinking - moderate optimization")
             else:
-                print(f"   ⚠️  SUBOPTIMAL - Policy update issues")
+                print(f"   ⚡ FAST thinking - quick decisions")
 
-        # Overall stability
-        if self.value_losses and self.explained_variances and self.clip_fractions:
-            recent_value_loss = np.mean(self.value_losses[-20:])
-            recent_explained_var = np.mean(self.explained_variances[-20:])
-            recent_clip_frac = np.mean(self.clip_fractions[-20:])
+        if self.energy_improvements:
+            recent_improvement = np.mean(self.energy_improvements[-20:])
+            print(f"   - Energy improvement: {recent_improvement:.6f}")
 
-            stability_score = self._calculate_ppo_stability_score(
-                recent_value_loss, recent_explained_var, recent_clip_frac
-            )
-            print(f"🏥 PPO Stability Score: {stability_score:.0f}/100")
-
-            if stability_score >= 80:
-                print(f"   🎉 EXCELLENT - Optimal PPO training!")
-            elif stability_score >= 60:
-                print(f"   ✅ GOOD - PPO training stable")
-            elif stability_score >= 40:
-                print(f"   ⚠️  MODERATE - Monitor PPO closely")
+            if recent_improvement > 0.1:
+                print(f"   ✅ EXCELLENT - Thinking very effective!")
+            elif recent_improvement > 0.01:
+                print(f"   👍 GOOD - Thinking helping")
             else:
-                print(f"   🚨 POOR - PPO requires intervention")
+                print(f"   ⚠️  MINIMAL - Thinking needs improvement")
+
+        # Training stability
+        print(f"🛡️  Training Stability:")
+        if self.thinking_episodes > 0:
+            early_stop_rate = self.early_stops / self.thinking_episodes
+            explosion_rate = self.energy_explosions / self.thinking_episodes
+
+            print(f"   - Early stops: {early_stop_rate:.1%}")
+            print(f"   - Energy explosions: {explosion_rate:.1%}")
+
+            if explosion_rate < 0.01:
+                print(f"   ✅ STABLE - No energy explosions")
+            elif explosion_rate < 0.05:
+                print(f"   👍 MOSTLY STABLE - Few explosions")
+            else:
+                print(f"   ⚠️  UNSTABLE - Frequent explosions")
 
         # Performance metrics
         if self.episode_rewards:
@@ -427,100 +303,421 @@ class PPOStabilityCallback(BaseCallback):
             recent_win_rate = np.mean(self.win_rates[-10:])
             print(f"🏆 Win Rate: {recent_win_rate:.1%}")
 
-            if recent_win_rate > 0.6:
+            if recent_win_rate > 0.7:
                 print(f"   🔥 DOMINATING!")
-            elif recent_win_rate > 0.4:
+            elif recent_win_rate > 0.5:
                 print(f"   👍 COMPETITIVE!")
-            else:
+            elif recent_win_rate > 0.3:
                 print(f"   💪 LEARNING!")
-
-        # Stability issues summary
-        if self.value_loss_spikes > 0:
-            print(f"⚠️  Value loss spikes: {self.value_loss_spikes}")
-
-        if self.gradient_explosions > 0:
-            print(f"⚠️  Gradient explosions: {self.gradient_explosions}")
+            else:
+                print(f"   🎯 DEVELOPING...")
 
         print()
 
-    def _save_ppo_checkpoint(self):
-        """Save PPO checkpoint with stability metrics."""
-        current_value_loss = (
-            np.mean(self.value_losses[-10:]) if self.value_losses else float("inf")
+    def _save_energy_checkpoint(self, episode_num: int):
+        """Save Energy-Based Transformer checkpoint."""
+        current_energy_loss = (
+            np.mean(self.energy_losses[-10:]) if self.energy_losses else float("inf")
         )
-        current_explained_var = (
-            np.mean(self.explained_variances[-10:]) if self.explained_variances else 0
+        current_win_rate = np.mean(self.win_rates[-10:]) if self.win_rates else 0.0
+        current_thinking_improvement = (
+            np.mean(self.energy_improvements[-10:]) if self.energy_improvements else 0.0
         )
 
-        # Basic checkpoint
+        # Basic checkpoint info
         feature_suffix = (
             "enhanced"
             if self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM
             else "base"
         )
-        model_name = f"ppo_stable_{self.num_timesteps}_{feature_suffix}"
-        model_path = os.path.join(self.save_path, f"{model_name}.zip")
+        checkpoint_name = f"energy_transformer_{episode_num}_{feature_suffix}"
 
-        self.model.save(model_path)
-        print(f"💾 PPO Checkpoint: {model_name}.zip")
+        print(f"💾 Energy Checkpoint: {checkpoint_name}")
 
-        # Save best models
-        if current_value_loss < self.best_value_loss:
-            self.best_value_loss = current_value_loss
-            best_path = os.path.join(
-                self.save_path, f"best_value_loss_{feature_suffix}.zip"
+        # Track best models
+        if current_energy_loss < self.best_energy_loss:
+            self.best_energy_loss = current_energy_loss
+            print(f"   🎯 NEW BEST energy loss: {current_energy_loss:.6f}")
+
+        if current_win_rate > self.best_win_rate:
+            self.best_win_rate = current_win_rate
+            print(f"   🎯 NEW BEST win rate: {current_win_rate:.1%}")
+
+        if current_thinking_improvement > self.best_thinking_improvement:
+            self.best_thinking_improvement = current_thinking_improvement
+            print(
+                f"   🎯 NEW BEST thinking improvement: {current_thinking_improvement:.6f}"
             )
-            self.model.save(best_path)
-            print(f"   🎯 NEW BEST value loss: {current_value_loss:.2f}")
 
-        if current_explained_var > self.best_explained_variance:
-            self.best_explained_variance = current_explained_var
-            best_path = os.path.join(
-                self.save_path, f"best_explained_variance_{feature_suffix}.zip"
-            )
-            self.model.save(best_path)
-            print(f"   🎯 NEW BEST explained variance: {current_explained_var:.3f}")
-
-        # Current stability
-        stability_score = self._calculate_ppo_stability_score(
-            current_value_loss,
-            current_explained_var,
-            np.mean(self.clip_fractions[-10:]) if self.clip_fractions else 0,
-        )
-        print(f"   📊 Current PPO stability: {stability_score:.0f}/100")
-
-
-def make_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis",
-    state="ken_bison_12.state",
-    render_mode=None,
-):
-    """Create PPO-stable environment."""
-    try:
-        env = retro.make(game=game, state=state, render_mode=render_mode)
-        env = Monitor(env)
-        env = StreetFighterVisionWrapper(
-            env, frame_stack=8, rendering=(render_mode is not None)
-        )
-
-        print(f"✅ PPO-stable environment created")
-        print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
+        # Current metrics
         print(
-            f"   - Bait-punish: {'Available' if BAIT_PUNISH_AVAILABLE else 'Not available'}"
+            f"   📊 Current Energy Landscape Quality: {self.energy_landscape_quality:.1f}/100"
         )
 
-        return env
-    except Exception as e:
-        print(f"❌ Error creating environment: {e}")
-        raise
+    def get_training_stats(self) -> dict:
+        """Get comprehensive training statistics."""
+        return {
+            "energy_loss": (
+                np.mean(self.energy_losses[-10:]) if self.energy_losses else 0.0
+            ),
+            "energy_landscape_quality": self.energy_landscape_quality,
+            "avg_thinking_steps": (
+                np.mean(self.thinking_steps_taken[-10:])
+                if self.thinking_steps_taken
+                else 0.0
+            ),
+            "avg_energy_improvement": (
+                np.mean(self.energy_improvements[-10:])
+                if self.energy_improvements
+                else 0.0
+            ),
+            "win_rate": np.mean(self.win_rates[-10:]) if self.win_rates else 0.0,
+            "early_stop_rate": self.early_stops / max(1, self.thinking_episodes),
+            "explosion_rate": self.energy_explosions / max(1, self.thinking_episodes),
+            "best_energy_loss": self.best_energy_loss,
+            "best_win_rate": self.best_win_rate,
+            "best_thinking_improvement": self.best_thinking_improvement,
+        }
+
+
+class EnergyBasedTrainer:
+    """
+    Energy-Based Transformer trainer for Street Fighter.
+    Implements the core EBT training loop with contrastive learning.
+    """
+
+    def __init__(
+        self,
+        verifier: EnergyBasedStreetFighterVerifier,
+        agent: EnergyBasedAgent,
+        learning_rate: float = 1e-4,
+        contrastive_margin: float = 1.0,
+        batch_size: int = 32,
+        device: str = "auto",
+    ):
+
+        self.verifier = verifier
+        self.agent = agent
+        self.learning_rate = learning_rate
+        self.contrastive_margin = contrastive_margin
+        self.batch_size = batch_size
+
+        # Device setup
+        if device == "auto":
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
+
+        self.verifier.to(self.device)
+
+        # Optimizer for energy landscape learning
+        self.optimizer = optim.Adam(
+            self.verifier.parameters(),
+            lr=learning_rate,
+            weight_decay=1e-5,  # Small regularization
+            eps=1e-8,
+        )
+
+        # Learning rate scheduler
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode="min", factor=0.5, patience=1000
+        )
+
+        # Experience buffer for contrastive learning
+        self.experience_buffer = deque(maxlen=10000)
+
+        # Training statistics
+        self.training_stats = {
+            "total_updates": 0,
+            "energy_loss": 0.0,
+            "positive_energy": 0.0,
+            "negative_energy": 0.0,
+            "gradient_norm": 0.0,
+            "learning_rate": learning_rate,
+        }
+
+        print(f"✅ EnergyBasedTrainer initialized")
+        print(f"   - Device: {self.device}")
+        print(f"   - Learning rate: {learning_rate}")
+        print(f"   - Contrastive margin: {contrastive_margin}")
+        print(f"   - Batch size: {batch_size}")
+
+    def add_experience(
+        self, observations: dict, action: int, reward: float, done: bool
+    ):
+        """Add experience to the buffer for contrastive learning."""
+
+        # Convert observations to tensors
+        obs_tensor = {}
+        for key, value in observations.items():
+            if isinstance(value, np.ndarray):
+                obs_tensor[key] = torch.from_numpy(value).float()
+            else:
+                obs_tensor[key] = torch.tensor(value).float()
+
+        # Create one-hot action representation
+        action_onehot = torch.zeros(self.verifier.action_dim)
+        action_onehot[action] = 1.0
+
+        # Classify experience as good or bad based on reward
+        is_good = reward > 0.0  # Simple threshold - can be made more sophisticated
+
+        experience = {
+            "observations": obs_tensor,
+            "action": action_onehot,
+            "reward": reward,
+            "is_good": is_good,
+            "done": done,
+        }
+
+        self.experience_buffer.append(experience)
+
+    def train_step(self) -> dict:
+        """
+        Perform one training step using contrastive energy learning.
+        This is the core of EBT training.
+        """
+
+        if len(self.experience_buffer) < self.batch_size * 2:
+            return {"energy_loss": 0.0, "updated": False}
+
+        # Sample good and bad experiences
+        good_experiences = [exp for exp in self.experience_buffer if exp["is_good"]]
+        bad_experiences = [exp for exp in self.experience_buffer if not exp["is_good"]]
+
+        if (
+            len(good_experiences) < self.batch_size // 2
+            or len(bad_experiences) < self.batch_size // 2
+        ):
+            return {"energy_loss": 0.0, "updated": False}
+
+        # Sample balanced batch
+        good_batch = np.random.choice(
+            good_experiences, size=self.batch_size // 2, replace=True
+        )
+        bad_batch = np.random.choice(
+            bad_experiences, size=self.batch_size // 2, replace=True
+        )
+
+        # Prepare batch data
+        good_obs_batch = self._prepare_observation_batch(
+            [exp["observations"] for exp in good_batch]
+        )
+        good_actions_batch = torch.stack([exp["action"] for exp in good_batch]).to(
+            self.device
+        )
+
+        bad_obs_batch = self._prepare_observation_batch(
+            [exp["observations"] for exp in bad_batch]
+        )
+        bad_actions_batch = torch.stack([exp["action"] for exp in bad_batch]).to(
+            self.device
+        )
+
+        # Calculate energies
+        good_energies = self.verifier(good_obs_batch, good_actions_batch)
+        bad_energies = self.verifier(bad_obs_batch, bad_actions_batch)
+
+        # Contrastive loss: good actions should have lower energy than bad actions
+        # Loss = max(0, positive_energy - negative_energy + margin)
+        contrastive_loss = F.relu(
+            good_energies - bad_energies + self.contrastive_margin
+        )
+        energy_loss = contrastive_loss.mean()
+
+        # Additional regularization
+        energy_regularization = 0.01 * (
+            good_energies.pow(2).mean() + bad_energies.pow(2).mean()
+        )
+        total_loss = energy_loss + energy_regularization
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+
+        # Gradient clipping for stability
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            self.verifier.parameters(), max_norm=1.0
+        )
+
+        self.optimizer.step()
+        self.scheduler.step(energy_loss)
+
+        # Update statistics
+        self.training_stats.update(
+            {
+                "total_updates": self.training_stats["total_updates"] + 1,
+                "energy_loss": energy_loss.item(),
+                "positive_energy": good_energies.mean().item(),
+                "negative_energy": bad_energies.mean().item(),
+                "gradient_norm": gradient_norm.item(),
+                "learning_rate": self.optimizer.param_groups[0]["lr"],
+            }
+        )
+
+        return {
+            "energy_loss": energy_loss.item(),
+            "positive_energy": good_energies.mean().item(),
+            "negative_energy": bad_energies.mean().item(),
+            "gradient_norm": gradient_norm.item(),
+            "updated": True,
+        }
+
+    def _prepare_observation_batch(self, obs_list: list) -> dict:
+        """Prepare a batch of observations for the verifier."""
+        batch_obs = {}
+
+        # Stack observations
+        for key in obs_list[0].keys():
+            batch_obs[key] = torch.stack([obs[key] for obs in obs_list]).to(self.device)
+
+        return batch_obs
+
+    def save_model(self, filepath: str):
+        """Save the trained verifier model."""
+        checkpoint = {
+            "verifier_state_dict": self.verifier.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
+            "training_stats": self.training_stats,
+            "contrastive_margin": self.contrastive_margin,
+        }
+
+        torch.save(checkpoint, filepath)
+        print(f"💾 Model saved: {filepath}")
+
+    def load_model(self, filepath: str):
+        """Load a trained verifier model."""
+        checkpoint = torch.load(filepath, map_location=self.device)
+
+        self.verifier.load_state_dict(checkpoint["verifier_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        self.training_stats = checkpoint.get("training_stats", self.training_stats)
+        self.contrastive_margin = checkpoint.get(
+            "contrastive_margin", self.contrastive_margin
+        )
+
+        print(f"📂 Model loaded: {filepath}")
+
+    def get_training_stats(self) -> dict:
+        """Get current training statistics."""
+        return self.training_stats.copy()
+
+
+def run_energy_training_episode(
+    env,
+    agent: EnergyBasedAgent,
+    trainer: EnergyBasedTrainer,
+    max_steps: int = 18000,
+    train_freq: int = 10,
+) -> dict:
+    """
+    Run one training episode using Energy-Based Transformer.
+    """
+
+    obs, info = env.reset()
+    total_reward = 0.0
+    episode_length = 0
+    done = False
+    truncated = False
+
+    # Episode tracking
+    actions_taken = []
+    rewards_received = []
+    thinking_stats_history = []
+
+    step_count = 0
+    last_train_step = 0
+
+    while not (done or truncated) and episode_length < max_steps:
+        episode_length += 1
+        step_count += 1
+
+        # Convert observations to tensors
+        obs_tensor = {}
+        for key, value in obs.items():
+            if isinstance(value, np.ndarray):
+                obs_tensor[key] = torch.from_numpy(value).float()
+            else:
+                obs_tensor[key] = torch.tensor(value).float()
+
+        # Agent predicts action using energy-based thinking
+        action, thinking_info = agent.predict(obs_tensor, deterministic=False)
+        actions_taken.append(action)
+        thinking_stats_history.append(thinking_info)
+
+        # Environment step
+        next_obs, reward, done, truncated, next_info = env.step(action)
+
+        total_reward += reward
+        rewards_received.append(reward)
+
+        # Add experience to trainer's buffer
+        trainer.add_experience(obs, action, reward, done or truncated)
+
+        # Training step (periodically)
+        train_result = {"updated": False}
+        if step_count - last_train_step >= train_freq:
+            train_result = trainer.train_step()
+            last_train_step = step_count
+
+        obs = next_obs
+        info = next_info
+
+    # Episode statistics
+    win = (
+        info.get("wins", 0) > info.get("losses", 0)
+        if "wins" in info and "losses" in info
+        else False
+    )
+
+    # Aggregate thinking statistics
+    avg_thinking_stats = {}
+    if thinking_stats_history:
+        avg_thinking_stats = {
+            "avg_thinking_steps": np.mean(
+                [stats["steps_taken"] for stats in thinking_stats_history]
+            ),
+            "avg_energy_improvement": np.mean(
+                [stats["energy_improvement"] for stats in thinking_stats_history]
+            ),
+            "early_stops": sum(
+                [stats["early_stopped"] for stats in thinking_stats_history]
+            ),
+            "energy_explosions": sum(
+                [stats["energy_explosion"] for stats in thinking_stats_history]
+            ),
+        }
+
+    # Get final training statistics
+    final_train_stats = trainer.get_training_stats()
+
+    episode_data = {
+        "total_reward": total_reward,
+        "episode_length": episode_length,
+        "win": win,
+        "energy_loss": final_train_stats.get("energy_loss", 0.0),
+        "avg_positive_energy": final_train_stats.get("positive_energy", 0.0),
+        "avg_negative_energy": final_train_stats.get("negative_energy", 0.0),
+        "avg_gradient_norm": final_train_stats.get("gradient_norm", 0.0),
+        "thinking_stats": avg_thinking_stats,
+        "actions_taken": len(set(actions_taken)),  # Action diversity
+        "final_info": info,
+    }
+
+    return episode_data
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PPO Value Loss Explosion Fix - Street Fighter Training"
+        description="Energy-Based Transformer Training - Street Fighter"
     )
     parser.add_argument(
-        "--total-timesteps", type=int, default=1000000, help="Total training timesteps"
+        "--total-episodes", type=int, default=50000, help="Total training episodes"
+    )
+    parser.add_argument(
+        "--save-freq", type=int, default=1000, help="Save frequency (episodes)"
     )
     parser.add_argument("--resume", type=str, default=None, help="Path to resume from")
     parser.add_argument("--render", action="store_true", help="Render during training")
@@ -531,67 +728,52 @@ def main():
     parser.add_argument("--device", type=str, default="auto", help="Device to use")
     parser.add_argument("--force-cpu", action="store_true", help="Force CPU usage")
     parser.add_argument(
-        "--test-stability",
-        action="store_true",
-        help="Test PPO stability before training",
+        "--test-energy", action="store_true", help="Test energy flow before training"
     )
 
-    # PPO STABILITY HYPERPARAMETERS (CRITICAL FOR VALUE LOSS EXPLOSION FIX)
+    # Energy-Based Transformer hyperparameters
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=3e-5,
-        help="Learning rate (reduced for stability)",
+        default=1e-4,
+        help="Learning rate for energy training",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=64, help="Batch size (reduced for stability)"
+        "--batch-size", type=int, default=32, help="Batch size for contrastive learning"
     )
     parser.add_argument(
-        "--n-steps",
-        type=int,
-        default=2048,
-        help="Rollout steps (reduced for stability)",
+        "--contrastive-margin", type=float, default=1.0, help="Contrastive loss margin"
     )
-    parser.add_argument("--n-epochs", type=int, default=4, help="Epochs per update")
     parser.add_argument(
-        "--clip-range",
+        "--thinking-steps", type=int, default=5, help="Number of thinking steps"
+    )
+    parser.add_argument(
+        "--thinking-lr",
         type=float,
         default=0.1,
-        help="Clip range (reduced for stability)",
+        help="Learning rate for thinking optimization",
     )
     parser.add_argument(
-        "--vf-coef",
-        type=float,
-        default=0.25,
-        help="Value function coefficient (CRITICAL - reduced)",
+        "--train-freq", type=int, default=10, help="Training frequency (steps)"
     )
-    parser.add_argument(
-        "--max-grad-norm", type=float, default=0.5, help="Max gradient norm (CRITICAL)"
-    )
-    parser.add_argument(
-        "--ent-coef", type=float, default=0.01, help="Entropy coefficient"
-    )
-    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
-    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")
 
     args = parser.parse_args()
 
-    print("🔧 PPO VALUE LOSS EXPLOSION FIX - STREET FIGHTER TRAINING")
+    print("🧠 ENERGY-BASED TRANSFORMER TRAINING - STREET FIGHTER")
     print("=" * 70)
-    print("🎯 FIXING VALUE LOSS EXPLOSION PROBLEM:")
-    print("   - Value loss spikes: 41,650 → Target <8.0")
-    print("   - Gradient explosions: Fixed with clipping")
-    print("   - Reward instability: Fixed with normalization")
-    print("   - Array ambiguity: Fixed with scalar conversion")
+    print("🎯 TRAINING APPROACH:")
+    print("   - Energy landscape learning (NOT PPO)")
+    print("   - Contrastive energy training")
+    print("   - System 2 thinking optimization")
+    print("   - Verifier-based action scoring")
     print()
-    print("🛡️  PPO STABILITY ENHANCEMENTS:")
-    print(f"   - Learning Rate: {args.learning_rate} (reduced from 3e-4)")
-    print(f"   - Batch Size: {args.batch_size} (reduced from 256)")
-    print(f"   - Rollout Steps: {args.n_steps} (reduced from 4096)")
-    print(f"   - Value Coefficient: {args.vf_coef} (CRITICAL - reduced from 0.5)")
-    print(f"   - Max Grad Norm: {args.max_grad_norm} (CRITICAL - gradient clipping)")
-    print(f"   - Clip Range: {args.clip_range} (reduced for stability)")
-    print(f"   - Entropy Coefficient: {args.ent_coef} (reduced for stability)")
+    print("🛠️  ENERGY HYPERPARAMETERS:")
+    print(f"   - Learning Rate: {args.learning_rate}")
+    print(f"   - Batch Size: {args.batch_size}")
+    print(f"   - Contrastive Margin: {args.contrastive_margin}")
+    print(f"   - Thinking Steps: {args.thinking_steps}")
+    print(f"   - Thinking LR: {args.thinking_lr}")
+    print(f"   - Training Frequency: {args.train_freq} steps")
     print()
     print("🧠 FEATURE SYSTEM:")
     print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
@@ -615,16 +797,13 @@ def main():
         device = torch.device(args.device)
         print(f"🔧 Device: {device} (specified)")
 
-    # Set random seed
-    set_random_seed(42)
-
     # Create environment
     render_mode = "human" if args.render else None
     env = make_env(args.game, args.state, render_mode)
 
     # Test environment
-    print("🧪 Testing PPO-stable environment...")
-    obs = env.reset()
+    print("🧪 Testing Energy-Based environment...")
+    obs, info = env.reset()
     if isinstance(obs, tuple):
         obs = obs[0]
 
@@ -639,155 +818,117 @@ def main():
         print(f"   ⚠️  WARNING: Feature dimension mismatch!")
         print(f"       Expected: {VECTOR_FEATURE_DIM}, Got: {vector_shape[-1]}")
 
-    # Create or load model
+    # Create Energy-Based Transformer components
+    verifier = EnergyBasedStreetFighterVerifier(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        features_dim=256,
+    )
+
+    agent = EnergyBasedAgent(
+        verifier=verifier,
+        thinking_steps=args.thinking_steps,
+        thinking_lr=args.thinking_lr,
+        noise_scale=0.1,
+    )
+
+    trainer = EnergyBasedTrainer(
+        verifier=verifier,
+        agent=agent,
+        learning_rate=args.learning_rate,
+        contrastive_margin=args.contrastive_margin,
+        batch_size=args.batch_size,
+        device=device,
+    )
+
+    # Load model if resuming
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from {args.resume}")
         try:
-            model = PPO.load(
-                args.resume,
-                env=env,
-                device=device,
-                learning_rate=args.learning_rate,
-                batch_size=args.batch_size,
-                n_steps=args.n_steps,
-                n_epochs=args.n_epochs,
-                clip_range=args.clip_range,
-                vf_coef=args.vf_coef,
-                max_grad_norm=args.max_grad_norm,
-                ent_coef=args.ent_coef,
-                gamma=args.gamma,
-                gae_lambda=args.gae_lambda,
-            )
-            print(f"   ✅ Model loaded with PPO stability fixes")
+            trainer.load_model(args.resume)
+            print(f"   ✅ Model loaded successfully")
         except Exception as e:
             print(f"   ❌ Failed to load model: {e}")
-            print("   🆕 Creating new model instead...")
-            model = None
-    else:
-        model = None
+            print("   🆕 Starting fresh training...")
 
-    if model is None:
-        print("🆕 Creating new PPO model with stability fixes...")
-        model = PPO(
-            FixedStreetFighterPolicy,
-            env,
-            # CRITICAL PPO STABILITY PARAMETERS
-            learning_rate=args.learning_rate,  # Reduced for stability
-            n_steps=args.n_steps,  # Reduced for stability
-            batch_size=args.batch_size,  # Reduced for stability
-            n_epochs=args.n_epochs,  # Moderate for stability
-            gamma=args.gamma,  # Standard
-            gae_lambda=args.gae_lambda,  # Standard
-            clip_range=args.clip_range,  # Reduced for stability
-            ent_coef=args.ent_coef,  # Reduced for stability
-            vf_coef=args.vf_coef,  # CRITICAL: Reduced to prevent value loss explosion
-            max_grad_norm=args.max_grad_norm,  # CRITICAL: Gradient clipping
-            # Additional stability parameters
-            normalize_advantage=True,  # CRITICAL: Normalize advantages
-            clip_range_vf=0.2,  # CRITICAL: Clip value function updates
-            target_kl=0.01,  # CRITICAL: Early stopping for stability
-            verbose=1,
-            device=device,
-        )
-
-        print(f"   ✅ PPO model created with stability fixes")
-        print(f"   🎯 Value coefficient: {args.vf_coef} (prevents explosion)")
-        print(f"   ✂️  Gradient clipping: {args.max_grad_norm} (prevents explosion)")
-        print(f"   📊 Advantage normalization: Enabled")
-        print(f"   🎯 Target KL: 0.01 (early stopping)")
-
-    # Verify model device
-    model_device = next(model.policy.parameters()).device
-    print(f"   ✅ Model on device: {model_device}")
-
-    # Test stability if requested
-    if args.test_stability:
-        print("\n🔬 Testing PPO stability...")
-        stable = verify_gradient_flow(model, env, device)
+    # Verify energy flow if requested
+    if args.test_energy:
+        print("\n🔬 Testing Energy-Based Transformer flow...")
+        stable = verify_energy_flow(verifier, env, device)
         if not stable:
-            print("⚠️  PPO stability issues detected but proceeding with monitoring")
+            print("⚠️  Energy flow issues detected but proceeding with monitoring")
         else:
-            print("✅ PPO stability verified - ready for explosion-free training!")
+            print("✅ Energy flow verified - ready for Energy-Based training!")
 
-    # Create PPO stability callback
-    callback = PPOStabilityCallback(save_freq=50000, save_path="./models/")
+    # Create training callback
+    callback = EnergyTrainingCallback(save_freq=args.save_freq, save_path="./models/")
+    callback.on_training_start()
 
-    print("\n🚀 STARTING PPO TRAINING WITH VALUE LOSS EXPLOSION FIX...")
+    print("\n🚀 STARTING ENERGY-BASED TRANSFORMER TRAINING...")
     print("📊 Real-time monitoring of:")
-    print("   - Value Loss (target: <8.0, prevent 41,650 explosions)")
-    print("   - Gradient Norms (prevent explosions)")
-    print("   - Explained Variance (target: >0.3)")
-    print("   - Clip Fraction (target: 0.1-0.3)")
-    print("   - Feature Dimension Consistency")
-    print("   - Emergency Intervention (if needed)")
-    print("💾 Auto-saving best stability models")
+    print("   - Energy Loss (contrastive learning)")
+    print("   - Thinking Quality (optimization steps)")
+    print("   - Energy Landscape Formation")
+    print("   - Action Diversity & Performance")
+    print("💾 Auto-saving best energy models")
     print()
 
     try:
-        model.learn(
-            total_timesteps=args.total_timesteps,
-            callback=callback,
-            reset_num_timesteps=not args.resume,
-            progress_bar=True,
-        )
+        for episode in range(args.total_episodes):
+            # Run training episode
+            episode_data = run_energy_training_episode(
+                env=env,
+                agent=agent,
+                trainer=trainer,
+                max_steps=18000,
+                train_freq=args.train_freq,
+            )
+
+            # Process episode with callback
+            callback.on_episode_end(episode + 1, episode_data)
+
+            # Save model periodically
+            if (episode + 1) % args.save_freq == 0:
+                feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
+                model_path = (
+                    f"./models/energy_transformer_{episode + 1}_{feature_suffix}.pt"
+                )
+                trainer.save_model(model_path)
 
         # Save final model
         feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
-        final_path = f"./models/final_ppo_stable_{feature_suffix}_model.zip"
-        model.save(final_path)
+        final_path = f"./models/final_energy_transformer_{feature_suffix}.pt"
+        trainer.save_model(final_path)
 
-        print(f"🎉 PPO training with value loss explosion fix completed!")
+        print(f"🎉 Energy-Based Transformer training completed!")
         print(f"💾 Final model saved: {final_path}")
 
-        # Final stability report
-        print(f"\n📊 FINAL PPO STABILITY RESULTS:")
-        if callback.value_losses:
-            final_value_loss = np.mean(callback.value_losses[-20:])
-            print(f"📉 Final Value Loss: {final_value_loss:.2f}")
-            if final_value_loss < 8.0:
-                print(f"   ✅ SUCCESS: Value loss explosion prevented!")
-            else:
-                improvement = (
-                    41650 - final_value_loss
-                )  # Assuming started at explosion level
-                print(f"   📈 IMPROVEMENT: Reduced by {improvement:.1f} points")
+        # Final training report
+        final_stats = callback.get_training_stats()
+        print(f"\n📊 FINAL ENERGY-BASED TRANSFORMER RESULTS:")
+        print(f"⚡ Final Energy Loss: {final_stats['energy_loss']:.6f}")
+        print(
+            f"🏔️  Energy Landscape Quality: {final_stats['energy_landscape_quality']:.1f}/100"
+        )
+        print(f"🤔 Average Thinking Steps: {final_stats['avg_thinking_steps']:.2f}")
+        print(f"📈 Energy Improvement: {final_stats['avg_energy_improvement']:.6f}")
+        print(f"🏆 Best Win Rate: {final_stats['best_win_rate']:.1%}")
+        print(f"🛡️  Explosion Rate: {final_stats['explosion_rate']:.1%}")
 
-        if callback.explained_variances:
-            final_explained_var = np.mean(callback.explained_variances[-20:])
-            print(f"📈 Final Explained Variance: {final_explained_var:.3f}")
-            if final_explained_var > 0.3:
-                print(f"   ✅ SUCCESS: Explained variance target achieved!")
-
-        if callback.clip_fractions:
-            final_clip_frac = np.mean(callback.clip_fractions[-20:])
-            print(f"✂️  Final Clip Fraction: {final_clip_frac:.3f}")
-            if 0.1 <= final_clip_frac <= 0.3:
-                print(f"   ✅ SUCCESS: Clip fraction in healthy range!")
-
-        final_stability = callback.best_stability_score
-        print(f"🏥 Best PPO Stability Score: {final_stability:.0f}/100")
-
-        # Value loss explosion summary
-        print(f"🚨 Value Loss Spikes: {callback.value_loss_spikes}")
-        print(f"💥 Gradient Explosions: {callback.gradient_explosions}")
-
-        if callback.value_loss_spikes == 0:
-            print("🎉 PPO VALUE LOSS EXPLOSION COMPLETELY PREVENTED!")
+        if final_stats["energy_landscape_quality"] >= 70:
+            print("🎉 ENERGY LANDSCAPE LEARNING SUCCESSFUL!")
+        elif final_stats["energy_landscape_quality"] >= 50:
+            print("📈 PARTIAL ENERGY LANDSCAPE LEARNING - Continue training")
         else:
-            print(
-                f"📈 PPO VALUE LOSS EXPLOSIONS REDUCED: {callback.value_loss_spikes} spikes"
-            )
-
-        if final_stability >= 70:
-            print("🎉 PPO TRAINING STABILIZATION SUCCESSFUL!")
-        else:
-            print("📈 PARTIAL PPO STABILIZATION - Continue training for full stability")
+            print("⚠️  ENERGY LANDSCAPE NEEDS MORE TRAINING")
 
     except KeyboardInterrupt:
         print("\n⏹️ Training interrupted by user")
         feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
-        interrupted_path = f"./models/interrupted_ppo_stable_{feature_suffix}_model.zip"
-        model.save(interrupted_path)
+        interrupted_path = (
+            f"./models/interrupted_energy_transformer_{feature_suffix}.pt"
+        )
+        trainer.save_model(interrupted_path)
         print(f"💾 Model saved: {interrupted_path}")
 
     except Exception as e:
@@ -796,22 +937,22 @@ def main():
 
         traceback.print_exc()
 
-        # Check for specific PPO issues
-        if "value" in str(e).lower() and "loss" in str(e).lower():
-            print("🚨 CRITICAL: Value loss explosion still occurring!")
-            print("   - Try reducing learning rate further")
-            print("   - Try reducing value coefficient further")
-            print("   - Try stronger gradient clipping")
+        # Check for specific energy issues
+        if "energy" in str(e).lower() and "explosion" in str(e).lower():
+            print("🚨 CRITICAL: Energy explosion during training!")
+            print("   - Try reducing learning rate")
+            print("   - Try reducing thinking learning rate")
+            print("   - Try increasing contrastive margin")
 
         if "gradient" in str(e).lower() or "nan" in str(e).lower():
-            print("🚨 CRITICAL: Gradient explosion detected!")
-            print("   - Try reducing max_grad_norm")
-            print("   - Try reducing learning rate")
+            print("🚨 CRITICAL: Gradient issues detected!")
+            print("   - Try reducing learning rates")
+            print("   - Try stronger gradient clipping")
 
         feature_suffix = "enhanced" if BAIT_PUNISH_AVAILABLE else "base"
-        error_path = f"./models/error_ppo_stable_{feature_suffix}_model.zip"
+        error_path = f"./models/error_energy_transformer_{feature_suffix}.pt"
         try:
-            model.save(error_path)
+            trainer.save_model(error_path)
             print(f"💾 Model saved: {error_path}")
         except Exception as save_error:
             print(f"❌ Could not save model: {save_error}")
@@ -819,7 +960,7 @@ def main():
 
     finally:
         env.close()
-        print("🔚 PPO training session with value loss explosion fix ended")
+        print("🔚 Energy-Based Transformer training session ended")
 
 
 if __name__ == "__main__":
