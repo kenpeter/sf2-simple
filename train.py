@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 train.py - STABILIZED ENERGY-BASED TRANSFORMER TRAINING FOR STREET FIGHTER
-ENHANCED WITH ZIP SAVING FUNCTIONALITY
 FIXES IMPLEMENTED:
 - Integrates EnergyStabilityManager to prevent landscape collapse.
 - Implements Emergency Reset Protocol (restore best model, purge buffer).
 - Uses quality-controlled ExperienceBuffer.
 - Employs CheckpointManager for robust model saving and restoration.
-- ADDED: Periodic ZIP file creation containing wrapper.py and train.py
+- Focuses on robust checkpointing of model weights.
 - Provides detailed, actionable logging for monitoring training stability.
 """
 
@@ -21,8 +20,6 @@ from datetime import datetime
 from collections import deque
 import logging
 import time
-import zipfile
-import shutil
 from pathlib import Path
 from tqdm import tqdm
 
@@ -45,124 +42,6 @@ from wrapper import (
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
-
-
-def create_zip_package(output_dir="zip_saves", episode=None, win_rate=None):
-    """
-    Create a ZIP package containing wrapper.py and train.py files.
-
-    Args:
-        output_dir: Directory to save ZIP files
-        episode: Current episode number (optional)
-        win_rate: Current win rate (optional)
-
-    Returns:
-        Path to created ZIP file or None if failed
-    """
-    try:
-        # Create output directory
-        zip_dir = Path(output_dir)
-        zip_dir.mkdir(exist_ok=True)
-
-        # Generate filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if episode is not None and win_rate is not None:
-            zip_filename = f"ebt_training_ep{episode}_wr{win_rate:.3f}_{timestamp}.zip"
-        else:
-            zip_filename = f"ebt_training_{timestamp}.zip"
-
-        zip_path = zip_dir / zip_filename
-
-        # Create ZIP file
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Add wrapper.py if it exists
-            if Path("wrapper.py").exists():
-                zipf.write("wrapper.py", "wrapper.py")
-                print(f"   📄 Added wrapper.py to ZIP")
-            else:
-                print(f"   ⚠️  wrapper.py not found, skipping")
-
-            # Add train.py if it exists
-            if Path("train.py").exists():
-                zipf.write("train.py", "train.py")
-                print(f"   📄 Added train.py to ZIP")
-            else:
-                print(f"   ⚠️  train.py not found, skipping")
-
-            # Add any additional Python files that might be relevant
-            for py_file in ["bait_punish_system.py", "utils.py"]:
-                if Path(py_file).exists():
-                    zipf.write(py_file, py_file)
-                    print(f"   📄 Added {py_file} to ZIP")
-
-            # Add a README with training info
-            readme_content = f"""# Stabilized Energy-Based Transformer Training Package
-
-## Training Session Information
-- Timestamp: {timestamp}
-- Episode: {episode if episode is not None else 'N/A'}
-- Win Rate: {win_rate:.3f if win_rate is not None else 'N/A'}
-- Feature Dimension: {VECTOR_FEATURE_DIM}
-- Bait-Punish Available: {BAIT_PUNISH_AVAILABLE}
-
-## Files Included
-- wrapper.py: Complete EBT implementation with stability controls
-- train.py: Training script with emergency protocols
-- Additional support files (if present)
-
-## Usage
-1. Ensure you have all required dependencies installed
-2. Run: python train.py --total-episodes 50000
-3. Monitor training stability through the detailed logging output
-
-## Key Features
-- 🛡️ Energy landscape collapse prevention
-- 🎯 Quality-controlled experience buffer
-- 🚨 Emergency reset protocols
-- 📊 Integrated oscillation tracking
-- 💾 Automatic checkpoint management
-"""
-
-            zipf.writestr("README.md", readme_content)
-            print(f"   📄 Added README.md to ZIP")
-
-        file_size = zip_path.stat().st_size / (1024 * 1024)  # Size in MB
-        print(f"💾 ZIP package created: {zip_filename} ({file_size:.2f} MB)")
-
-        return zip_path
-
-    except Exception as e:
-        print(f"❌ Failed to create ZIP package: {e}")
-        return None
-
-
-def cleanup_old_zips(zip_dir="zip_saves", keep_count=5):
-    """
-    Clean up old ZIP files, keeping only the most recent ones.
-
-    Args:
-        zip_dir: Directory containing ZIP files
-        keep_count: Number of recent ZIP files to keep
-    """
-    try:
-        zip_path = Path(zip_dir)
-        if not zip_path.exists():
-            return
-
-        # Get all ZIP files sorted by modification time (newest first)
-        zip_files = sorted(
-            zip_path.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True
-        )
-
-        # Remove old files
-        for old_zip in zip_files[keep_count:]:
-            old_zip.unlink()
-            print(f"🗑️  Removed old ZIP: {old_zip.name}")
-
-        print(f"📁 Kept {min(len(zip_files), keep_count)} most recent ZIP files")
-
-    except Exception as e:
-        print(f"⚠️  Error cleaning up old ZIPs: {e}")
 
 
 def calculate_energy_metrics(training_stats: dict) -> tuple[float, float, float]:
@@ -387,7 +266,7 @@ def run_training_episode(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Stabilized EBT Training for Street Fighter with ZIP Saving"
+        description="Stabilized EBT Training for Street Fighter"
     )
     parser.add_argument("--total-episodes", type=int, default=50000)
     parser.add_argument(
@@ -395,18 +274,6 @@ def main():
         type=int,
         default=50,
         help="Save best model checkpoint if new best is found, check every X episodes.",
-    )
-    parser.add_argument(
-        "--zip-freq",
-        type=int,
-        default=500,
-        help="Create ZIP package every X episodes.",
-    )
-    parser.add_argument(
-        "--keep-zips",
-        type=int,
-        default=5,
-        help="Number of recent ZIP files to keep.",
     )
     parser.add_argument(
         "--resume", type=str, default=None, help="Path to checkpoint to resume from."
@@ -432,15 +299,12 @@ def main():
     args = parser.parse_args()
 
     print("🛡️ STABILIZED ENERGY-BASED TRANSFORMER TRAINING 🛡️")
-    print("📦 WITH PERIODIC ZIP SAVING ENABLED 📦")
     print("=" * 50)
     print(f"Hyperparameters:")
     print(f"  - Initial LR: {args.lr}")
     print(f"  - Initial Thinking LR: {args.thinking_lr}")
     print(f"  - Contrastive Margin: {args.contrastive_margin}")
     print(f"  - Batch Size: {args.batch_size}")
-    print(f"  - ZIP Frequency: Every {args.zip_freq} episodes")
-    print(f"  - Keep ZIPs: {args.keep_zips} most recent")
     print(
         f"Feature System: {'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'} ({VECTOR_FEATURE_DIM} dims)"
     )
@@ -482,7 +346,7 @@ def main():
     start_episode = 0
     if args.resume and os.path.exists(args.resume):
         print(f"📂 Resuming from checkpoint: {args.resume}")
-        data = checkpoint_manager.load_checkpoint(args.resume, verifier, agent)
+        data = checkpoint_manager.load_checkpoint(Path(args.resume), verifier, agent)
         if data:
             start_episode = data.get("episode", 0)
             print(f"   ✅ Resumed from episode {start_episode}")
@@ -495,10 +359,6 @@ def main():
         print("🚨 CRITICAL: Energy flow verification failed. Exiting.")
         return
     print("   ✅ Energy flow is STABLE.")
-
-    # Create initial ZIP package
-    print("\n📦 Creating initial ZIP package...")
-    create_zip_package(episode=start_episode, win_rate=0.0)
 
     # Main Training Loop
     print("\n🚀 Starting Stabilized Training...")
@@ -550,10 +410,6 @@ def main():
             trainer.set_learning_rate(new_lr)
             agent.current_thinking_lr = new_thinking_lr
 
-            # 4. Create emergency ZIP package
-            print("📦 Creating emergency ZIP package...")
-            create_zip_package(episode=episode, win_rate=win_rate)
-
         # Checkpoint saving logic
         if episode % args.save_freq == 0:
             current_win_rate = safe_mean(list(stability_manager.win_rate_window), 0.0)
@@ -561,19 +417,6 @@ def main():
                 checkpoint_manager.save_checkpoint(
                     verifier, agent, episode, current_win_rate, energy_quality
                 )
-
-        # 📦 ZIP Package Creation Logic 📦
-        if episode % args.zip_freq == 0 and episode > 0:
-            print(f"\n📦 Creating ZIP package for episode {episode}...")
-            current_win_rate = safe_mean(list(stability_manager.win_rate_window), 0.0)
-            zip_path = create_zip_package(episode=episode, win_rate=current_win_rate)
-
-            if zip_path:
-                # Clean up old ZIP files
-                cleanup_old_zips(keep_count=args.keep_zips)
-                print(f"   ✅ ZIP package saved and old files cleaned up")
-            else:
-                print(f"   ❌ Failed to create ZIP package")
 
         # Check for recovery
         stability_manager.recovery_check(
@@ -591,14 +434,8 @@ def main():
             }
         )
 
-    # Create final ZIP package
-    print("\n📦 Creating final ZIP package...")
-    final_win_rate = safe_mean(list(stability_manager.win_rate_window), 0.0)
-    create_zip_package(episode=args.total_episodes, win_rate=final_win_rate)
-    cleanup_old_zips(keep_count=args.keep_zips)
-
     print("\n🎉 Training finished!")
-    print(f"📦 All ZIP packages saved in 'zip_saves' directory")
+    print(f"💾 Checkpoints saved in 'checkpoints' directory.")
     env.close()
 
 
