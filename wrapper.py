@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-FIXED ENERGY-BASED TRANSFORMER FOR STREET FIGHTER
-FIXES:
-1. Energy Landscape Collapse Prevention
-2. Adaptive Learning Rate System
-3. Emergency Reset Protocol
-4. Experience Quality Control
-5. Thinking Process Stabilization
-6. Energy Separation Monitoring
+SIMPLIFIED ENERGY-BASED TRANSFORMER FOR STREET FIGHTER
+REMOVED:
+- Oscillation tracking system
+- Bait-punish system
+- Complex movement analysis
+KEPT:
+- Energy Landscape Collapse Prevention
+- Adaptive Learning Rate System
+- Emergency Reset Protocol
+- Experience Quality Control
+- Thinking Process Stabilization
 """
 
 import cv2
@@ -28,19 +31,6 @@ import json
 import pickle
 from pathlib import Path
 
-# Import the stabilized bait-punish system
-try:
-    from bait_punish_system import (
-        SimpleBlockPunishDetector,
-        integrate_bait_punish_system,
-        AdaptiveRewardShaper,
-    )
-
-    BAIT_PUNISH_AVAILABLE = True
-except ImportError:
-    BAIT_PUNISH_AVAILABLE = False
-    print("⚠️  Bait-punish system not available, running without it")
-
 # --- FIX for TypeError in retro.make ---
 _original_retro_make = retro.make
 
@@ -57,7 +47,7 @@ retro.make = _patched_retro_make
 os.makedirs("logs", exist_ok=True)
 os.makedirs("checkpoints", exist_ok=True)
 log_filename = (
-    f'logs/fixed_energy_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    f'logs/simplified_energy_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 logging.basicConfig(
     level=logging.WARNING,
@@ -71,23 +61,15 @@ MAX_HEALTH = 176
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 
-# Dynamic feature dimension
-BASE_VECTOR_FEATURE_DIM = 45
-ENHANCED_VECTOR_FEATURE_DIM = 52
-VECTOR_FEATURE_DIM = (
-    ENHANCED_VECTOR_FEATURE_DIM if BAIT_PUNISH_AVAILABLE else BASE_VECTOR_FEATURE_DIM
-)
+# Simplified feature dimension
+VECTOR_FEATURE_DIM = 32
 
-print(f"🧠 FIXED ENERGY-BASED TRANSFORMER Configuration:")
-print(f"   - Base features: {BASE_VECTOR_FEATURE_DIM}")
-print(f"   - Enhanced features: {ENHANCED_VECTOR_FEATURE_DIM}")
-print(
-    f"   - Current mode: {VECTOR_FEATURE_DIM} ({'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'})"
-)
-print(f"   - Training paradigm: STABILIZED Energy-Based")
+print(f"🧠 SIMPLIFIED ENERGY-BASED TRANSFORMER Configuration:")
+print(f"   - Features: {VECTOR_FEATURE_DIM}")
+print(f"   - Training paradigm: SIMPLIFIED Energy-Based")
 
 
-# Enhanced safe operations (unchanged but critical)
+# Enhanced safe operations
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
     numerator = ensure_scalar(numerator, default)
@@ -270,7 +252,7 @@ def ensure_feature_dimension(features, target_dim):
 
 class EnergyStabilityManager:
     """
-    🛡️ CRITICAL FIX: Energy Landscape Stability Manager
+    🛡️ Energy Landscape Stability Manager
     Prevents energy collapse and manages adaptive learning.
     """
 
@@ -305,9 +287,6 @@ class EnergyStabilityManager:
         self.emergency_mode = False
 
         print(f"🛡️  EnergyStabilityManager initialized")
-        print(f"   - Initial LR: {initial_lr}")
-        print(f"   - Thinking LR: {thinking_lr}")
-        print(f"   - Emergency thresholds configured")
 
     def update_metrics(
         self, win_rate, energy_quality, energy_separation, early_stop_rate
@@ -400,7 +379,7 @@ class EnergyStabilityManager:
 
 class ExperienceBuffer:
     """
-    🎯 CRITICAL FIX: Quality-Controlled Experience Buffer
+    🎯 Quality-Controlled Experience Buffer
     Only stores high-quality experiences for training.
     """
 
@@ -415,8 +394,6 @@ class ExperienceBuffer:
         self.total_rejected = 0
 
         print(f"🎯 ExperienceBuffer initialized")
-        print(f"   - Capacity: {capacity}")
-        print(f"   - Quality threshold: {quality_threshold}")
 
     def add_experience(self, experience, quality_score):
         """Add experience only if it meets quality threshold."""
@@ -500,8 +477,8 @@ class ExperienceBuffer:
         }
 
 
-class StrategicFeatureTracker:
-    """Enhanced Strategic Feature Tracker with integrated oscillation tracking."""
+class SimplifiedFeatureTracker:
+    """Simplified Strategic Feature Tracker without oscillation/bait systems."""
 
     def __init__(self, history_length=8):
         self.history_length = history_length
@@ -519,29 +496,6 @@ class StrategicFeatureTracker:
         self.opponent_damage_dealt_history = deque(maxlen=history_length)
         self.button_features_history = deque(maxlen=history_length)
         self.previous_button_features = np.zeros(12, dtype=np.float32)
-
-        # INTEGRATED OSCILLATION TRACKING
-        self.oscillation_history_length = 16
-        self.player_x_history = deque(maxlen=self.oscillation_history_length)
-        self.opponent_x_history = deque(maxlen=self.oscillation_history_length)
-        self.player_velocity_history = deque(maxlen=self.oscillation_history_length)
-        self.opponent_velocity_history = deque(maxlen=self.oscillation_history_length)
-        self.movement_threshold = 0.3
-        self.direction_change_threshold = 0.1
-        self.velocity_smoothing_factor = 0.3
-        self.direction_change_timestamps = deque(maxlen=1800)
-        self.player_direction_changes = 0
-        self.opponent_direction_changes = 0
-        self.player_oscillation_amplitude = 0.0
-        self.opponent_oscillation_amplitude = 0.0
-        self.space_control_score = 0.0
-        self.aggressive_forward_count = 0
-        self.defensive_backward_count = 0
-        self.neutral_dance_count = 0
-        self.prev_player_x = None
-        self.prev_opponent_x = None
-        self.prev_player_velocity = 0.0
-        self.prev_opponent_velocity = 0.0
 
         # Combat metrics
         self.close_combat_count = 0
@@ -561,27 +515,17 @@ class StrategicFeatureTracker:
         self.OPTIMAL_SPACING_MAX = 98
         self.COMBO_TIMEOUT_FRAMES = 60
         self.MIN_SCORE_INCREASE_FOR_HIT = 50
-        self.CLOSE_RANGE = 45
-        self.MID_RANGE = 80
-        self.FAR_RANGE = 125
 
         # Previous states
         self.prev_player_health = None
         self.prev_opponent_health = None
         self.prev_score = None
 
-        # Bait-punish integration
-        self._bait_punish_integrated = False
-        self.current_feature_dim = VECTOR_FEATURE_DIM
-
-        print(
-            f"🔧 StrategicFeatureTracker initialized with INTEGRATED oscillation tracking"
-        )
-        print(f"   - Core features: {self.current_feature_dim}")
+        print(f"🔧 SimplifiedFeatureTracker initialized")
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
         """Normalize features with consistent dimension handling."""
-        features = ensure_feature_dimension(features, self.current_feature_dim)
+        features = ensure_feature_dimension(features, VECTOR_FEATURE_DIM)
 
         nan_mask = ~np.isfinite(features)
         if np.any(nan_mask):
@@ -589,20 +533,8 @@ class StrategicFeatureTracker:
             features = sanitize_array(features, 0.0)
 
         if self.feature_rolling_mean is None:
-            self.feature_rolling_mean = np.zeros(
-                self.current_feature_dim, dtype=np.float32
-            )
-            self.feature_rolling_std = np.ones(
-                self.current_feature_dim, dtype=np.float32
-            )
-
-        if len(self.feature_rolling_mean) != self.current_feature_dim:
-            self.feature_rolling_mean = np.zeros(
-                self.current_feature_dim, dtype=np.float32
-            )
-            self.feature_rolling_std = np.ones(
-                self.current_feature_dim, dtype=np.float32
-            )
+            self.feature_rolling_mean = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+            self.feature_rolling_std = np.ones(VECTOR_FEATURE_DIM, dtype=np.float32)
 
         self.feature_rolling_mean = (
             self.normalization_alpha * self.feature_rolling_mean
@@ -616,251 +548,18 @@ class StrategicFeatureTracker:
         safe_std = np.maximum(self.feature_rolling_std, 1e-6)
 
         try:
-            if isinstance(features, np.ndarray) and isinstance(
-                self.feature_rolling_mean, np.ndarray
-            ):
-                normalized = (features - self.feature_rolling_mean) / safe_std
-                normalized = np.where(np.isfinite(normalized), normalized, 0.0)
-            else:
-                normalized = safe_divide(
-                    features - self.feature_rolling_mean, safe_std, 0.0
-                )
-                if not isinstance(normalized, np.ndarray):
-                    normalized = np.array([normalized], dtype=np.float32)
+            normalized = (features - self.feature_rolling_mean) / safe_std
+            normalized = np.where(np.isfinite(normalized), normalized, 0.0)
         except Exception as e:
-            print(f"⚠️  Normalization division error: {e}, using zeros")
-            normalized = np.zeros(self.current_feature_dim, dtype=np.float32)
+            print(f"⚠️  Normalization error: {e}, using zeros")
+            normalized = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
 
-        if isinstance(normalized, np.ndarray):
-            normalized = np.clip(normalized, -3.0, 3.0)
-        else:
-            normalized = np.clip(normalized, -3.0, 3.0)
-
+        normalized = np.clip(normalized, -3.0, 3.0)
         normalized = sanitize_array(normalized, 0.0)
-        normalized = ensure_feature_dimension(normalized, self.current_feature_dim)
         return normalized.astype(np.float32)
 
-    def _update_oscillation_analysis(
-        self, player_x: float, opponent_x: float, player_attacking: bool = False
-    ):
-        """INTEGRATED oscillation analysis."""
-        player_x = ensure_scalar(player_x, SCREEN_WIDTH / 2)
-        opponent_x = ensure_scalar(opponent_x, SCREEN_WIDTH / 2)
-        player_attacking = safe_bool_check(player_attacking)
-
-        # Calculate velocities
-        player_velocity, opponent_velocity = 0.0, 0.0
-
-        if self.prev_player_x is not None:
-            raw_velocity = player_x - ensure_scalar(self.prev_player_x, player_x)
-            if np.isfinite(raw_velocity):
-                player_velocity = (
-                    self.velocity_smoothing_factor * raw_velocity
-                    + (1 - self.velocity_smoothing_factor) * self.prev_player_velocity
-                )
-                if not np.isfinite(player_velocity):
-                    player_velocity = 0.0
-
-        if self.prev_opponent_x is not None:
-            raw_velocity = opponent_x - ensure_scalar(self.prev_opponent_x, opponent_x)
-            if np.isfinite(raw_velocity):
-                opponent_velocity = (
-                    self.velocity_smoothing_factor * raw_velocity
-                    + (1 - self.velocity_smoothing_factor) * self.prev_opponent_velocity
-                )
-                if not np.isfinite(opponent_velocity):
-                    opponent_velocity = 0.0
-
-        # Update histories
-        self.player_x_history.append(player_x)
-        self.opponent_x_history.append(opponent_x)
-        self.player_velocity_history.append(player_velocity)
-        self.opponent_velocity_history.append(opponent_velocity)
-
-        # Calculate distance
-        distance = abs(player_x - opponent_x)
-        if not np.isfinite(distance):
-            distance = 80.0
-
-        # Movement pattern analysis
-        movement_analysis = self._analyze_movement_patterns(
-            player_x,
-            opponent_x,
-            player_velocity,
-            opponent_velocity,
-            distance,
-            player_attacking,
-        )
-
-        # Update previous states
-        self.prev_player_x, self.prev_opponent_x = player_x, opponent_x
-        self.prev_player_velocity, self.prev_opponent_velocity = (
-            player_velocity,
-            opponent_velocity,
-        )
-
-        return movement_analysis
-
-    def _analyze_movement_patterns(
-        self,
-        player_x,
-        opponent_x,
-        player_velocity,
-        opponent_velocity,
-        distance,
-        player_attacking,
-    ):
-        """Analyze movement patterns for strategic insights."""
-        player_moving_forward = (
-            safe_comparison(player_x, opponent_x, "<") and player_velocity > 0.5
-        ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity < -0.5)
-
-        player_moving_backward = (
-            safe_comparison(player_x, opponent_x, "<") and player_velocity < -0.5
-        ) or (safe_comparison(player_x, opponent_x, ">") and player_velocity > 0.5)
-
-        # Update space control
-        self.space_control_score = self._calculate_space_control(
-            player_x, opponent_x, player_velocity, opponent_velocity, distance
-        )
-
-        # Count movement types
-        if player_moving_forward and player_attacking:
-            self.aggressive_forward_count += 1
-        elif player_moving_backward:
-            self.defensive_backward_count += 1
-        else:
-            self.neutral_dance_count += 1
-
-        return {
-            "player_moving_forward": player_moving_forward,
-            "player_moving_backward": player_moving_backward,
-            "distance": distance,
-            "space_control_score": self.space_control_score,
-            "player_velocity": player_velocity,
-            "opponent_velocity": opponent_velocity,
-        }
-
-    def _calculate_space_control(
-        self, player_x, opponent_x, player_velocity, opponent_velocity, distance
-    ):
-        """Calculate space control score."""
-        screen_center = SCREEN_WIDTH / 2
-        player_center_dist = abs(player_x - screen_center)
-        opponent_center_dist = abs(opponent_x - screen_center)
-        center_control = safe_divide(
-            opponent_center_dist - player_center_dist, SCREEN_WIDTH / 2, 0.0
-        )
-
-        # Add velocity component
-        velocity_control = 0.0
-        if abs(player_velocity) > 0.1 or abs(opponent_velocity) > 0.1:
-            if player_x < screen_center and player_velocity > 0:
-                velocity_control += 0.2
-            elif player_x > screen_center and player_velocity < 0:
-                velocity_control += 0.2
-            if opponent_x < screen_center and opponent_velocity < 0:
-                velocity_control += 0.1
-            elif opponent_x > screen_center and opponent_velocity > 0:
-                velocity_control += 0.1
-
-        total_control = center_control * 0.7 + velocity_control * 0.3
-        return np.clip(total_control, -1.0, 1.0) if np.isfinite(total_control) else 0.0
-
-    def _get_oscillation_features(self) -> np.ndarray:
-        """Get exactly 12 oscillation features for compatibility."""
-        features = np.zeros(12, dtype=np.float32)
-
-        try:
-            # Feature 0: Space control score
-            features[0] = np.clip(self.space_control_score, -1.0, 1.0)
-
-            # Feature 1: Distance category (close/mid/far)
-            if len(self.player_x_history) > 0 and len(self.opponent_x_history) > 0:
-                current_distance = abs(
-                    self.player_x_history[-1] - self.opponent_x_history[-1]
-                )
-                if current_distance <= self.CLOSE_RANGE:
-                    features[1] = 1.0  # Close range
-                elif current_distance <= self.MID_RANGE:
-                    features[1] = 0.5  # Mid range
-                else:
-                    features[1] = 0.0  # Far range
-
-            # Feature 2: Player velocity (normalized)
-            if len(self.player_velocity_history) > 0:
-                features[2] = np.clip(
-                    self.player_velocity_history[-1] / 10.0, -1.0, 1.0
-                )
-
-            # Feature 3: Opponent velocity (normalized)
-            if len(self.opponent_velocity_history) > 0:
-                features[3] = np.clip(
-                    self.opponent_velocity_history[-1] / 10.0, -1.0, 1.0
-                )
-
-            # Feature 4: Movement consistency (how stable is movement)
-            if len(self.player_velocity_history) >= 5:
-                recent_velocities = list(self.player_velocity_history)[-5:]
-                velocity_std = safe_std(recent_velocities, 1.0)
-                features[4] = np.clip(1.0 / (1.0 + velocity_std), 0.0, 1.0)
-
-            # Feature 5: Aggressive forward ratio
-            total_movement_frames = (
-                self.aggressive_forward_count
-                + self.defensive_backward_count
-                + self.neutral_dance_count
-            )
-            if total_movement_frames > 0:
-                features[5] = self.aggressive_forward_count / total_movement_frames
-
-            # Feature 6: Defensive backward ratio
-            if total_movement_frames > 0:
-                features[6] = self.defensive_backward_count / total_movement_frames
-
-            # Feature 7: Neutral dance ratio
-            if total_movement_frames > 0:
-                features[7] = self.neutral_dance_count / total_movement_frames
-
-            # Feature 8: Position advantage (closer to center is better)
-            if len(self.player_x_history) > 0:
-                player_center_dist = abs(self.player_x_history[-1] - SCREEN_WIDTH / 2)
-                features[8] = np.clip(
-                    1.0 - (player_center_dist / (SCREEN_WIDTH / 2)), 0.0, 1.0
-                )
-
-            # Feature 9: Relative position (who's on the left/right)
-            if len(self.player_x_history) > 0 and len(self.opponent_x_history) > 0:
-                features[9] = (
-                    1.0
-                    if self.player_x_history[-1] < self.opponent_x_history[-1]
-                    else -1.0
-                )
-
-            # Feature 10: Movement trend (recent direction)
-            if len(self.player_velocity_history) >= 3:
-                recent_velocities = list(self.player_velocity_history)[-3:]
-                avg_velocity = safe_mean(recent_velocities, 0.0)
-                features[10] = np.clip(avg_velocity / 5.0, -1.0, 1.0)
-
-            # Feature 11: Distance change trend
-            if len(self.player_x_history) >= 3 and len(self.opponent_x_history) >= 3:
-                distances = []
-                for i in range(-3, 0):
-                    dist = abs(self.player_x_history[i] - self.opponent_x_history[i])
-                    distances.append(dist)
-                if len(distances) >= 2:
-                    distance_change = distances[-1] - distances[0]
-                    features[11] = np.clip(distance_change / 50.0, -1.0, 1.0)
-
-        except Exception as e:
-            print(f"⚠️  Error calculating oscillation features: {e}")
-            features = np.zeros(12, dtype=np.float32)
-
-        return features.astype(np.float32)
-
     def update(self, info: Dict, button_features: np.ndarray) -> np.ndarray:
-        """Main update function with integrated oscillation tracking."""
+        """Main update function with simplified features."""
         self.current_frame += 1
 
         try:
@@ -934,70 +633,33 @@ class StrategicFeatureTracker:
             self.player_damage_dealt_history.append(player_damage)
             self.opponent_damage_dealt_history.append(opponent_damage)
 
-            # Player attacking detection
-            try:
-                attack_buttons = button_features[[0, 1, 8, 9, 10, 11]]
-                player_attacking = safe_bool_check(np.any(attack_buttons > 0.5))
-            except:
-                player_attacking = False
-
-            # INTEGRATED OSCILLATION ANALYSIS
-            oscillation_analysis = self._update_oscillation_analysis(
-                player_x, opponent_x, player_attacking
-            )
-
             # Close combat tracking
             self.total_frames += 1
-            distance = oscillation_analysis["distance"]
+            distance = abs(player_x - opponent_x)
             if np.isfinite(distance) and safe_comparison(
                 distance, self.CLOSE_DISTANCE, "<="
             ):
                 self.close_combat_count += 1
 
-            # Calculate enhanced features with integrated oscillations
-            features = self._calculate_enhanced_features(
-                info, distance, oscillation_analysis
-            )
-            features = ensure_feature_dimension(features, self.current_feature_dim)
+            # Calculate simplified features
+            features = self._calculate_simplified_features(info, distance)
+            features = ensure_feature_dimension(features, VECTOR_FEATURE_DIM)
             features = self._normalize_features(features)
-            features = ensure_feature_dimension(features, self.current_feature_dim)
 
             # Update previous states
             self.prev_player_health = player_health
             self.prev_opponent_health = opponent_health
             self.prev_score = score
 
-            # Bait-punish integration
-            if BAIT_PUNISH_AVAILABLE and not self._bait_punish_integrated:
-                try:
-                    integrate_bait_punish_system(self)
-                    self._bait_punish_integrated = True
-                    self.current_feature_dim = ENHANCED_VECTOR_FEATURE_DIM
-                    self.feature_rolling_mean = None
-                    self.feature_rolling_std = None
-                    print(
-                        f"✅ Bait-Punish system integrated, features expanded to {self.current_feature_dim}"
-                    )
-                except Exception as e:
-                    print(
-                        f"⚠️  Bait-Punish integration failed: {e}, continuing without it"
-                    )
-                    globals()["BAIT_PUNISH_AVAILABLE"] = False
-
             return features
 
         except Exception as e:
-            print(f"⚠️  Critical error in StrategicFeatureTracker.update(): {e}")
-            import traceback
+            print(f"⚠️  Critical error in SimplifiedFeatureTracker.update(): {e}")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
 
-            traceback.print_exc()
-            return np.zeros(self.current_feature_dim, dtype=np.float32)
-
-    def _calculate_enhanced_features(
-        self, info, distance, oscillation_analysis
-    ) -> np.ndarray:
-        """Calculate features with dimension awareness and integrated oscillations."""
-        features = np.zeros(BASE_VECTOR_FEATURE_DIM, dtype=np.float32)
+    def _calculate_simplified_features(self, info, distance) -> np.ndarray:
+        """Calculate simplified features without oscillation/bait systems."""
+        features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
 
         try:
             player_health = ensure_scalar(info.get("agent_hp", MAX_HEALTH), MAX_HEALTH)
@@ -1013,7 +675,7 @@ class StrategicFeatureTracker:
 
             distance = distance if np.isfinite(distance) else 80.0
 
-            # Calculate base features (0-44)
+            # Basic health features (0-2)
             features[0] = (
                 1.0
                 if safe_comparison(player_health, self.DANGER_ZONE_HEALTH, "<=")
@@ -1031,13 +693,12 @@ class StrategicFeatureTracker:
             else:
                 features[2] = 3.0
 
-            features[3] = (
-                self._calculate_momentum(self.player_health_history)
-                + self._calculate_momentum(self.opponent_health_history)
-            ) / 2.0
+            # Combat momentum (3-5)
+            features[3] = self._calculate_momentum(self.player_health_history)
             features[4] = self._calculate_momentum(self.player_damage_dealt_history)
             features[5] = self._calculate_momentum(self.opponent_damage_dealt_history)
 
+            # Position features (6-10)
             features[6] = np.clip(
                 min(player_x, SCREEN_WIDTH - player_x) / (SCREEN_WIDTH / 2), 0.0, 1.0
             )
@@ -1046,7 +707,6 @@ class StrategicFeatureTracker:
                 0.0,
                 1.0,
             )
-
             features[8] = (
                 1.0
                 if safe_comparison(
@@ -1068,114 +728,59 @@ class StrategicFeatureTracker:
             opponent_center_dist = abs(opponent_x - SCREEN_WIDTH / 2)
             features[10] = np.sign(opponent_center_dist - player_center_dist)
 
-            player_y = ensure_scalar(
-                info.get("agent_y", SCREEN_HEIGHT / 2), SCREEN_HEIGHT / 2
-            )
-            opponent_y = ensure_scalar(
-                info.get("enemy_y", SCREEN_HEIGHT / 2), SCREEN_HEIGHT / 2
-            )
-
-            y_diff = (player_y - opponent_y) / (SCREEN_HEIGHT / 2)
-            features[11] = np.clip(y_diff, -1.0, 1.0) if np.isfinite(y_diff) else 0.0
-
-            space_control = oscillation_analysis.get("space_control_score", 0.0)
-            features[12] = space_control if np.isfinite(space_control) else 0.0
-
+            # Distance and positioning (11-13)
+            features[11] = np.clip(distance / 200.0, 0.0, 1.0)
             optimal_spacing = safe_comparison(
                 distance, self.OPTIMAL_SPACING_MIN, ">="
             ) and safe_comparison(distance, self.OPTIMAL_SPACING_MAX, "<=")
-            features[13] = 1.0 if optimal_spacing else 0.0
-
-            player_forward = oscillation_analysis.get("player_moving_forward", False)
-            player_backward = oscillation_analysis.get("player_moving_backward", False)
-            features[14] = 1.0 if player_forward else (-1.0 if player_backward else 0.0)
-            features[15] = 1.0 if player_backward else 0.0
-
-            features[16] = safe_divide(
+            features[12] = 1.0 if optimal_spacing else 0.0
+            features[13] = safe_divide(
                 self.close_combat_count, max(1, self.total_frames), 0.0
             )
-            features[17] = self._calculate_enhanced_score_momentum()
 
+            # Score and combo features (14-16)
+            features[14] = self._calculate_enhanced_score_momentum()
+            features[15] = min(self.combo_counter / 10.0, 1.0)
+            features[16] = min(self.max_combo_this_round / 10.0, 1.0)
+
+            # Game state features (17-19)
             agent_status = ensure_scalar(info.get("agent_status", 0), 0)
             enemy_status = ensure_scalar(info.get("enemy_status", 0), 0)
-
             status_diff = (agent_status - enemy_status) / 100.0
-            features[18] = np.clip(status_diff, -1.0, 1.0)
+            features[17] = np.clip(status_diff, -1.0, 1.0)
 
             agent_victories = ensure_scalar(info.get("agent_victories", 0), 0)
             enemy_victories = ensure_scalar(info.get("enemy_victories", 0), 0)
-            features[19] = (
+            features[18] = (
                 min(agent_victories / 10.0, 1.0)
                 if np.isfinite(agent_victories)
                 else 0.0
             )
-            features[20] = (
+            features[19] = (
                 min(enemy_victories / 10.0, 1.0)
                 if np.isfinite(enemy_victories)
                 else 0.0
             )
 
-            # INTEGRATED Oscillation features (21-32)
-            try:
-                oscillation_features = self._get_oscillation_features()
-                if (
-                    isinstance(oscillation_features, np.ndarray)
-                    and len(oscillation_features) == 12
-                ):
-                    features[21:33] = oscillation_features
-                else:
-                    features[21:33] = np.zeros(12, dtype=np.float32)
-            except Exception as e:
-                print(f"⚠️  Error getting integrated oscillation features: {e}")
-                features[21:33] = np.zeros(12, dtype=np.float32)
-
-            # Button features (33-44)
+            # Button features (20-31)
             try:
                 if len(self.button_features_history) > 0:
                     button_hist = self.button_features_history[-1]
                     if isinstance(button_hist, np.ndarray) and len(button_hist) == 12:
-                        features[33:45] = button_hist
+                        features[20:32] = button_hist
                     else:
-                        features[33:45] = np.zeros(12, dtype=np.float32)
+                        features[20:32] = np.zeros(12, dtype=np.float32)
                 else:
-                    features[33:45] = np.zeros(12, dtype=np.float32)
+                    features[20:32] = np.zeros(12, dtype=np.float32)
             except Exception as e:
-                features[33:45] = np.zeros(12, dtype=np.float32)
+                features[20:32] = np.zeros(12, dtype=np.float32)
 
             features = sanitize_array(features, 0.0)
-
-            # Handle bait-punish features expansion properly
-            if (
-                BAIT_PUNISH_AVAILABLE
-                and self._bait_punish_integrated
-                and self.current_feature_dim == ENHANCED_VECTOR_FEATURE_DIM
-            ):
-                enhanced_features = np.zeros(
-                    ENHANCED_VECTOR_FEATURE_DIM, dtype=np.float32
-                )
-                enhanced_features[:BASE_VECTOR_FEATURE_DIM] = features
-
-                try:
-                    bait_punish_features = getattr(
-                        self, "last_bait_punish_features", np.zeros(7, dtype=np.float32)
-                    )
-                    if (
-                        isinstance(bait_punish_features, np.ndarray)
-                        and len(bait_punish_features) == 7
-                    ):
-                        enhanced_features[45:52] = bait_punish_features
-                    else:
-                        enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
-                except Exception as e:
-                    enhanced_features[45:52] = np.zeros(7, dtype=np.float32)
-
-                return enhanced_features
-            else:
-                return features
+            return features
 
         except Exception as e:
-            print(f"⚠️  Error in _calculate_enhanced_features: {e}")
-            return np.zeros(self.current_feature_dim, dtype=np.float32)
+            print(f"⚠️  Error in _calculate_simplified_features: {e}")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
 
     def _calculate_momentum(self, history):
         if len(history) < 2:
@@ -1206,49 +811,12 @@ class StrategicFeatureTracker:
         return np.clip(momentum, -2.0, 5.0) if np.isfinite(momentum) else 0.0
 
     def get_combo_stats(self) -> Dict:
-        """Get combo stats including integrated oscillation stats."""
-        combo_stats = {
+        """Get simplified combo stats."""
+        return {
             "current_combo": self.combo_counter,
             "max_combo_this_round": self.max_combo_this_round,
-            "space_control_score": self.space_control_score,
             "frame_count": self.current_frame,
-            "aggressive_forward_count": self.aggressive_forward_count,
-            "defensive_backward_count": self.defensive_backward_count,
-            "neutral_dance_count": self.neutral_dance_count,
-            "total_movement_analysis": {
-                "aggressive_ratio": safe_divide(
-                    self.aggressive_forward_count,
-                    max(
-                        1,
-                        self.aggressive_forward_count
-                        + self.defensive_backward_count
-                        + self.neutral_dance_count,
-                    ),
-                    0.0,
-                ),
-                "defensive_ratio": safe_divide(
-                    self.defensive_backward_count,
-                    max(
-                        1,
-                        self.aggressive_forward_count
-                        + self.defensive_backward_count
-                        + self.neutral_dance_count,
-                    ),
-                    0.0,
-                ),
-                "neutral_ratio": safe_divide(
-                    self.neutral_dance_count,
-                    max(
-                        1,
-                        self.aggressive_forward_count
-                        + self.defensive_backward_count
-                        + self.neutral_dance_count,
-                    ),
-                    0.0,
-                ),
-            },
         }
-        return combo_stats
 
 
 class StreetFighterDiscreteActions:
@@ -1344,7 +912,6 @@ class StreetFighterDiscreteActions:
 class EnergyBasedStreetFighterCNN(nn.Module):
     """
     🛡️ STABILIZED CNN feature extractor for Energy-Based Transformer.
-    Enhanced with stability controls and energy monitoring.
     """
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
@@ -1361,16 +928,16 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         print(f"   - Vector sequence: {seq_length} x {vector_feature_count}")
         print(f"   - Output features: {features_dim}")
 
-        # 🛡️ ULTRA-CONSERVATIVE CNN architecture for maximum stability
+        # Ultra-conservative CNN architecture
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(32),
-            nn.Dropout2d(0.05),  # Reduced dropout
+            nn.Dropout2d(0.05),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(64),
-            nn.Dropout2d(0.05),  # Reduced dropout
+            nn.Dropout2d(0.05),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
@@ -1385,31 +952,29 @@ class EnergyBasedStreetFighterCNN(nn.Module):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # 🛡️ STABILIZED vector processing
+        # Stabilized vector processing
         self.vector_embed = nn.Linear(vector_feature_count, 64)
         self.vector_norm = nn.LayerNorm(64)
-        self.vector_dropout = nn.Dropout(0.1)  # Reduced dropout
-        self.vector_gru = nn.GRU(
-            64, 64, batch_first=True, dropout=0.05
-        )  # Reduced dropout
+        self.vector_dropout = nn.Dropout(0.1)
+        self.vector_gru = nn.GRU(64, 64, batch_first=True, dropout=0.05)
         self.vector_final = nn.Sequential(
             nn.Linear(64, 32),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.05),  # Reduced dropout
+            nn.Dropout(0.05),
         )
 
-        # 🛡️ ULTRA-STABLE fusion layer
+        # Ultra-stable fusion layer
         fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_size, 512),
             nn.ReLU(inplace=True),
             nn.LayerNorm(512),
-            nn.Dropout(0.1),  # Reduced dropout
+            nn.Dropout(0.1),
             nn.Linear(512, features_dim),
             nn.ReLU(inplace=True),
         )
 
-        # 🛡️ ULTRA-CONSERVATIVE weight initialization
+        # Ultra-conservative weight initialization
         self.apply(self._init_weights_ultra_conservative)
 
         # Energy monitoring
@@ -1424,15 +989,15 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         print(f"   ✅ STABILIZED Energy-Based Feature Extractor initialized")
 
     def _init_weights_ultra_conservative(self, m):
-        """🛡️ ULTRA-conservative weight initialization for maximum stability."""
+        """Ultra-conservative weight initialization for maximum stability."""
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if hasattr(m.weight, "data"):
-                m.weight.data *= 0.1  # VERY reduced scale for maximum stability
+                m.weight.data *= 0.1
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.1)  # VERY reduced gain
+            nn.init.xavier_uniform_(m.weight, gain=0.1)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
@@ -1441,7 +1006,7 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         elif isinstance(m, nn.GRU):
             for name, param in m.named_parameters():
                 if "weight" in name:
-                    nn.init.xavier_uniform_(param, gain=0.1)  # VERY reduced gain
+                    nn.init.xavier_uniform_(param, gain=0.1)
                 elif "bias" in name:
                     nn.init.constant_(param, 0)
 
@@ -1455,7 +1020,7 @@ class EnergyBasedStreetFighterCNN(nn.Module):
 
         self.activation_monitor["forward_count"] += 1
 
-        # 🛡️ ENHANCED NaN safety
+        # Enhanced NaN safety
         visual_nan_mask = ~torch.isfinite(visual_obs)
         vector_nan_mask = ~torch.isfinite(vector_obs)
 
@@ -1471,14 +1036,14 @@ class EnergyBasedStreetFighterCNN(nn.Module):
                 vector_nan_mask, torch.zeros_like(vector_obs), vector_obs
             )
 
-        # 🛡️ ENHANCED input clamping
+        # Enhanced input clamping
         visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
-        vector_obs = torch.clamp(vector_obs, -10.0, 10.0)  # Prevent extreme values
+        vector_obs = torch.clamp(vector_obs, -10.0, 10.0)
 
         # Process visual features
         visual_features = self.visual_cnn(visual_obs)
 
-        # 🛡️ Monitor for explosions
+        # Monitor for explosions
         if torch.any(torch.abs(visual_features) > 100.0):
             self.activation_monitor["explosion_count"] += 1
             visual_features = torch.clamp(visual_features, -100.0, 100.0)
@@ -1530,7 +1095,7 @@ class EnergyBasedStreetFighterCNN(nn.Module):
         combined_features = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined_features)
 
-        # 🛡️ FINAL stability checks
+        # Final stability checks
         if torch.any(~torch.isfinite(output)):
             self.activation_monitor["nan_count"] += torch.sum(
                 ~torch.isfinite(output)
@@ -1552,7 +1117,6 @@ class EnergyBasedStreetFighterCNN(nn.Module):
 class EnergyBasedStreetFighterVerifier(nn.Module):
     """
     🛡️ STABILIZED Energy-Based Transformer Verifier for Street Fighter.
-    Enhanced with energy landscape monitoring and collapse prevention.
     """
 
     def __init__(
@@ -1568,39 +1132,39 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
-        # 🛡️ STABILIZED feature extractor
+        # Stabilized feature extractor
         self.features_extractor = EnergyBasedStreetFighterCNN(
             observation_space, features_dim
         )
 
-        # 🛡️ STABILIZED action embedding
+        # Stabilized action embedding
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 64),
             nn.ReLU(inplace=True),
             nn.LayerNorm(64),
-            nn.Dropout(0.05),  # Reduced dropout
+            nn.Dropout(0.05),
         )
 
-        # 🛡️ ULTRA-STABLE energy network
+        # Ultra-stable energy network
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 256),
             nn.ReLU(inplace=True),
             nn.LayerNorm(256),
-            nn.Dropout(0.1),  # Reduced dropout
+            nn.Dropout(0.1),
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
             nn.LayerNorm(128),
-            nn.Dropout(0.05),  # Reduced dropout
+            nn.Dropout(0.05),
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
             nn.LayerNorm(64),
-            nn.Linear(64, 1),  # Single energy score output
+            nn.Linear(64, 1),
         )
 
-        # 🛡️ ENHANCED energy scaling for maximum stability
-        self.energy_scale = 0.01  # Much smaller scale
-        self.energy_clamp_min = -2.0  # Tighter bounds
-        self.energy_clamp_max = 2.0  # Tighter bounds
+        # Enhanced energy scaling for maximum stability
+        self.energy_scale = 0.01
+        self.energy_clamp_min = -2.0
+        self.energy_clamp_max = 2.0
 
         # Energy landscape monitoring
         self.energy_monitor = {
@@ -1611,19 +1175,15 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
             "gradient_norms": deque(maxlen=1000),
         }
 
-        # 🛡️ ULTRA-conservative initialization
+        # Ultra-conservative initialization
         self.apply(self._init_weights_ultra_conservative)
 
         print(f"✅ STABILIZED EnergyBasedStreetFighterVerifier initialized")
-        print(f"   - Features dim: {features_dim}")
-        print(f"   - Action dim: {self.action_dim}")
-        print(f"   - Energy scale: {self.energy_scale}")
-        print(f"   - Energy bounds: [{self.energy_clamp_min}, {self.energy_clamp_max}]")
 
     def _init_weights_ultra_conservative(self, m):
-        """🛡️ ULTRA-conservative weight initialization."""
+        """Ultra-conservative weight initialization."""
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.01)  # EXTREMELY small gain
+            nn.init.xavier_uniform_(m.weight, gain=0.01)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
@@ -1635,13 +1195,6 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
     ) -> torch.Tensor:
         """
         🛡️ STABILIZED energy calculation with monitoring.
-
-        Args:
-            context: Processed observations (context)
-            candidate_action: One-hot encoded action (candidate)
-
-        Returns:
-            energy: Stabilized energy score (lower = better compatibility)
         """
         device = next(self.parameters()).device
         self.energy_monitor["forward_count"] += 1
@@ -1655,7 +1208,7 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
         context_features = context_features.to(device)
         candidate_action = candidate_action.to(device)
 
-        # 🛡️ ENHANCED safety checks
+        # Enhanced safety checks
         if torch.any(~torch.isfinite(context_features)):
             nan_count = torch.sum(~torch.isfinite(context_features)).item()
             self.energy_monitor["nan_count"] += nan_count
@@ -1674,7 +1227,7 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
                 candidate_action,
             )
 
-        # 🛡️ Clamp inputs to prevent explosions
+        # Clamp inputs to prevent explosions
         context_features = torch.clamp(context_features, -10.0, 10.0)
         candidate_action = torch.clamp(candidate_action, 0.0, 1.0)
 
@@ -1697,14 +1250,14 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
         # Calculate energy
         energy = self.energy_net(combined_input)
 
-        # 🛡️ Monitor for energy explosions
+        # Monitor for energy explosions
         if torch.any(torch.abs(energy) > 10.0):
             self.energy_monitor["explosion_count"] += 1
             print(
                 f"🚨 Energy explosion detected: {torch.max(torch.abs(energy)).item():.3f}"
             )
 
-        # 🛡️ ENHANCED scale and clamp energy for maximum stability
+        # Enhanced scale and clamp energy for maximum stability
         energy = energy * self.energy_scale
         energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
 
@@ -1736,7 +1289,6 @@ class EnergyBasedStreetFighterVerifier(nn.Module):
 class StabilizedEnergyBasedAgent:
     """
     🛡️ STABILIZED Energy-Based Agent for Street Fighter.
-    Enhanced with collapse prevention and adaptive thinking.
     """
 
     def __init__(
@@ -1746,7 +1298,6 @@ class StabilizedEnergyBasedAgent:
         thinking_lr: float = 0.05,
         noise_scale: float = 0.05,
     ):
-
         self.verifier = verifier
         self.initial_thinking_steps = thinking_steps
         self.current_thinking_steps = thinking_steps
@@ -1755,17 +1306,17 @@ class StabilizedEnergyBasedAgent:
         self.noise_scale = noise_scale
         self.action_dim = verifier.action_dim
 
-        # 🛡️ ENHANCED thinking process parameters
-        self.gradient_clip = 0.5  # Tighter gradient clipping
-        self.early_stop_patience = 2  # Reduced patience
-        self.min_energy_improvement = 1e-5  # Smaller improvement threshold
+        # Enhanced thinking process parameters
+        self.gradient_clip = 0.5
+        self.early_stop_patience = 2
+        self.min_energy_improvement = 1e-5
 
         # Adaptive thinking parameters
         self.max_thinking_steps = 10
         self.min_thinking_steps = 1
         self.thinking_adaptation_rate = 0.1
 
-        # 🛡️ Enhanced statistics
+        # Enhanced statistics
         self.thinking_stats = {
             "total_predictions": 0,
             "avg_thinking_steps": 0.0,
@@ -1782,24 +1333,15 @@ class StabilizedEnergyBasedAgent:
         self.adaptation_threshold = 0.4
 
         print(f"✅ STABILIZED EnergyBasedAgent initialized")
-        print(f"   - Initial thinking steps: {thinking_steps}")
-        print(f"   - Initial learning rate: {thinking_lr}")
-        print(f"   - Noise scale: {noise_scale}")
-        print(f"   - Enhanced stability controls: ACTIVE")
 
     def adapt_thinking_parameters(self, success_rate):
-        """🛡️ Adapt thinking parameters based on performance."""
+        """Adapt thinking parameters based on performance."""
         if success_rate < self.adaptation_threshold:
-            # Performance is poor, reduce complexity
             self.current_thinking_steps = max(
                 self.min_thinking_steps, self.current_thinking_steps - 1
             )
             self.current_thinking_lr *= 0.9
-            print(
-                f"🔧 Adapting thinking: steps={self.current_thinking_steps}, lr={self.current_thinking_lr:.4f}"
-            )
         elif success_rate > 0.7:
-            # Performance is good, can increase complexity
             self.current_thinking_steps = min(
                 self.max_thinking_steps, self.current_thinking_steps + 1
             )
@@ -1812,14 +1354,6 @@ class StabilizedEnergyBasedAgent:
     ) -> Tuple[int, Dict]:
         """
         🛡️ STABILIZED action prediction with enhanced thinking process.
-
-        Args:
-            observations: Environment observations
-            deterministic: Whether to use deterministic prediction
-
-        Returns:
-            action: Predicted action index
-            info: Information about the thinking process
         """
         device = next(self.verifier.parameters()).device
 
@@ -1838,13 +1372,12 @@ class StabilizedEnergyBasedAgent:
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # 🛡️ STABILIZED candidate action initialization
+        # Stabilized candidate action initialization
         if deterministic:
             candidate_action = (
                 torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
             )
         else:
-            # Much smaller noise for stability
             candidate_action = torch.randn(
                 batch_size, self.action_dim, device=device
             ) * (self.noise_scale * 0.1)
@@ -1869,13 +1402,13 @@ class StabilizedEnergyBasedAgent:
                 print(f"⚠️ Initial energy calculation failed: {e}")
                 return 0, {"error": "initial_energy_failed"}
 
-        # 🛡️ ENHANCED THINKING LOOP with stability controls
+        # Enhanced thinking loop with stability controls
         for step in range(self.current_thinking_steps):
             try:
                 # Calculate current energy
                 energy = self.verifier(obs_device, candidate_action)
 
-                # 🛡️ Check for energy explosion
+                # Check for energy explosion
                 if torch.any(torch.abs(energy) > 5.0):
                     energy_explosion = True
                     print(
@@ -1891,20 +1424,19 @@ class StabilizedEnergyBasedAgent:
                     retain_graph=False,
                 )[0]
 
-                # 🛡️ Enhanced gradient monitoring
+                # Enhanced gradient monitoring
                 gradient_norm = torch.norm(gradients).item()
 
                 if gradient_norm > self.gradient_clip:
                     gradient_explosion = True
                     gradients = gradients * (self.gradient_clip / gradient_norm)
-                    print(f"🚨 Gradient explosion at step {step}: {gradient_norm:.3f}")
 
                 # Check for NaN gradients
                 if torch.any(~torch.isfinite(gradients)):
                     print(f"🚨 NaN gradients at step {step}")
                     break
 
-                # 🛡️ STABILIZED update with smaller learning rate
+                # Stabilized update with smaller learning rate
                 with torch.no_grad():
                     candidate_action = (
                         candidate_action - (self.current_thinking_lr * 0.1) * gradients
@@ -1954,7 +1486,7 @@ class StabilizedEnergyBasedAgent:
                 print(f"⚠️ Final action selection failed: {e}")
                 return 0, {"error": "action_selection_failed"}
 
-        # 🛡️ Update enhanced statistics
+        # Update enhanced statistics
         self.thinking_stats["total_predictions"] += 1
         self.thinking_stats["avg_thinking_steps"] = (
             self.thinking_stats["avg_thinking_steps"] * 0.9 + steps_taken * 0.1
@@ -2030,7 +1562,6 @@ class StabilizedEnergyBasedAgent:
 class StreetFighterVisionWrapper(gym.Wrapper):
     """
     🛡️ STABILIZED Street Fighter environment wrapper for Energy-Based Transformer.
-    Enhanced with stability monitoring and emergency protocols.
     """
 
     def __init__(self, env, frame_stack=8, rendering=False):
@@ -2045,8 +1576,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             self.target_size = sample_obs.shape[:2]
         else:
             self.target_size = (224, 320)
-
-        print(f"🖼️  Using frames: {self.target_size[0]}x{self.target_size[1]} (H x W)")
 
         self.discrete_actions = StreetFighterDiscreteActions()
         self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
@@ -2068,35 +1597,23 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             }
         )
 
-        print(f"🔧 STABILIZED Energy-Based Observation space configured:")
-        print(f"   - Visual: {self.observation_space['visual_obs'].shape}")
-        print(f"   - Vector: {self.observation_space['vector_obs'].shape}")
-        print(f"   - Vector features: {VECTOR_FEATURE_DIM}")
-
         self.frame_buffer = deque(maxlen=frame_stack)
         self.vector_features_history = deque(maxlen=frame_stack)
-        self.strategic_tracker = StrategicFeatureTracker(history_length=frame_stack)
+        self.strategic_tracker = SimplifiedFeatureTracker(history_length=frame_stack)
         self.full_hp = 176
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
         self.wins, self.losses, self.total_rounds = 0, 0, 0
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
-        # Initialize bait-punish system if available
-        if BAIT_PUNISH_AVAILABLE:
-            self.reward_shaper = AdaptiveRewardShaper()
-            print("✅ Adaptive reward shaper initialized for energy stability")
-        else:
-            self.reward_shaper = None
-
-        # 🛡️ ENHANCED energy-based reward configuration
-        self.reward_scale = 0.01  # Much smaller scale for stability
+        # Energy-based reward configuration
+        self.reward_scale = 0.01
         self.episode_steps = 0
         self.max_episode_steps = 18000
         self.episode_rewards = deque(maxlen=100)
         self.stats = {}
 
-        # 🛡️ Enhanced reward normalization
+        # Enhanced reward normalization
         self.reward_history = deque(maxlen=1000)
         self.reward_mean = 0.0
         self.reward_std = 1.0
@@ -2173,28 +1690,13 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
         )
 
-        # 🛡️ Calculate ULTRA-STABLE reward
+        # Calculate ultra-stable reward
         base_reward, custom_done = self._calculate_ultra_stable_reward(
             curr_player_health, curr_opponent_health
         )
 
-        # Add bait-punish reward if available
-        if self.reward_shaper is not None:
-            bait_punish_info = getattr(
-                self.strategic_tracker, "last_bait_punish_info", {}
-            )
-            try:
-                final_reward = self.reward_shaper.shape_reward(
-                    base_reward, bait_punish_info, sanitized_info
-                )
-            except Exception as e:
-                print(f"⚠️  Reward shaping error: {e}, using base reward")
-                final_reward = base_reward
-        else:
-            final_reward = base_reward
-
-        # 🛡️ ENHANCED reward normalization for maximum energy stability
-        final_reward = self._ultra_normalize_reward_for_energy(final_reward)
+        # Enhanced reward normalization for maximum energy stability
+        final_reward = self._ultra_normalize_reward_for_energy(base_reward)
 
         if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
             truncated = True
@@ -2227,7 +1729,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return self._get_observation(), final_reward, done, truncated, sanitized_info
 
     def _calculate_ultra_stable_reward(self, curr_player_health, curr_opponent_health):
-        """🛡️ Calculate ULTRA-STABLE reward for EBT training."""
+        """Calculate ultra-stable reward for EBT training."""
         reward, done = 0.0, False
 
         curr_player_health = ensure_scalar(curr_player_health, self.full_hp)
@@ -2276,26 +1778,18 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             damage_calc = ensure_scalar(self.prev_player_health) - curr_player_health
             damage_received = max(0, damage_calc) if np.isfinite(damage_calc) else 0
 
-        # MUCH smaller damage rewards for maximum stability
+        # Much smaller damage rewards for maximum stability
         reward += (damage_dealt * 0.001) - (damage_received * 0.0005)
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
 
-        # Tiny strategic bonuses
-        try:
-            space_control = self.strategic_tracker.space_control_score
-            if np.isfinite(space_control) and safe_comparison(space_control, 0, ">"):
-                reward += space_control * 0.0001  # Extremely small bonus
-        except Exception:
-            pass
-
         # Tiny time penalty
         reward -= 0.00001
 
-        # Apply ULTRA-small reward scale for maximum energy stability
+        # Apply ultra-small reward scale for maximum energy stability
         reward *= self.reward_scale
 
-        # VERY tight clipping to prevent any energy explosion
+        # Very tight clipping to prevent any energy explosion
         reward = np.clip(reward, -0.1, 0.1) if np.isfinite(reward) else 0.0
 
         self.prev_player_health, self.prev_opponent_health = (
@@ -2312,12 +1806,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return reward, done
 
     def _ultra_normalize_reward_for_energy(self, reward):
-        """🛡️ ULTRA-normalize reward specifically for maximum energy stability."""
+        """Ultra-normalize reward specifically for maximum energy stability."""
         if not np.isfinite(reward):
             reward = 0.0
             self.stability_metrics["nan_rewards"] += 1
 
-        # VERY tight initial clipping
+        # Very tight initial clipping
         reward = np.clip(reward, -0.5, 0.5)
 
         if abs(reward) > 0.2:
@@ -2396,21 +1890,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     "defensive_efficiency": defensive_efficiency,
                     "damage_ratio": damage_ratio,
                     "max_combo": combo_stats.get("max_combo_this_round", 0),
-                    "space_control_score": combo_stats.get("space_control_score", 0.0),
                     "episode_steps": self.episode_steps,
-                    "current_feature_dim": self.strategic_tracker.current_feature_dim,
                     "reward_mean": self.reward_mean,
                     "reward_std": self.reward_std,
                     "performance_stability": performance_stability,
-                    # INTEGRATED oscillation stats
-                    "movement_analysis": combo_stats.get("total_movement_analysis", {}),
-                    "aggressive_forward_count": combo_stats.get(
-                        "aggressive_forward_count", 0
-                    ),
-                    "defensive_backward_count": combo_stats.get(
-                        "defensive_backward_count", 0
-                    ),
-                    "neutral_dance_count": combo_stats.get("neutral_dance_count", 0),
                 }
             )
         except Exception as e:
@@ -2464,7 +1947,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 
 def verify_stabilized_energy_flow(verifier, env, device=None):
-    """🛡️ Verify STABILIZED energy flow and gradient computation for EBT."""
+    """Verify stabilized energy flow and gradient computation for EBT."""
     print("\n🔬 STABILIZED Energy-Based Transformer Verification")
     print("=" * 70)
 
@@ -2490,12 +1973,9 @@ def verify_stabilized_energy_flow(verifier, env, device=None):
     vector_obs = obs_tensor["vector_obs"]
     print(f"🔍 Vector Feature Analysis:")
     print(f"   - Shape: {vector_obs.shape}")
-    print(
-        f"   - Features: {vector_obs.shape[-1]} ({'Enhanced' if vector_obs.shape[-1] == 52 else 'Base'})"
-    )
+    print(f"   - Features: {vector_obs.shape[-1]} (Simplified)")
     print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
     print(f"   - NaN count: {torch.sum(~torch.isfinite(vector_obs)).item()}")
-    print(f"   - INTEGRATED oscillation features: positions 21-32")
 
     if torch.sum(~torch.isfinite(vector_obs)) > 0:
         print("   🚨 CRITICAL: NaN values detected!")
@@ -2537,7 +2017,7 @@ def verify_stabilized_energy_flow(verifier, env, device=None):
         print(f"❌ Energy calculation failed: {e}")
         return False
 
-    # Test gradient computation (core of EBT)
+    # Test gradient computation
     try:
         gradients = torch.autograd.grad(
             outputs=energy.sum(),
@@ -2570,48 +2050,7 @@ def verify_stabilized_energy_flow(verifier, env, device=None):
         print(f"❌ Gradient computation failed: {e}")
         return False
 
-    # Test CNN feature extractor stability
-    try:
-        cnn_stats = verifier.features_extractor.get_activation_stats()
-        print(f"🧠 CNN Stability Check:")
-        print(f"   - Forward passes: {cnn_stats['forward_count']}")
-        print(f"   - NaN activations: {cnn_stats['nan_count']}")
-        print(f"   - Activation explosions: {cnn_stats['explosion_count']}")
-
-        if cnn_stats["explosion_count"] > 0:
-            print(
-                f"   ⚠️  WARNING: {cnn_stats['explosion_count']} activation explosions detected"
-            )
-        else:
-            print("   ✅ CNN activations are stable")
-
-    except Exception as e:
-        print(f"⚠️  Could not verify CNN stability: {e}")
-
-    # Test energy monitoring
-    try:
-        energy_stats = verifier.get_energy_stats()
-        print(f"⚡ Energy Monitoring Check:")
-        print(f"   - Forward passes: {energy_stats['forward_count']}")
-        print(f"   - Energy NaN count: {energy_stats['nan_count']}")
-        print(f"   - Energy explosions: {energy_stats['explosion_count']}")
-        print(f"   - Energy mean: {energy_stats.get('energy_mean', 0.0):.6f}")
-        print(f"   - Energy std: {energy_stats.get('energy_std', 0.0):.6f}")
-
-        if energy_stats["explosion_count"] > 0:
-            print(
-                f"   🚨 WARNING: {energy_stats['explosion_count']} energy explosions detected"
-            )
-        else:
-            print("   ✅ Energy landscape is stable")
-
-    except Exception as e:
-        print(f"⚠️  Could not verify energy monitoring: {e}")
-
     print("✅ EXCELLENT: STABILIZED Energy-Based Transformer verification successful!")
-    print("🛡️  Enhanced stability controls verified")
-    print("🎯 INTEGRATED oscillation tracking verified")
-    print("⚡ Energy landscape monitoring active")
     return True
 
 
@@ -2629,10 +2068,7 @@ def make_stabilized_env(
 
         print(f"✅ STABILIZED Energy-Based environment created")
         print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
-        print(
-            f"   - Bait-punish: {'Available' if BAIT_PUNISH_AVAILABLE else 'Not available'}"
-        )
-        print(f"   - INTEGRATED oscillation tracking: ✅ ACTIVE")
+        print(f"   - Simplified features: ✅ ACTIVE")
         print(f"   - Stability controls: ✅ MAXIMUM")
 
         return env
@@ -2641,11 +2077,9 @@ def make_stabilized_env(
         raise
 
 
-# 🛡️ CHECKPOINT MANAGEMENT SYSTEM
+# Checkpoint Management System
 class CheckpointManager:
-    """
-    🛡️ Advanced checkpoint management with emergency restore capabilities.
-    """
+    """Advanced checkpoint management with emergency restore capabilities."""
 
     def __init__(self, checkpoint_dir="checkpoints"):
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -2731,7 +2165,7 @@ class CheckpointManager:
             return None
 
     def emergency_restore(self, verifier, agent):
-        """🚨 Emergency restore from best available checkpoint."""
+        """Emergency restore from best available checkpoint."""
         restore_path = self.best_checkpoint_path or self.emergency_checkpoint_path
 
         if restore_path and restore_path.exists():
@@ -2749,9 +2183,9 @@ __all__ = [
     "EnergyBasedStreetFighterCNN",
     "EnergyBasedStreetFighterVerifier",
     "StabilizedEnergyBasedAgent",
-    "StrategicFeatureTracker",
+    "SimplifiedFeatureTracker",
     "StreetFighterDiscreteActions",
-    # 🛡️ NEW Stability components
+    # Stability components
     "EnergyStabilityManager",
     "ExperienceBuffer",
     "CheckpointManager",
@@ -2768,26 +2202,17 @@ __all__ = [
     "ensure_feature_dimension",
     # Constants
     "VECTOR_FEATURE_DIM",
-    "BASE_VECTOR_FEATURE_DIM",
-    "ENHANCED_VECTOR_FEATURE_DIM",
-    "BAIT_PUNISH_AVAILABLE",
 ]
 
-if BAIT_PUNISH_AVAILABLE:
-    __all__.append("AdaptiveRewardShaper")
-
 print(
-    f"🎉 STABILIZED ENERGY-BASED TRANSFORMER - Complete wrapper.py loaded successfully!"
+    f"🎉 SIMPLIFIED ENERGY-BASED TRANSFORMER - Complete wrapper.py loaded successfully!"
 )
-print(f"   - Training paradigm: STABILIZED Energy-Based Transformer")
+print(f"   - Training paradigm: SIMPLIFIED Energy-Based Transformer")
 print(f"   - Verifier network: ✅ ULTRA-STABLE")
 print(f"   - Thinking optimization: ✅ ADAPTIVE")
 print(f"   - Energy stability: ✅ MAXIMUM")
 print(f"   - Collapse prevention: ✅ ACTIVE")
 print(f"   - Emergency protocols: ✅ ACTIVE")
 print(f"   - Experience quality control: ✅ ACTIVE")
-print(f"   - INTEGRATED oscillation tracking: ✅ ACTIVE")
-print(
-    f"   - Bait-punish integration: ✅ {'ACTIVE' if BAIT_PUNISH_AVAILABLE else 'STANDBY'}"
-)
-print(f"🛡️  Ready for STABILIZED Energy-Based Street Fighter training!")
+print(f"   - Oscillation/Bait systems: ❌ REMOVED")
+print(f"🛡️  Ready for SIMPLIFIED Energy-Based Street Fighter training!")

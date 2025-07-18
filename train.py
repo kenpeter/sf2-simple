@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-train.py - STABILIZED ENERGY-BASED TRANSFORMER TRAINING FOR STREET FIGHTER
-FIXES IMPLEMENTED:
-- Integrates EnergyStabilityManager to prevent landscape collapse.
-- Implements Emergency Reset Protocol (restore best model, purge buffer).
-- Uses quality-controlled ExperienceBuffer.
-- Employs CheckpointManager for robust model saving and restoration.
-- Focuses on robust checkpointing of model weights.
-- Provides detailed, actionable logging for monitoring training stability.
+train.py - SIMPLIFIED ENERGY-BASED TRANSFORMER TRAINING FOR STREET FIGHTER
+REMOVED:
+- Oscillation tracking integration
+- Bait-punish system integration
+- Complex movement analysis
+KEPT:
+- Integrates EnergyStabilityManager to prevent landscape collapse
+- Implements Emergency Reset Protocol (restore best model, purge buffer)
+- Uses quality-controlled ExperienceBuffer
+- Employs CheckpointManager for robust model saving and restoration
+- Provides detailed, actionable logging for monitoring training stability
 """
 
 import os
@@ -23,7 +26,7 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 
-# Import STABILIZED components from the fixed wrapper.py
+# Import SIMPLIFIED components from the fixed wrapper.py
 from wrapper import (
     EnergyBasedStreetFighterVerifier,
     StabilizedEnergyBasedAgent,
@@ -33,8 +36,6 @@ from wrapper import (
     ExperienceBuffer,
     CheckpointManager,
     VECTOR_FEATURE_DIM,
-    ENHANCED_VECTOR_FEATURE_DIM,
-    BAIT_PUNISH_AVAILABLE,
     safe_mean,
     safe_std,
 )
@@ -89,7 +90,13 @@ class EnergyBasedTrainer:
         self.experience_buffer = experience_buffer
         self.contrastive_margin = contrastive_margin
         self.batch_size = batch_size
-        self.device = device
+
+        # Setup device
+        if device == "auto":
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
+
         self.verifier.to(self.device)
 
         self.optimizer = optim.Adam(self.verifier.parameters(), lr=initial_lr)
@@ -266,7 +273,7 @@ def run_training_episode(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Stabilized EBT Training for Street Fighter"
+        description="Simplified EBT Training for Street Fighter"
     )
     parser.add_argument("--total-episodes", type=int, default=50000)
     parser.add_argument(
@@ -281,7 +288,7 @@ def main():
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--device", type=str, default="auto")
 
-    # --- FIX: Accept both --lr and --learning-rate ---
+    # Accept both --lr and --learning-rate
     parser.add_argument(
         "--lr",
         "--learning-rate",
@@ -298,16 +305,14 @@ def main():
     parser.add_argument("--thinking-steps", type=int, default=3)
     args = parser.parse_args()
 
-    print("🛡️ STABILIZED ENERGY-BASED TRANSFORMER TRAINING 🛡️")
+    print("🛡️ SIMPLIFIED ENERGY-BASED TRANSFORMER TRAINING 🛡️")
     print("=" * 50)
     print(f"Hyperparameters:")
     print(f"  - Initial LR: {args.lr}")
     print(f"  - Initial Thinking LR: {args.thinking_lr}")
     print(f"  - Contrastive Margin: {args.contrastive_margin}")
     print(f"  - Batch Size: {args.batch_size}")
-    print(
-        f"Feature System: {'Enhanced' if BAIT_PUNISH_AVAILABLE else 'Base'} ({VECTOR_FEATURE_DIM} dims)"
-    )
+    print(f"Feature System: Simplified ({VECTOR_FEATURE_DIM} dims)")
     print("=" * 50)
 
     # Setup device
@@ -361,7 +366,7 @@ def main():
     print("   ✅ Energy flow is STABLE.")
 
     # Main Training Loop
-    print("\n🚀 Starting Stabilized Training...")
+    print("\n🚀 Starting Simplified Training...")
     pbar = tqdm(
         range(start_episode, args.total_episodes),
         initial=start_episode,
