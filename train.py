@@ -313,36 +313,46 @@ class EnhancedEnergyBasedTrainer:
         return False
 
     def reset_energy_network(self):
-        """🚨 EMERGENCY: Reset the energy network to break collapse."""
+        """🚨 EMERGENCY: Reset energy network to break collapse with safer optimizer handling."""
         print("🚨 RESETTING ENERGY NETWORK - BREAKING ENERGY COLLAPSE")
 
-        # Re-initialize the energy network part of the verifier
-        for name, module in self.verifier.named_modules():
-            if "energy_net" in name and isinstance(module, torch.nn.Linear):
-                if hasattr(module, "weight"):
-                    torch.nn.init.xavier_uniform_(module.weight, gain=0.01)
-                    print(f"   Reset {name}")
-                if hasattr(module, "bias") and module.bias is not None:
-                    torch.nn.init.constant_(module.bias, 0)
+        # Store old optimizer settings
+        old_lr = self.optimizer.param_groups[0]["lr"]
+        old_weight_decay = self.optimizer.param_groups[0].get("weight_decay", 0)
+        old_momentum = self.optimizer.param_groups[0].get("momentum", 0)
 
-        # Clear energy history to reset statistics
-        self.training_stats["positive_energy_hist"].clear()
-        self.training_stats["negative_energy_hist"].clear()
+        # Get energy network modules to reset
+        energy_modules = []
+        for name, module in self.verifier.energy_net.named_modules():
+            if isinstance(module, (nn.Linear, nn.LayerNorm)):
+                energy_modules.append((name, module))
+                print(f"   Reset {name}")
 
-        # Reset optimizer state for energy network
-        energy_params = []
-        for name, param in self.verifier.named_parameters():
-            if "energy_net" in name:
-                energy_params.append(param)
+        # Reset the energy network parameters
+        def reset_weights(m):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
-        if energy_params:
-            # Create a new optimizer state for these parameters
-            for group in self.optimizer.param_groups:
-                for p in group["params"]:
-                    if p in energy_params and p in self.optimizer.state:
-                        del self.optimizer.state[p]
+        self.verifier.energy_net.apply(reset_weights)
 
-        print("   ✅ Energy network reset complete")
+        # SAFE OPTIMIZER RESET: Create new optimizer instead of modifying state
+        print("🔄 Creating new optimizer with reset energy network")
+
+        # Create new optimizer with same settings
+        self.optimizer = optim.Adam(
+            self.verifier.parameters(), lr=old_lr, weight_decay=old_weight_decay
+        )
+
+        print(f"✅ Energy network reset complete with LR: {old_lr}")
+
+        # Clear energy monitoring history
+        self.verifier.energy_monitor["energy_history"].clear()
+        self.stability_manager.consecutive_poor_episodes = 0
 
 
 def run_enhanced_training_episode(
