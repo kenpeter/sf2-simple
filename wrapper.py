@@ -1163,6 +1163,7 @@ class FixedEnergyBasedStreetFighterCNN(nn.Module):
         return self.activation_monitor.copy()
 
 
+# energy verifier
 class FixedEnergyBasedStreetFighterVerifier(nn.Module):
     """
     🛡️ FIXED Energy-Based Transformer Verifier with proper scaling.
@@ -1246,6 +1247,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
 
+    # forward function in the energy verifer
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
@@ -1301,7 +1303,9 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
                 action_embedded,
             )
 
-        # Combine context and action
+        # we combine vector feature and action
+        # combined input is tensor
+        # [256 (context) + 64 (action)] = 320D
         combined_input = torch.cat([context_features, action_embedded], dim=-1)
 
         # Calculate raw energy
@@ -1314,7 +1318,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
                 f"🚨 Raw energy explosion detected: {torch.max(torch.abs(raw_energy)).item():.3f}"
             )
 
-        # FIXED: Apply proper energy scaling
+        # raw energy need scale
         energy = raw_energy * self.energy_scale
 
         # Adaptive energy scaling (gradually increase energy magnitude)

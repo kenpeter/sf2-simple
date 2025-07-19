@@ -214,7 +214,9 @@ class FixedEnergyBasedTrainer:
         bad_mean = bad_energy_tensor.mean()
 
         # Energy separation (bad - good should be positive and > margin)
+        # energy sepration
         energy_separation = bad_mean - good_mean
+        # contrastive loss
         contrastive_loss = torch.clamp(margin - energy_separation, min=0.0)
 
         return contrastive_loss, energy_separation
@@ -499,7 +501,7 @@ def main():
         help="Device to use",
     )
     parser.add_argument("--render", action="store_true", help="Render environment")
-    parser.add_argument("--save-freq", type=int, default=100, help="Save frequency")
+    parser.add_argument("--save-freq", type=int, default=50, help="Save frequency")
     parser.add_argument(
         "--resume", type=str, default=None, help="Resume from checkpoint"
     )
