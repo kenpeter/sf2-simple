@@ -6,7 +6,20 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --total-episodes 100 --save-freq 10 --learning-rate 2e-4 --thinking-lr 0.3 --thinking-steps 3  --render
+
+
+
+
+python train.py \
+  --episodes 100 \
+  --learning-rate 1e-4 \
+  --thinking-steps 5 \
+  --thinking-lr 0.1 \
+  --batch-size 32 \
+  --device cuda \
+  --render
+
+
 
   ta.json 
 {
