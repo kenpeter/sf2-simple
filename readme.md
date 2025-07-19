@@ -19,27 +19,18 @@ python train.py \
 
 
 python train.py \
-  --total-episodes 400 \
-  --lr 1e-4 \
-  --thinking-steps 3 \
-  --thinking-lr 0.2 \
-  --batch-size 16 \
-  --device cuda
-  --render
+  --total-episodes 200 \
+  --lr 5e-4 \
+  --thinking-steps 5 \
+  --thinking-lr 0.5 \
+  --batch-size 32 \
+  --contrastive-margin 2.0 \
+  --render \
   --resume checkpoints/checkpoint_ep99_wr0.950_eq55.4_20250719_160124.pt
 
 
 
 
-python train.py \
-  --total-episodes 200 \
-  --lr 2e-4 \
-  --thinking-steps 4 \
-  --thinking-lr 0.3 \
-  --batch-size 20 \
-  --device cuda
-  --resume checkpoints/checkpoint_ep99_wr0.990_eq13.8_20250719_182344.pt
-  --render
 
 
   ta.json 

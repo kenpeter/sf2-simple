@@ -1847,7 +1847,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 self.wins += 1
                 # Better win bonus
                 win_bonus = (
-                    1.0 + safe_divide(curr_player_health, self.full_hp, 0.0) * 0.5
+                    5.0 + safe_divide(curr_player_health, self.full_hp, 0.0) * 2.0
                 )
                 reward += win_bonus
                 print(
@@ -1862,7 +1862,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             done = True
 
             # Reasonable combo bonus
-            combo_bonus = self.strategic_tracker.combo_counter * 0.01
+            combo_bonus = self.strategic_tracker.combo_counter * 0.05
             reward += combo_bonus
 
         # Damage calculation with better rewards
@@ -1882,7 +1882,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             damage_received = max(0, damage_calc) if np.isfinite(damage_calc) else 0
 
         # Better damage rewards
-        reward += (damage_dealt * 0.01) - (damage_received * 0.005)
+        reward += (damage_dealt * 0.05) - (damage_received * 0.01)
         self.total_damage_dealt += damage_dealt
         self.total_damage_received += damage_received
 
