@@ -8,15 +8,13 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-
-
 python train.py \
-  --episodes 100 \
-  --learning-rate 1e-4 \
-  --thinking-steps 5 \
-  --thinking-lr 0.1 \
-  --batch-size 32 \
-  --device cuda \
+  --total-episodes 100 \
+  --lr 1e-4 \
+  --thinking-steps 3 \
+  --thinking-lr 0.2 \
+  --batch-size 16 \
+  --device cuda
   --render
 
 
