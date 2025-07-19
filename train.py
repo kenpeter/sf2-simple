@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🛡️ FIXED ENERGY-BASED TRANSFORMER TRAINING SCRIPT
-Uses the fixed wrapper components with proper scaling and realistic thresholds.
+🏆 AGGRESSIVE ENERGY-BASED TRANSFORMER TRAINING SCRIPT
+Focuses on winning with massive reward bonuses while maintaining energy-based learning.
 """
 
 import torch
@@ -14,8 +14,10 @@ from pathlib import Path
 from tqdm import tqdm
 import signal
 import sys
+from collections import deque
+import matplotlib.pyplot as plt
 
-# Import the FIXED wrapper components
+# Import the wrapper components (assuming they're in wrapper.py)
 from wrapper import (
     make_fixed_env,
     FixedEnergyBasedStreetFighterVerifier,
@@ -30,10 +32,124 @@ from wrapper import (
 )
 
 
-class FixedEnergyBasedTrainer:
+class AggressiveRewardManager:
     """
-    🎯 FIXED Energy-Based Transformer Trainer
-    Complete training pipeline with proper scaling and realistic thresholds.
+    🏆 Aggressive reward management system focused on winning.
+    """
+
+    def __init__(self):
+        self.win_history = deque(maxlen=50)
+        self.streak_counter = 0
+        self.best_streak = 0
+        self.performance_level = "learning"  # learning, improving, dominating
+
+        # Aggressive reward scales
+        self.base_win_reward = 20.0
+        self.health_bonus_scale = 10.0
+        self.speed_bonus_scale = 15.0
+        self.streak_bonus_scale = 5.0
+        self.damage_bonus_scale = 0.5
+        self.combo_bonus_scale = 2.0
+
+        print("🏆 Aggressive Reward Manager initialized")
+        print(f"   - Base win reward: {self.base_win_reward}")
+        print(f"   - Maximum possible reward: ~70.0 per win")
+
+    def calculate_aggressive_reward(self, base_reward, info, episode_steps, won):
+        """Calculate aggressive rewards focused on winning."""
+        aggressive_reward = base_reward
+        bonus_breakdown = {}
+
+        if won:
+            # Base win bonus
+            win_bonus = self.base_win_reward
+            aggressive_reward += win_bonus
+            bonus_breakdown["base_win"] = win_bonus
+
+            # Health bonus (win with more health = bigger bonus)
+            player_health = info.get("agent_hp", 0)
+            if player_health > 140:  # Near full health
+                health_bonus = self.health_bonus_scale
+                aggressive_reward += health_bonus
+                bonus_breakdown["health_bonus"] = health_bonus
+            elif player_health > 100:
+                health_bonus = self.health_bonus_scale * 0.6
+                aggressive_reward += health_bonus
+                bonus_breakdown["health_bonus"] = health_bonus
+
+            # Speed bonus (faster wins = bigger bonus)
+            if episode_steps < 1000:  # Very fast win
+                speed_bonus = self.speed_bonus_scale
+                aggressive_reward += speed_bonus
+                bonus_breakdown["speed_bonus"] = speed_bonus
+            elif episode_steps < 2000:  # Fast win
+                speed_bonus = self.speed_bonus_scale * 0.6
+                aggressive_reward += speed_bonus
+                bonus_breakdown["speed_bonus"] = speed_bonus
+
+            # Win streak bonus
+            self.streak_counter += 1
+            self.best_streak = max(self.best_streak, self.streak_counter)
+            if self.streak_counter >= 3:
+                streak_bonus = min(self.streak_bonus_scale * self.streak_counter, 25.0)
+                aggressive_reward += streak_bonus
+                bonus_breakdown["streak_bonus"] = streak_bonus
+
+            # Update win history
+            self.win_history.append(1)
+
+        else:
+            # Loss - reset streak but don't punish too hard
+            self.streak_counter = 0
+            aggressive_reward -= 1.0  # Small penalty
+            self.win_history.append(0)
+            bonus_breakdown["loss_penalty"] = -1.0
+
+        # Strategic bonuses (win or lose)
+        damage_dealt = info.get("total_damage_dealt", 0)
+        if damage_dealt > 0:
+            damage_bonus = min(damage_dealt * self.damage_bonus_scale, 20.0)
+            aggressive_reward += damage_bonus
+            bonus_breakdown["damage_bonus"] = damage_bonus
+
+        # Combo bonus
+        max_combo = info.get("max_combo", 0)
+        if max_combo > 2:
+            combo_bonus = min(max_combo * self.combo_bonus_scale, 15.0)
+            aggressive_reward += combo_bonus
+            bonus_breakdown["combo_bonus"] = combo_bonus
+
+        # Performance scaling
+        current_win_rate = safe_mean(list(self.win_history), 0.0)
+
+        if current_win_rate < 0.4:  # Struggling
+            self.performance_level = "learning"
+            aggressive_reward *= 1.5  # Boost rewards to encourage learning
+            bonus_breakdown["learning_boost"] = 0.5
+        elif current_win_rate > 0.6:  # Doing well
+            self.performance_level = "dominating"
+            aggressive_reward *= 0.8  # Slight reduction to prevent overconfidence
+            bonus_breakdown["excellence_factor"] = 0.8
+        else:
+            self.performance_level = "improving"
+
+        return aggressive_reward, bonus_breakdown
+
+    def get_stats(self):
+        """Get reward manager statistics."""
+        current_win_rate = safe_mean(list(self.win_history), 0.0)
+        return {
+            "current_win_rate": current_win_rate,
+            "current_streak": self.streak_counter,
+            "best_streak": self.best_streak,
+            "performance_level": self.performance_level,
+            "games_played": len(self.win_history),
+        }
+
+
+class AggressiveEnergyBasedTrainer:
+    """
+    🚀 Aggressive Energy-Based Transformer Trainer focused on winning.
     """
 
     def __init__(self, args):
@@ -50,6 +166,7 @@ class FixedEnergyBasedTrainer:
         self.stability_manager = None
         self.experience_buffer = None
         self.checkpoint_manager = None
+        self.reward_manager = None
 
         # Training state
         self.episode = 0
@@ -60,16 +177,16 @@ class FixedEnergyBasedTrainer:
         self.episode_rewards = []
         self.episode_wins = []
         self.energy_qualities = []
+        self.reward_breakdowns = []
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        print(f"🧠 FIXED Energy-Based Transformer Trainer initialized")
+        print(f"🚀 Aggressive Energy-Based Transformer Trainer initialized")
         print(f"   - Device: {self.device}")
         print(f"   - Max episodes: {args.total_episodes}")
-        print(f"   - Learning rate: {args.lr}")
-        print(f"   - Thinking steps: {args.thinking_steps}")
+        print(f"   - Focus: WINNING with massive rewards")
 
     def _signal_handler(self, signum, frame):
         """Handle graceful shutdown."""
@@ -92,64 +209,72 @@ class FixedEnergyBasedTrainer:
         sys.exit(0)
 
     def setup_training(self):
-        """Initialize all training components with FIXED parameters."""
-        print("🔧 Setting up FIXED training components...")
+        """Initialize all training components with aggressive parameters."""
+        print("🔧 Setting up aggressive training components...")
 
         # Create environment
         render_mode = "human" if self.args.render else None
         self.env = make_fixed_env(render_mode=render_mode)
 
-        # Create FIXED verifier
+        # Create verifier
         self.verifier = FixedEnergyBasedStreetFighterVerifier(
             self.env.observation_space, self.env.action_space, features_dim=256
         ).to(self.device)
 
-        # Create FIXED agent
+        # Create agent with more aggressive thinking
         self.agent = FixedStabilizedEnergyBasedAgent(
             self.verifier,
             thinking_steps=self.args.thinking_steps,
             thinking_lr=self.args.thinking_lr,
-            noise_scale=0.1,
+            noise_scale=0.15,  # Slightly more exploration
         )
 
-        # Create optimizer
+        # Create optimizer with higher learning rate
         self.optimizer = optim.Adam(
-            self.verifier.parameters(), lr=self.args.lr, weight_decay=1e-5
+            self.verifier.parameters(),
+            lr=self.args.lr,
+            weight_decay=5e-6,  # Less regularization
         )
 
-        # Create FIXED stability manager
+        # Create stability manager with more aggressive parameters
         self.stability_manager = FixedEnergyStabilityManager(
             initial_lr=self.args.lr, thinking_lr=self.args.thinking_lr
         )
+        # More lenient thresholds for aggressive training
+        self.stability_manager.min_win_rate = 0.15  # Lower threshold
+        self.stability_manager.min_energy_quality = 3.0  # Lower threshold
 
         # Create experience buffer
         self.experience_buffer = DiversityExperienceBuffer(
-            capacity=50000, quality_threshold=0.5
+            capacity=40000, quality_threshold=0.4  # Lower threshold for more data
         )
 
         # Create checkpoint manager
-        self.checkpoint_manager = CheckpointManager("checkpoints")
+        checkpoint_dir = "checkpoints_aggressive"
+        self.checkpoint_manager = CheckpointManager(checkpoint_dir)
 
-        # Set episode callback for experience buffer
-        self.env.set_episode_callback(self.experience_buffer.add_episode_experiences)
+        # Create aggressive reward manager
+        self.reward_manager = AggressiveRewardManager()
 
-        print("✅ FIXED training components initialized")
+        print("✅ Aggressive training components initialized")
 
     def verify_setup(self):
-        """Verify the FIXED energy flow before training."""
-        print("🔬 Verifying FIXED energy flow...")
+        """Verify the energy flow before training."""
+        print("🔬 Verifying energy flow...")
 
         if verify_fixed_energy_flow(self.verifier, self.env, self.device):
-            print("   ✅ Energy flow is PROPERLY SCALED.")
+            print("   ✅ Energy flow verified - ready for aggressive training!")
             return True
         else:
             print("   ❌ Energy flow verification failed!")
             return False
 
-    def calculate_contrastive_loss(self, good_batch, bad_batch, margin=1.0):
-        """Calculate contrastive loss with FIXED energy scaling."""
+    def calculate_contrastive_loss(self, good_batch, bad_batch, margin=2.0):
+        """Calculate contrastive loss with higher margin for aggressive training."""
         if not good_batch or not bad_batch:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), torch.tensor(
+                0.0, device=self.device
+            )
 
         good_energies = []
         bad_energies = []
@@ -203,7 +328,9 @@ class FixedEnergyBasedTrainer:
             bad_energies.append(energy)
 
         if not good_energies or not bad_energies:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), torch.tensor(
+                0.0, device=self.device
+            )
 
         # Stack energies
         good_energy_tensor = torch.cat(good_energies)
@@ -214,15 +341,13 @@ class FixedEnergyBasedTrainer:
         bad_mean = bad_energy_tensor.mean()
 
         # Energy separation (bad - good should be positive and > margin)
-        # energy sepration
         energy_separation = bad_mean - good_mean
-        # contrastive loss
         contrastive_loss = torch.clamp(margin - energy_separation, min=0.0)
 
         return contrastive_loss, energy_separation
 
     def train_step(self):
-        """Single training step with FIXED scaling."""
+        """Single training step with aggressive parameters."""
         # Sample balanced batch from experience buffer
         good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
             self.args.batch_size, prioritize_diversity=True
@@ -233,7 +358,7 @@ class FixedEnergyBasedTrainer:
 
         self.optimizer.zero_grad()
 
-        # Calculate contrastive loss with FIXED scaling
+        # Calculate contrastive loss with higher margin
         contrastive_loss, energy_separation = self.calculate_contrastive_loss(
             good_batch, bad_batch, margin=self.args.contrastive_margin
         )
@@ -242,8 +367,8 @@ class FixedEnergyBasedTrainer:
         if contrastive_loss.requires_grad:
             contrastive_loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.verifier.parameters(), max_norm=1.0)
+            # Gradient clipping (less aggressive)
+            torch.nn.utils.clip_grad_norm_(self.verifier.parameters(), max_norm=2.0)
 
             self.optimizer.step()
 
@@ -257,9 +382,10 @@ class FixedEnergyBasedTrainer:
         )
 
     def run_episode(self):
-        """Run single episode with FIXED agent."""
+        """Run single episode with aggressive reward tracking."""
         obs, info = self.env.reset()
         total_reward = 0.0
+        base_reward = 0.0
         steps = 0
         won = False
 
@@ -267,7 +393,7 @@ class FixedEnergyBasedTrainer:
         thinking_attempts = 0
 
         while True:
-            # Get action from FIXED agent
+            # Get action from agent
             action, thinking_info = self.agent.predict(obs, deterministic=False)
 
             # Track thinking process
@@ -277,20 +403,27 @@ class FixedEnergyBasedTrainer:
 
             # Take step
             obs, reward, done, truncated, info = self.env.step(action)
-            total_reward += reward
+            base_reward += reward
             steps += 1
             self.total_steps += 1
 
             if done or truncated:
-                won = info.get("wins", 0) > 0
+                won = info.get("wins", 0) > 0 or info.get("win_rate", 0.0) > 0.5
                 break
 
-        thinking_success_rate = safe_mean(
-            [thinking_successes / max(thinking_attempts, 1)], 0.0
+        # Calculate aggressive reward
+        aggressive_reward, bonus_breakdown = (
+            self.reward_manager.calculate_aggressive_reward(
+                base_reward, info, steps, won
+            )
         )
 
+        thinking_success_rate = thinking_successes / max(thinking_attempts, 1)
+
         return {
-            "reward": total_reward,
+            "base_reward": base_reward,
+            "aggressive_reward": aggressive_reward,
+            "bonus_breakdown": bonus_breakdown,
             "steps": steps,
             "won": won,
             "thinking_success_rate": thinking_success_rate,
@@ -298,21 +431,22 @@ class FixedEnergyBasedTrainer:
         }
 
     def train(self):
-        """Main training loop with FIXED components."""
+        """Main training loop with aggressive focus on winning."""
         if not self.verify_setup():
             print("❌ Setup verification failed!")
             return
 
-        print("\n🚀 Starting FIXED Energy-Based Training...")
-        print("🎯 Target: Proper energy scaling and realistic thresholds")
+        print("\n🚀 Starting AGGRESSIVE Energy-Based Training...")
+        print("🏆 Target: 60%+ win rate with massive reward bonuses")
 
         # Training metrics
         recent_rewards = []
         recent_wins = []
         training_losses = []
+        win_streaks = []
 
         # Progress bar
-        pbar = tqdm(range(self.args.total_episodes), desc="Episodes")
+        pbar = tqdm(range(self.args.total_episodes), desc="🏆 Aggressive Training")
 
         for episode in pbar:
             if not self.training_active:
@@ -324,10 +458,11 @@ class FixedEnergyBasedTrainer:
             episode_result = self.run_episode()
 
             # Track performance
-            recent_rewards.append(episode_result["reward"])
+            recent_rewards.append(episode_result["aggressive_reward"])
             recent_wins.append(1.0 if episode_result["won"] else 0.0)
-            self.episode_rewards.append(episode_result["reward"])
+            self.episode_rewards.append(episode_result["aggressive_reward"])
             self.episode_wins.append(1.0 if episode_result["won"] else 0.0)
+            self.reward_breakdowns.append(episode_result["bonus_breakdown"])
 
             # Training step (if we have enough data)
             buffer_stats = self.experience_buffer.get_stats()
@@ -336,7 +471,7 @@ class FixedEnergyBasedTrainer:
                 training_losses.append(loss)
 
                 # Check energy separation quality
-                energy_quality = abs(separation) * 100  # Convert to percentage
+                energy_quality = abs(separation) * 100
                 self.energy_qualities.append(energy_quality)
 
                 # Update stability manager
@@ -353,8 +488,6 @@ class FixedEnergyBasedTrainer:
 
                 if emergency_triggered:
                     print("🚨 EMERGENCY PROTOCOL TRIGGERED!")
-
-                    # Emergency: Purge low-quality experiences
                     self.experience_buffer.emergency_purge(keep_ratio=0.3)
 
                     # Update learning rate
@@ -363,51 +496,55 @@ class FixedEnergyBasedTrainer:
                         param_group["lr"] = new_lr
                     self.agent.current_thinking_lr = new_thinking_lr
 
-                # Update progress bar with FIXED metrics
+                # Get reward manager stats
+                reward_stats = self.reward_manager.get_stats()
+
+                # Update progress bar with aggressive metrics
                 pbar.set_postfix(
                     {
                         "WR": f"{win_rate:.2f}",
-                        "EQ": f"{avg_energy_quality:.1f}",
+                        "Streak": f"{reward_stats['current_streak']}",
+                        "Best": f"{reward_stats['best_streak']}",
+                        "AR": f"{episode_result['aggressive_reward']:.1f}",
                         "Sep": f"{avg_energy_separation:.3f}",
-                        "Loss": f"{loss:.3f}",
-                        "LR": f"{self.optimizer.param_groups[0]['lr']:.1e}",
+                        "Mode": reward_stats["performance_level"][:4],
                         "Buf": buffer_stats["total_size"],
-                        "G/B": f"{buffer_stats['good_count']}/{buffer_stats['bad_count']}",
-                        "Mode": (
-                            "Emergency"
-                            if self.stability_manager.emergency_mode
-                            else "Normal"
-                        ),
                     }
                 )
 
-                # Show energy separation warnings (less frequently)
-                if episode % 10 == 0 and abs(separation) < 0.1:
-                    print(f"⚠️  Energy separation low: {separation:.6f}")
+                # Show detailed breakdown every 25 episodes
+                if episode % 25 == 0 and episode > 0:
+                    print(f"\n🏆 Episode {episode} - Aggressive Training Report:")
                     print(
-                        f"   Good energy: {train_info.get('good_energy', 0):.6f}, "
-                        f"Bad energy: {train_info.get('bad_energy', 0):.6f}"
+                        f"   Win Rate: {win_rate:.1%} | Current Streak: {reward_stats['current_streak']} | Best Streak: {reward_stats['best_streak']}"
                     )
-                    print(f"   Contrastive loss: {loss:.6f}")
+                    print(
+                        f"   Performance Level: {reward_stats['performance_level'].upper()}"
+                    )
+                    if episode_result["bonus_breakdown"]:
+                        print(
+                            f"   Reward Breakdown: {episode_result['bonus_breakdown']}"
+                        )
+                    print(
+                        f"   Energy Quality: {avg_energy_quality:.1f} | Separation: {avg_energy_separation:.3f}"
+                    )
 
             else:
                 # Not enough data for training yet
+                reward_stats = self.reward_manager.get_stats()
                 pbar.set_postfix(
                     {
                         "WR": f"{safe_mean(recent_wins[-10:], 0.0):.2f}",
-                        "EQ": "0.0",
-                        "Sep": "0.000",
-                        "Loss": "0.000",
-                        "LR": f"{self.optimizer.param_groups[0]['lr']:.1e}",
-                        "Buf": buffer_stats["total_size"],
-                        "G/B": f"{buffer_stats['good_count']}/{buffer_stats['bad_count']}",
+                        "Streak": f"{reward_stats['current_streak']}",
+                        "AR": f"{episode_result['aggressive_reward']:.1f}",
                         "Mode": "Collecting",
+                        "Buf": buffer_stats["total_size"],
                     }
                 )
 
-            # Save checkpoints
-            if episode > 0 and episode % self.args.save_freq == 0:
-                win_rate = safe_mean(self.episode_wins[-100:], 0.0)
+            # Save checkpoints more frequently for aggressive training
+            if episode > 0 and episode % max(25, self.args.save_freq // 2) == 0:
+                win_rate = safe_mean(self.episode_wins[-50:], 0.0)
                 energy_quality = safe_mean(self.energy_qualities[-20:], 0.0)
 
                 self.checkpoint_manager.save_checkpoint(
@@ -415,19 +552,32 @@ class FixedEnergyBasedTrainer:
                 )
 
         pbar.close()
-        print("\n✅ Training completed!")
+        print("\n✅ Aggressive training completed!")
 
-        # Final statistics
+        # Final comprehensive statistics
         final_win_rate = safe_mean(self.episode_wins[-100:], 0.0)
         final_energy_quality = safe_mean(self.energy_qualities[-20:], 0.0)
+        final_reward_stats = self.reward_manager.get_stats()
 
-        print(f"📊 Final Results:")
-        print(f"   - Win rate: {final_win_rate:.3f}")
-        print(f"   - Energy quality: {final_energy_quality:.1f}")
-        print(f"   - Total episodes: {len(self.episode_rewards)}")
+        print(f"\n📊 FINAL AGGRESSIVE TRAINING RESULTS:")
+        print(f"   🏆 Final Win Rate: {final_win_rate:.1%}")
+        print(f"   🔥 Best Win Streak: {final_reward_stats['best_streak']}")
+        print(f"   ⚡ Energy Quality: {final_energy_quality:.1f}")
         print(
-            f"   - Emergency activations: {self.stability_manager.consecutive_poor_episodes}"
+            f"   🎯 Performance Level: {final_reward_stats['performance_level'].upper()}"
         )
+        print(f"   📈 Total Episodes: {len(self.episode_rewards)}")
+        print(
+            f"   💰 Average Aggressive Reward: {safe_mean(self.episode_rewards[-50:], 0.0):.1f}"
+        )
+
+        # Achievement analysis
+        if final_win_rate >= 0.6:
+            print(f"   🎉 SUCCESS: Target 60% win rate ACHIEVED!")
+        elif final_win_rate >= 0.5:
+            print(f"   ⭐ GOOD: Strong performance, approaching target!")
+        else:
+            print(f"   📈 PROGRESS: Keep training to reach 60% target!")
 
         # Save final checkpoint
         final_path = self.checkpoint_manager.save_checkpoint(
@@ -436,60 +586,44 @@ class FixedEnergyBasedTrainer:
         if final_path:
             print(f"💾 Final checkpoint saved: {final_path.name}")
 
-    def safe_reset_energy_network(self):
-        """Safe energy network reset that avoids tensor size mismatches."""
-        print("🛡️  SAFE ENERGY NETWORK RESET")
-
-        # Store current settings
-        current_lr = self.optimizer.param_groups[0]["lr"]
-        current_thinking_lr = self.agent.current_thinking_lr
-        energy_scale = self.verifier.energy_scale
-
-        # Create new verifier with same architecture
-        print("🔄 Creating new verifier instance")
-        self.verifier = FixedEnergyBasedStreetFighterVerifier(
-            self.env.observation_space, self.env.action_space, features_dim=256
-        ).to(self.device)
-
-        # Restore energy scale
-        self.verifier.energy_scale = energy_scale
-
-        # Create new optimizer
-        self.optimizer = optim.Adam(
-            self.verifier.parameters(), lr=current_lr, weight_decay=1e-5
-        )
-
-        # Update agent
-        self.agent.verifier = self.verifier
-        self.agent.current_thinking_lr = current_thinking_lr
-
-        print(
-            f"✅ Safe reset complete with LR: {current_lr:.2e}, Energy scale: {energy_scale:.3f}"
-        )
-
-        # Clear monitoring history
-        self.stability_manager.consecutive_poor_episodes = 0
+        return {
+            "final_win_rate": final_win_rate,
+            "best_streak": final_reward_stats["best_streak"],
+            "energy_quality": final_energy_quality,
+            "total_episodes": len(self.episode_rewards),
+        }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FIXED Energy-Based Transformer Training"
+        description="Aggressive Energy-Based Transformer Training"
     )
 
     # Training parameters
     parser.add_argument(
-        "--total-episodes", type=int, default=1000, help="Total episodes to train"
-    )
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument(
-        "--thinking-lr", type=float, default=0.2, help="Thinking learning rate"
+        "--total-episodes", type=int, default=300, help="Total episodes to train"
     )
     parser.add_argument(
-        "--thinking-steps", type=int, default=3, help="Number of thinking steps"
+        "--lr",
+        type=float,
+        default=5e-4,
+        help="Learning rate (higher for aggressive training)",
     )
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument(
-        "--contrastive-margin", type=float, default=1.0, help="Contrastive loss margin"
+        "--thinking-lr",
+        type=float,
+        default=0.8,
+        help="Thinking learning rate (higher for aggressive training)",
+    )
+    parser.add_argument(
+        "--thinking-steps", type=int, default=4, help="Number of thinking steps"
+    )
+    parser.add_argument("--batch-size", type=int, default=24, help="Batch size")
+    parser.add_argument(
+        "--contrastive-margin",
+        type=float,
+        default=3.0,
+        help="Contrastive loss margin (higher for aggressive training)",
     )
 
     # System parameters
@@ -508,15 +642,17 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"🚀 Starting FIXED Energy-Based Transformer Training")
+    print(f"🚀 Starting AGGRESSIVE Energy-Based Transformer Training")
+    print(f"🏆 FOCUS: MASSIVE rewards for WINNING")
     print(f"   - Episodes: {args.total_episodes}")
-    print(f"   - Learning rate: {args.lr}")
-    print(f"   - Thinking LR: {args.thinking_lr}")
-    print(f"   - Thinking steps: {args.thinking_steps}")
+    print(f"   - Learning rate: {args.lr} (aggressive)")
+    print(f"   - Thinking LR: {args.thinking_lr} (aggressive)")
+    print(f"   - Contrastive margin: {args.contrastive_margin} (high)")
     print(f"   - Device: {args.device}")
+    print(f"   - Target: 60%+ win rate")
 
     # Create and run trainer
-    trainer = FixedEnergyBasedTrainer(args)
+    trainer = AggressiveEnergyBasedTrainer(args)
     trainer.setup_training()
 
     # Resume from checkpoint if specified
@@ -529,8 +665,20 @@ def main():
         else:
             print(f"⚠️  Checkpoint not found: {args.resume}")
 
-    # Start training
-    trainer.train()
+    # Start aggressive training
+    results = trainer.train()
+
+    # Final success message
+    if results["final_win_rate"] >= 0.6:
+        print(f"\n🎉🏆 MISSION ACCOMPLISHED! 🏆🎉")
+        print(f"🥇 Win rate: {results['final_win_rate']:.1%}")
+        print(f"🔥 Best streak: {results['best_streak']}")
+        print(f"⚡ Energy quality: {results['energy_quality']:.1f}")
+    else:
+        print(f"\n📈 Good progress! Continue training to reach 60% target.")
+        print(
+            f"Current: {results['final_win_rate']:.1%} | Best streak: {results['best_streak']}"
+        )
 
 
 if __name__ == "__main__":
