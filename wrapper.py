@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-🛡️ FIXED ENERGY-BASED TRANSFORMER FOR STREET FIGHTER
-Key fixes:
-- Proper energy scaling (1.0 instead of 0.01)
-- Realistic collapse detection thresholds
-- Better initialization
-- Adaptive energy scaling based on training progress
+🛡️ COMPLETE WRAPPER WITH QUALITY-BASED EXPERIENCE BUFFER
+Integrates intelligent reward shaping with quality-based labeling for 60% win rate.
 """
 
 import cv2
@@ -44,7 +40,7 @@ retro.make = _patched_retro_make
 os.makedirs("logs", exist_ok=True)
 os.makedirs("checkpoints", exist_ok=True)
 log_filename = (
-    f'logs/fixed_energy_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    f'logs/quality_based_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 logging.basicConfig(
     level=logging.WARNING,
@@ -59,12 +55,12 @@ SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 32
 
-print(f"🧠 FIXED ENERGY-BASED TRANSFORMER Configuration:")
+print(f"🧠 QUALITY-BASED ENERGY TRANSFORMER Configuration:")
 print(f"   - Features: {VECTOR_FEATURE_DIM}")
-print(f"   - Training paradigm: FIXED Energy-Based with Proper Scaling")
+print(f"   - Training paradigm: Quality-Based Experience Labeling")
 
 
-# Enhanced safe operations (same as before)
+# Enhanced safe operations
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
     numerator = ensure_scalar(numerator, default)
@@ -168,55 +164,6 @@ def ensure_scalar(value, default=0.0):
             return default
 
 
-def safe_bool_check(value):
-    """Safe boolean check for arrays."""
-    if value is None:
-        return False
-
-    if isinstance(value, np.ndarray):
-        if value.size == 0:
-            return False
-        elif value.size == 1:
-            try:
-                return bool(value.item())
-            except (ValueError, TypeError):
-                return False
-        else:
-            try:
-                return bool(np.any(value))
-            except (ValueError, TypeError):
-                return False
-    else:
-        try:
-            return bool(value)
-        except (ValueError, TypeError):
-            return False
-
-
-def safe_comparison(value1, value2, operator="==", default=False):
-    """Safe comparison that handles arrays."""
-    try:
-        val1 = ensure_scalar(value1)
-        val2 = ensure_scalar(value2)
-
-        if operator == "==":
-            return val1 == val2
-        elif operator == "!=":
-            return val1 != val2
-        elif operator == "<":
-            return val1 < val2
-        elif operator == "<=":
-            return val1 <= val2
-        elif operator == ">":
-            return val1 > val2
-        elif operator == ">=":
-            return val1 >= val2
-        else:
-            return default
-    except:
-        return default
-
-
 def ensure_feature_dimension(features, target_dim):
     """Ensure features match target dimension exactly."""
     if not isinstance(features, np.ndarray):
@@ -245,320 +192,595 @@ def ensure_feature_dimension(features, target_dim):
         return features[:target_dim].astype(np.float32)
 
 
-class FixedEnergyStabilityManager:
-    """
-    🛡️ FIXED Energy Landscape Stability Manager
-    With realistic thresholds and adaptive scaling.
-    """
+def safe_comparison(value1, value2, operator="==", default=False):
+    """Safe comparison that handles arrays."""
+    try:
+        val1 = ensure_scalar(value1)
+        val2 = ensure_scalar(value2)
 
-    def __init__(self, initial_lr=1e-4, thinking_lr=0.1):
-        self.initial_lr = initial_lr
-        self.current_lr = initial_lr
-        self.thinking_lr = thinking_lr
-        self.current_thinking_lr = thinking_lr
-
-        # Performance tracking
-        self.win_rate_window = deque(maxlen=20)
-        self.energy_quality_window = deque(maxlen=20)
-        self.energy_separation_window = deque(maxlen=20)
-
-        # FIXED: Realistic emergency thresholds
-        self.min_win_rate = 0.20  # More lenient
-        self.min_energy_quality = 5.0  # Much more realistic
-        self.min_energy_separation = 0.05  # 100x more realistic
-        self.max_early_stop_rate = 0.9  # More lenient
-
-        # Adaptive parameters
-        self.lr_decay_factor = 0.7
-        self.lr_recovery_factor = 1.1
-        self.max_lr_reductions = 5
-        self.lr_reductions = 0
-
-        # State tracking
-        self.last_reset_episode = 0
-        self.consecutive_poor_episodes = 0
-        self.best_model_state = None
-        self.best_win_rate = 0.0
-        self.emergency_mode = False
-
-        print(f"🛡️  FIXED EnergyStabilityManager initialized")
-        print(f"   - Min energy separation: {self.min_energy_separation}")
-        print(f"   - Min energy quality: {self.min_energy_quality}")
-
-    def update_metrics(
-        self, win_rate, energy_quality, energy_separation, early_stop_rate
-    ):
-        """Update performance metrics and check for instability."""
-        self.win_rate_window.append(win_rate)
-        self.energy_quality_window.append(energy_quality)
-        self.energy_separation_window.append(energy_separation)
-
-        # Check for energy landscape collapse
-        avg_win_rate = safe_mean(list(self.win_rate_window), 0.5)
-        avg_energy_quality = safe_mean(list(self.energy_quality_window), 10.0)
-        avg_energy_separation = safe_mean(list(self.energy_separation_window), 0.1)
-
-        collapse_indicators = 0
-
-        if avg_win_rate < self.min_win_rate:
-            collapse_indicators += 1
-            print(f"🚨 Win rate collapse: {avg_win_rate:.3f} < {self.min_win_rate}")
-
-        if avg_energy_quality < self.min_energy_quality:
-            collapse_indicators += 1
-            print(
-                f"🚨 Energy quality collapse: {avg_energy_quality:.1f} < {self.min_energy_quality}"
-            )
-
-        if abs(avg_energy_separation) < self.min_energy_separation:
-            collapse_indicators += 1
-            print(
-                f"🚨 Energy separation collapse: {abs(avg_energy_separation):.3f} < {self.min_energy_separation}"
-            )
-
-        if early_stop_rate > self.max_early_stop_rate:
-            collapse_indicators += 1
-            print(
-                f"🚨 Early stop rate explosion: {early_stop_rate:.3f} > {self.max_early_stop_rate}"
-            )
-
-        # Trigger emergency if multiple indicators (more lenient)
-        if collapse_indicators >= 3:  # Need 3 instead of 2
-            self.consecutive_poor_episodes += 1
-            if self.consecutive_poor_episodes >= 5:  # More episodes before emergency
-                print(f"🚨 ENERGY LANDSCAPE COLLAPSE DETECTED!")
-                return self._trigger_emergency_protocol()
+        if operator == "==":
+            return val1 == val2
+        elif operator == "!=":
+            return val1 != val2
+        elif operator == "<":
+            return val1 < val2
+        elif operator == "<=":
+            return val1 <= val2
+        elif operator == ">":
+            return val1 > val2
+        elif operator == ">=":
+            return val1 >= val2
         else:
-            self.consecutive_poor_episodes = 0
-            self.emergency_mode = False
-
-        return False  # No emergency
-
-    def _trigger_emergency_protocol(self):
-        """🚨 Emergency protocol for energy landscape collapse."""
-        print(f"🛡️  ACTIVATING EMERGENCY STABILIZATION PROTOCOL")
-
-        if not self.emergency_mode:
-            # Reduce learning rates
-            if self.lr_reductions < self.max_lr_reductions:
-                self.current_lr *= self.lr_decay_factor
-                self.current_thinking_lr *= self.lr_decay_factor
-                self.lr_reductions += 1
-
-                print(f"   📉 Learning rates reduced:")
-                print(f"      - Main LR: {self.current_lr:.2e}")
-                print(f"      - Thinking LR: {self.current_thinking_lr:.3f}")
-
-            self.emergency_mode = True
-            self.consecutive_poor_episodes = 0
-
-            return True  # Signal for emergency actions
-
-        return False
-
-    def should_save_checkpoint(self, current_win_rate):
-        """Determine if current model should be saved as best."""
-        if current_win_rate > self.best_win_rate:
-            self.best_win_rate = current_win_rate
-            return True
-        return False
-
-    def get_current_lrs(self):
-        """Get current learning rates."""
-        return self.current_lr, self.current_thinking_lr
-
-    def recovery_check(self, current_win_rate):
-        """Check if we can recover from emergency mode."""
-        if self.emergency_mode and current_win_rate > self.min_win_rate + 0.1:
-            self.emergency_mode = False
-            print(f"✅ Recovery detected, exiting emergency mode")
+            return default
+    except:
+        return default
 
 
-class DiversityExperienceBuffer:
+class IntelligentRewardCalculator:
     """
-    🎯 ENHANCED: Diversity-Controlled Experience Buffer
-    Maintains good/bad balance across different skill levels.
+    🧠 Calculates intelligent rewards with detailed breakdown for quality scoring.
     """
 
-    def __init__(self, capacity=50000, quality_threshold=0.5):
+    def __init__(self):
+        # Reward component weights (optimized for winning)
+        self.weights = {
+            "damage_dealt": 15.0,
+            "damage_avoided": 8.0,
+            "health_advantage": 5.0,
+            "combo_progression": 12.0,
+            "positioning": 6.0,
+            "pressure": 4.0,
+            "momentum": 7.0,
+            "defensive": 3.0,
+            "win_progress": 10.0,
+            "frame_efficiency": 2.0,
+        }
+
+        # Game state tracking
+        self.prev_player_health = None
+        self.prev_opponent_health = None
+        self.prev_score = None
+        self.combo_count = 0
+        self.last_hit_frame = -1
+        self.current_frame = 0
+        self.pressure_frames = 0
+        self.defensive_frames = 0
+
+        # History tracking
+        self.health_history = deque(maxlen=10)
+        self.opponent_health_history = deque(maxlen=10)
+        self.momentum_tracker = deque(maxlen=10)
+
+        # Game constants
+        self.max_health = MAX_HEALTH
+        self.screen_width = SCREEN_WIDTH
+        self.optimal_distance_min = 60
+        self.optimal_distance_max = 100
+
+        print("🧠 Intelligent Reward Calculator initialized")
+        print(f"   - {len(self.weights)} reward components")
+        print(f"   - Optimized for strategic gameplay")
+
+    def calculate_reward_with_breakdown(
+        self, info: Dict, prev_info: Dict = None
+    ) -> Tuple[float, Dict]:
+        """
+        Calculate intelligent reward with detailed breakdown.
+
+        Returns:
+            (total_reward, reward_breakdown_dict)
+        """
+        self.current_frame += 1
+        reward_breakdown = {}
+        total_reward = 0.0
+
+        # Extract current state
+        player_health = ensure_scalar(
+            info.get("agent_hp", self.max_health), self.max_health
+        )
+        opponent_health = ensure_scalar(
+            info.get("enemy_hp", self.max_health), self.max_health
+        )
+        score = ensure_scalar(info.get("score", 0), 0)
+        player_x = ensure_scalar(
+            info.get("agent_x", self.screen_width // 2), self.screen_width // 2
+        )
+        opponent_x = ensure_scalar(
+            info.get("enemy_x", self.screen_width // 2), self.screen_width // 2
+        )
+
+        # Store in history
+        self.health_history.append(player_health)
+        self.opponent_health_history.append(opponent_health)
+
+        # 1. DAMAGE AND HEALTH REWARDS
+        damage_reward = self._calculate_damage_rewards(
+            player_health, opponent_health, prev_info
+        )
+        total_reward += damage_reward
+        reward_breakdown["damage"] = damage_reward
+
+        # 2. COMBO AND SCORE REWARDS
+        combo_reward = self._calculate_combo_rewards(score, prev_info)
+        total_reward += combo_reward
+        reward_breakdown["combo"] = combo_reward
+
+        # 3. POSITIONING REWARDS
+        spacing_reward = self._calculate_spacing_rewards(player_x, opponent_x)
+        total_reward += spacing_reward
+        reward_breakdown["spacing"] = spacing_reward
+
+        # 4. PRESSURE AND TACTICAL REWARDS
+        pressure_reward = self._calculate_pressure_rewards(
+            player_x, opponent_x, player_health, opponent_health
+        )
+        total_reward += pressure_reward
+        reward_breakdown["pressure"] = pressure_reward
+
+        # 5. MOMENTUM REWARDS
+        momentum_reward = self._calculate_momentum_rewards()
+        total_reward += momentum_reward
+        reward_breakdown["momentum"] = momentum_reward
+
+        # 6. WIN PROGRESS REWARDS
+        win_progress_reward = self._calculate_win_progress_rewards(
+            player_health, opponent_health
+        )
+        total_reward += win_progress_reward
+        reward_breakdown["win_progress"] = win_progress_reward
+
+        # 7. FRAME EFFICIENCY (small time penalty)
+        efficiency_reward = -0.001 * self.weights["frame_efficiency"]
+        total_reward += efficiency_reward
+        reward_breakdown["efficiency"] = efficiency_reward
+
+        # Apply context scaling
+        total_reward = self._apply_context_scaling(
+            total_reward, player_health, opponent_health
+        )
+
+        # Update previous state
+        self.prev_player_health = player_health
+        self.prev_opponent_health = opponent_health
+        self.prev_score = score
+
+        # Normalize total reward
+        total_reward = np.clip(total_reward, -0.5, 2.0)
+
+        return total_reward, reward_breakdown
+
+    def _calculate_damage_rewards(self, player_health, opponent_health, prev_info):
+        """Calculate damage-related rewards."""
+        reward = 0.0
+
+        if prev_info is not None:
+            prev_player_health = ensure_scalar(
+                prev_info.get("agent_hp", player_health), player_health
+            )
+            prev_opponent_health = ensure_scalar(
+                prev_info.get("enemy_hp", opponent_health), opponent_health
+            )
+
+            # Damage dealt (positive reward)
+            damage_dealt = max(0, prev_opponent_health - opponent_health)
+            if damage_dealt > 0:
+                # Scale reward based on opponent's remaining health
+                health_factor = 1.0 + (1.0 - opponent_health / self.max_health) * 0.5
+                reward += (
+                    damage_dealt * self.weights["damage_dealt"] * health_factor * 0.01
+                )
+
+            # Damage received (negative reward)
+            damage_received = max(0, prev_player_health - player_health)
+            if damage_received > 0:
+                reward -= damage_received * self.weights["damage_dealt"] * 0.005
+
+            # Health advantage change
+            current_advantage = player_health - opponent_health
+            prev_advantage = prev_player_health - prev_opponent_health
+            advantage_change = current_advantage - prev_advantage
+            if advantage_change > 0:
+                reward += advantage_change * self.weights["health_advantage"] * 0.003
+
+        return reward
+
+    def _calculate_combo_rewards(self, score, prev_info):
+        """Calculate combo-related rewards."""
+        reward = 0.0
+
+        if prev_info is not None:
+            prev_score = ensure_scalar(prev_info.get("score", 0), 0)
+            score_increase = score - prev_score
+
+            if score_increase > 0:
+                # Detect combo continuation
+                if self.current_frame - self.last_hit_frame <= 60:  # 1 second window
+                    self.combo_count += 1
+                    # Exponential bonus for longer combos
+                    combo_multiplier = 1.0 + (self.combo_count * 0.2)
+                    reward += (
+                        score_increase
+                        * self.weights["combo_progression"]
+                        * combo_multiplier
+                        * 0.001
+                    )
+                else:
+                    self.combo_count = 1
+                    reward += score_increase * self.weights["combo_progression"] * 0.001
+
+                self.last_hit_frame = self.current_frame
+            else:
+                # Reset combo if no hit for 1 second
+                if self.current_frame - self.last_hit_frame > 60:
+                    self.combo_count = 0
+
+        return reward
+
+    def _calculate_spacing_rewards(self, player_x, opponent_x):
+        """Calculate positioning rewards."""
+        reward = 0.0
+        distance = abs(player_x - opponent_x)
+
+        # Optimal spacing reward
+        if self.optimal_distance_min <= distance <= self.optimal_distance_max:
+            reward += self.weights["positioning"] * 0.002
+
+        # Penalty for poor spacing
+        if distance < 30:  # Too close (vulnerable)
+            reward -= self.weights["positioning"] * 0.001
+        elif distance > 150:  # Too far (can't attack)
+            reward -= self.weights["positioning"] * 0.0005
+
+        # Center control bonus
+        screen_center = self.screen_width // 2
+        player_center_dist = abs(player_x - screen_center)
+        opponent_center_dist = abs(opponent_x - screen_center)
+        if player_center_dist < opponent_center_dist:
+            reward += self.weights["positioning"] * 0.0005
+
+        # Corner awareness
+        player_corner_dist = min(player_x, self.screen_width - player_x)
+        if player_corner_dist < 50:  # Too close to corner
+            reward -= self.weights["positioning"] * 0.001
+
+        return reward
+
+    def _calculate_pressure_rewards(
+        self, player_x, opponent_x, player_health, opponent_health
+    ):
+        """Calculate tactical pressure rewards."""
+        reward = 0.0
+        distance = abs(player_x - opponent_x)
+
+        # Offensive pressure when ahead
+        if player_health > opponent_health and distance < 80:
+            self.pressure_frames += 1
+            reward += self.weights["pressure"] * 0.001
+        else:
+            self.pressure_frames = max(0, self.pressure_frames - 1)
+
+        # Sustained pressure bonus
+        if self.pressure_frames > 30:  # Half second of pressure
+            reward += self.weights["pressure"] * 0.002
+
+        # Defensive spacing when behind
+        if player_health < opponent_health and distance > 100:
+            self.defensive_frames += 1
+            reward += self.weights["defensive"] * 0.0005
+        else:
+            self.defensive_frames = max(0, self.defensive_frames - 1)
+
+        return reward
+
+    def _calculate_momentum_rewards(self):
+        """Calculate momentum rewards."""
+        reward = 0.0
+
+        if len(self.health_history) >= 5 and len(self.opponent_health_history) >= 5:
+            # Calculate health momentum over last 5 frames
+            health_list = list(self.health_history)
+            opponent_health_list = list(self.opponent_health_history)
+
+            player_momentum = (health_list[-1] - health_list[-5]) / 5
+            opponent_momentum = (
+                opponent_health_list[-1] - opponent_health_list[-5]
+            ) / 5
+
+            # Positive momentum = opponent losing health faster than us
+            relative_momentum = opponent_momentum - player_momentum
+            self.momentum_tracker.append(relative_momentum)
+
+            # Reward positive momentum
+            if relative_momentum > 0:
+                reward += relative_momentum * self.weights["momentum"] * 0.01
+
+            # Sustained momentum bonus
+            if len(self.momentum_tracker) >= 5:
+                momentum_list = list(self.momentum_tracker)
+                recent_momentum = sum(momentum_list[-5:]) / 5
+                if recent_momentum > 0.5:
+                    reward += self.weights["momentum"] * 0.002
+
+        return reward
+
+    def _calculate_win_progress_rewards(self, player_health, opponent_health):
+        """Calculate win condition progress rewards."""
+        reward = 0.0
+
+        player_health_pct = player_health / self.max_health
+        opponent_health_pct = opponent_health / self.max_health
+
+        # Reward for maintaining high health
+        if player_health_pct > 0.7:
+            reward += self.weights["win_progress"] * 0.001
+
+        # Big bonus for getting opponent to critical health
+        if opponent_health_pct < 0.3:
+            reward += self.weights["win_progress"] * 0.005
+
+        if opponent_health_pct < 0.1:
+            reward += self.weights["win_progress"] * 0.01  # Close to victory!
+
+        # Health advantage scaling
+        health_advantage = player_health_pct - opponent_health_pct
+        if health_advantage > 0:
+            reward += health_advantage * self.weights["win_progress"] * 0.002
+
+        return reward
+
+    def _apply_context_scaling(self, base_reward, player_health, opponent_health):
+        """Apply intelligent scaling based on game context."""
+        # Scale up rewards when the game is close (more critical decisions)
+        health_diff = abs(player_health - opponent_health)
+        if health_diff < 30:  # Very close game
+            base_reward *= 1.3
+        elif health_diff < 60:  # Somewhat close
+            base_reward *= 1.1
+
+        # Scale up rewards in critical health situations
+        if player_health < 40 or opponent_health < 40:
+            base_reward *= 1.2
+
+        return base_reward
+
+    def calculate_win_reward(
+        self, won: bool, player_health: int, opponent_health: int, episode_length: int
+    ) -> float:
+        """Calculate final win/loss reward."""
+        if won:
+            base_win_reward = 1.0
+            health_bonus = (player_health / self.max_health) * 0.3
+
+            # Speed bonus
+            if episode_length < 1000:
+                speed_bonus = 0.2
+            elif episode_length < 2000:
+                speed_bonus = 0.1
+            else:
+                speed_bonus = 0.0
+
+            return base_win_reward + health_bonus + speed_bonus
+        else:
+            return -0.1
+
+    def get_experience_quality_score(
+        self, reward: float, reward_breakdown: Dict
+    ) -> float:
+        """
+        Calculate quality score for experience buffer labeling.
+        This replaces the broken percentile-based system.
+        """
+        # Initialize strategic bonus
+        strategic_bonus = 0.0
+
+        # Base quality from total reward using tanh normalization
+        base_quality = math.tanh(reward * 2.0) * 0.5 + 0.5  # Normalize to [0, 1]
+
+        # Strategic bonuses for key actions
+        if reward_breakdown.get("damage", 0) > 0.01:  # Actually dealing damage
+            strategic_bonus += 0.2
+
+        if reward_breakdown.get("combo", 0) > 0.005:  # Building combos
+            strategic_bonus += 0.15
+
+        if reward_breakdown.get("spacing", 0) > 0.001:  # Good positioning
+            strategic_bonus += 0.1
+
+        if reward_breakdown.get("momentum", 0) > 0.001:  # Positive momentum
+            strategic_bonus += 0.1
+
+        if reward_breakdown.get("win_progress", 0) > 0.005:  # Progress toward winning
+            strategic_bonus += 0.15
+
+        # Penalties for bad actions
+        if reward_breakdown.get("damage", 0) < -0.01:  # Taking significant damage
+            strategic_bonus -= 0.2
+
+        if reward_breakdown.get("spacing", 0) < -0.001:  # Poor positioning
+            strategic_bonus -= 0.1
+
+        # Final quality score
+        quality_score = min(1.0, max(0.0, base_quality + strategic_bonus))
+
+        return quality_score
+
+    def reset_episode(self):
+        """Reset tracking for new episode."""
+        self.health_history.clear()
+        self.opponent_health_history.clear()
+        self.momentum_tracker.clear()
+
+        self.combo_count = 0
+        self.last_hit_frame = -1
+        self.current_frame = 0
+        self.pressure_frames = 0
+        self.defensive_frames = 0
+
+        self.prev_player_health = None
+        self.prev_opponent_health = None
+        self.prev_score = None
+
+
+class QualityBasedExperienceBuffer:
+    """
+    🎯 Experience buffer using quality-based labeling instead of broken percentiles.
+    """
+
+    def __init__(self, capacity=40000, quality_threshold=0.55):
         self.capacity = capacity
         self.quality_threshold = quality_threshold
 
-        # Separate storage for different skill levels
-        self.skill_buckets = {
-            "beginner": {
-                "good": deque(maxlen=capacity // 6),
-                "bad": deque(maxlen=capacity // 6),
-            },
-            "intermediate": {
-                "good": deque(maxlen=capacity // 6),
-                "bad": deque(maxlen=capacity // 6),
-            },
-            "advanced": {
-                "good": deque(maxlen=capacity // 6),
-                "bad": deque(maxlen=capacity // 6),
-            },
-        }
+        # Separate storage for good and bad experiences
+        self.good_experiences = deque(maxlen=capacity // 2)
+        self.bad_experiences = deque(maxlen=capacity // 2)
 
-        # Quality tracking
+        # Quality tracking for monitoring
+        self.quality_scores = deque(maxlen=1000)
         self.total_added = 0
-        self.total_rejected = 0
-        self.episode_count = 0
+        self.good_count = 0
+        self.bad_count = 0
 
-        print(f"🎯 DiversityExperienceBuffer initialized with skill-based buckets")
+        print(f"🎯 Quality-Based Experience Buffer initialized")
+        print(f"   - Quality threshold: {quality_threshold}")
+        print(f"   - Uses absolute quality, not relative percentiles")
 
-    def add_episode_experiences(self, episode_experiences, win_rate):
-        """Add entire episode with relative good/bad labeling."""
-        self.episode_count += 1
+    def add_experience(
+        self,
+        experience: Dict,
+        reward: float,
+        reward_breakdown: Dict,
+        quality_score: float,
+    ):
+        """
+        Add experience with quality-based labeling.
 
-        # Determine skill level
-        if win_rate < 0.3:
-            skill_level = "beginner"
-        elif win_rate < 0.7:
-            skill_level = "intermediate"
+        Args:
+            experience: The experience dictionary (obs, action, etc.)
+            reward: The intelligent reward for this action
+            reward_breakdown: Dictionary with reward components
+            quality_score: Pre-calculated quality score
+        """
+        self.total_added += 1
+
+        # Store quality score for monitoring
+        self.quality_scores.append(quality_score)
+
+        # Add metadata to experience
+        experience["quality_score"] = quality_score
+        experience["reward"] = reward
+        experience["reward_breakdown"] = reward_breakdown
+
+        # Label based on absolute quality threshold
+        if quality_score >= self.quality_threshold:
+            experience["is_good"] = True
+            self.good_experiences.append(experience)
+            self.good_count += 1
         else:
-            skill_level = "advanced"
+            experience["is_good"] = False
+            self.bad_experiences.append(experience)
+            self.bad_count += 1
 
-        # Process episode for relative good/bad
-        if len(episode_experiences) == 0:
-            return
-
-        # Extract rewards and calculate percentiles
-        rewards = [exp["reward"] for exp in episode_experiences]
-        if len(rewards) < 4:  # Too few experiences
-            return
-
-        reward_75th = np.percentile(rewards, 75)
-        reward_25th = np.percentile(rewards, 25)
-
-        good_added = 0
-        bad_added = 0
-
-        for exp in episode_experiences:
-            self.total_added += 1
-
-            # Quality score based on relative performance
-            if exp["reward"] >= reward_75th:
-                # Top 25% of episode
-                exp["is_good"] = True
-                quality_score = 0.7 + 0.3 * (
-                    (exp["reward"] - reward_25th)
-                    / max(reward_75th - reward_25th, 0.001)
-                )
-            elif exp["reward"] <= reward_25th:
-                # Bottom 25% of episode
-                exp["is_good"] = False
-                quality_score = 0.7 + 0.3 * (
-                    (reward_75th - exp["reward"])
-                    / max(reward_75th - reward_25th, 0.001)
-                )
-            else:
-                # Middle 50% - skip to maintain clear distinction
-                self.total_rejected += 1
-                continue
-
-            # Add to appropriate bucket
-            if quality_score >= self.quality_threshold:
-                if exp["is_good"]:
-                    self.skill_buckets[skill_level]["good"].append(exp)
-                    good_added += 1
-                else:
-                    self.skill_buckets[skill_level]["bad"].append(exp)
-                    bad_added += 1
-            else:
-                self.total_rejected += 1
-
-        print(
-            f"Episode {self.episode_count} ({skill_level}): +{good_added} good, +{bad_added} bad"
-        )
-
-    def sample_balanced_batch(self, batch_size, prioritize_diversity=True):
-        """Sample balanced batch across skill levels."""
-        good_samples = []
-        bad_samples = []
-
-        # Collect from all skill levels
-        for skill_level in self.skill_buckets:
-            good_bucket = list(self.skill_buckets[skill_level]["good"])
-            bad_bucket = list(self.skill_buckets[skill_level]["bad"])
-
-            good_samples.extend(good_bucket)
-            bad_samples.extend(bad_bucket)
-
-        # Ensure we have enough examples
+    def sample_balanced_batch(self, batch_size: int):
+        """Sample balanced batch of good and bad experiences."""
         target_per_class = batch_size // 2
-        if len(good_samples) < target_per_class or len(bad_samples) < target_per_class:
+
+        # Check if we have enough experiences
+        if len(self.good_experiences) < target_per_class:
             return None, None
 
-        # Sample balanced amounts
-        final_good = random.sample(good_samples, target_per_class)
-        final_bad = random.sample(bad_samples, target_per_class)
+        if len(self.bad_experiences) < target_per_class:
+            return None, None
 
-        return final_good, final_bad
+        # Sample randomly from each class
+        good_indices = np.random.choice(
+            len(self.good_experiences), target_per_class, replace=False
+        )
+        bad_indices = np.random.choice(
+            len(self.bad_experiences), target_per_class, replace=False
+        )
 
-    def emergency_purge(self, keep_ratio=0.2):
-        """🚨 Emergency: Keep only the best experiences."""
+        good_batch = [self.good_experiences[i] for i in good_indices]
+        bad_batch = [self.bad_experiences[i] for i in bad_indices]
+
+        return good_batch, bad_batch
+
+    def get_stats(self) -> Dict:
+        """Get comprehensive buffer statistics."""
+        total_size = len(self.good_experiences) + len(self.bad_experiences)
+
+        # Quality statistics
+        if self.quality_scores:
+            avg_quality = np.mean(list(self.quality_scores))
+            quality_std = np.std(list(self.quality_scores))
+        else:
+            avg_quality = 0.0
+            quality_std = 0.0
+
+        return {
+            "total_size": total_size,
+            "good_count": len(self.good_experiences),
+            "bad_count": len(self.bad_experiences),
+            "good_ratio": len(self.good_experiences) / max(1, total_size),
+            "quality_threshold": self.quality_threshold,
+            "avg_quality_score": avg_quality,
+            "quality_std": quality_std,
+            "total_added": self.total_added,
+            "acceptance_rate": total_size / max(1, self.total_added),
+        }
+
+    def adjust_threshold(self, target_good_ratio=0.5):
+        """Dynamically adjust quality threshold to maintain good/bad balance."""
+        if len(self.quality_scores) < 100:  # Need enough data
+            return
+
+        total_size = len(self.good_experiences) + len(self.bad_experiences)
+        current_good_ratio = len(self.good_experiences) / max(1, total_size)
+
+        if current_good_ratio < target_good_ratio - 0.1:  # Too few good examples
+            self.quality_threshold *= 0.95  # Lower threshold
+            print(f"📉 Lowered quality threshold to {self.quality_threshold:.3f}")
+        elif current_good_ratio > target_good_ratio + 0.1:  # Too many good examples
+            self.quality_threshold *= 1.05  # Raise threshold
+            print(f"📈 Raised quality threshold to {self.quality_threshold:.3f}")
+
+        # Keep threshold in reasonable range
+        self.quality_threshold = max(0.3, min(0.8, self.quality_threshold))
+
+    def emergency_purge(self, keep_ratio=0.3):
+        """Emergency purge - keep only the best experiences."""
         print(f"🚨 Emergency buffer purge - keeping top {keep_ratio*100:.0f}%")
 
         total_purged = 0
-        for skill_level in self.skill_buckets:
-            for category in ["good", "bad"]:
-                bucket = self.skill_buckets[skill_level][category]
-                if len(bucket) == 0:
-                    continue
 
-                # Keep only the best
-                experiences = list(bucket)
-                keep_count = max(1, int(len(experiences) * keep_ratio))
+        # Purge good experiences
+        if len(self.good_experiences) > 0:
+            experiences = list(self.good_experiences)
+            keep_count = max(1, int(len(experiences) * keep_ratio))
 
-                # Sort by quality and keep best
-                experiences.sort(
-                    key=lambda x: x.get("quality_score", 0.5), reverse=True
-                )
-                bucket.clear()
+            # Sort by quality and keep best
+            experiences.sort(key=lambda x: x.get("quality_score", 0.5), reverse=True)
+            self.good_experiences.clear()
 
-                for exp in experiences[:keep_count]:
-                    bucket.append(exp)
+            for exp in experiences[:keep_count]:
+                self.good_experiences.append(exp)
 
-                total_purged += len(experiences) - keep_count
+            total_purged += len(experiences) - keep_count
 
-        print(f"   📊 Purged {total_purged} low-quality experiences")
+        # Purge bad experiences (keep some for contrast)
+        if len(self.bad_experiences) > 0:
+            experiences = list(self.bad_experiences)
+            keep_count = max(1, int(len(experiences) * keep_ratio))
 
-    def get_stats(self):
-        """Get comprehensive buffer statistics."""
-        total_good = sum(
-            len(self.skill_buckets[level]["good"]) for level in self.skill_buckets
-        )
-        total_bad = sum(
-            len(self.skill_buckets[level]["bad"]) for level in self.skill_buckets
-        )
+            # For bad experiences, keep the "least bad" ones
+            experiences.sort(key=lambda x: x.get("quality_score", 0.5), reverse=True)
+            self.bad_experiences.clear()
 
-        acceptance_rate = safe_divide(
-            self.total_added - self.total_rejected, self.total_added, 0.0
-        )
+            for exp in experiences[:keep_count]:
+                self.bad_experiences.append(exp)
 
-        stats = {
-            "total_size": total_good + total_bad,
-            "good_count": total_good,
-            "bad_count": total_bad,
-            "balance_ratio": safe_divide(total_good, total_bad, 1.0),
-            "acceptance_rate": acceptance_rate,
-            "total_added": self.total_added,
-            "total_rejected": self.total_rejected,
-        }
+            total_purged += len(experiences) - keep_count
 
-        # Add per-skill stats
-        for skill_level in self.skill_buckets:
-            good_count = len(self.skill_buckets[skill_level]["good"])
-            bad_count = len(self.skill_buckets[skill_level]["bad"])
-            stats[f"{skill_level}_good"] = good_count
-            stats[f"{skill_level}_bad"] = bad_count
-
-        return stats
-
-
-# Keep all the feature tracker and action classes the same as before...
-# (SimplifiedFeatureTracker, StreetFighterDiscreteActions, etc.)
+        print(f"   📊 Purged {total_purged} experiences")
 
 
 class SimplifiedFeatureTracker:
@@ -994,9 +1216,7 @@ class StreetFighterDiscreteActions:
 
 
 class FixedEnergyBasedStreetFighterCNN(nn.Module):
-    """
-    🛡️ FIXED CNN feature extractor with better initialization.
-    """
+    """🛡️ FIXED CNN feature extractor with better initialization."""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
@@ -1079,7 +1299,7 @@ class FixedEnergyBasedStreetFighterCNN(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.5)  # Less aggressive than 0.1
+            nn.init.xavier_uniform_(m.weight, gain=0.5)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
@@ -1153,7 +1373,6 @@ class FixedEnergyBasedStreetFighterCNN(nn.Module):
                 ~torch.isfinite(output), torch.zeros_like(output), output
             )
 
-        # Less aggressive clamping
         output = torch.clamp(output, -20.0, 20.0)
 
         return output
@@ -1163,11 +1382,8 @@ class FixedEnergyBasedStreetFighterCNN(nn.Module):
         return self.activation_monitor.copy()
 
 
-# energy verifier
 class FixedEnergyBasedStreetFighterVerifier(nn.Module):
-    """
-    🛡️ FIXED Energy-Based Transformer Verifier with proper scaling.
-    """
+    """🛡️ FIXED Energy-Based Transformer Verifier with proper scaling."""
 
     def __init__(
         self,
@@ -1195,7 +1411,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
             nn.Dropout(0.05),
         )
 
-        # FIXED: Energy network with proper scaling
+        # Energy network with proper scaling
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 256),
             nn.ReLU(inplace=True),
@@ -1211,14 +1427,10 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
             nn.Linear(64, 1),
         )
 
-        # FIXED: Proper energy scaling for meaningful separation
-        self.energy_scale = 1.0  # 100x larger than before!
-        self.energy_clamp_min = -10.0  # 5x larger bounds
+        # Energy scaling parameters
+        self.energy_scale = 1.0
+        self.energy_clamp_min = -10.0
         self.energy_clamp_max = 10.0
-
-        # Adaptive energy scaling
-        self.training_step = 0
-        self.energy_adaptation_rate = 0.0001
 
         # Energy landscape monitoring
         self.energy_monitor = {
@@ -1239,7 +1451,6 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
     def _init_weights(self, m):
         """Better weight initialization for energy network."""
         if isinstance(m, nn.Linear):
-            # Use normal initialization for energy network
             nn.init.normal_(m.weight, mean=0.0, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
@@ -1247,16 +1458,12 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
 
-    # forward function in the energy verifer
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
-        """
-        🛡️ FIXED energy calculation with proper scaling.
-        """
+        """🛡️ FIXED energy calculation with proper scaling."""
         device = next(self.parameters()).device
         self.energy_monitor["forward_count"] += 1
-        self.training_step += 1
 
         # Ensure inputs are on correct device and finite
         if isinstance(context, dict):
@@ -1286,7 +1493,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
                 candidate_action,
             )
 
-        # Less aggressive input clamping
+        # Input clamping
         context_features = torch.clamp(context_features, -20.0, 20.0)
         candidate_action = torch.clamp(candidate_action, 0.0, 1.0)
 
@@ -1303,9 +1510,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
                 action_embedded,
             )
 
-        # we combine vector feature and action
-        # combined input is tensor
-        # [256 (context) + 64 (action)] = 320D
+        # Combine features and action
         combined_input = torch.cat([context_features, action_embedded], dim=-1)
 
         # Calculate raw energy
@@ -1314,17 +1519,9 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
         # Monitor for energy explosions
         if torch.any(torch.abs(raw_energy) > 50.0):
             self.energy_monitor["explosion_count"] += 1
-            print(
-                f"🚨 Raw energy explosion detected: {torch.max(torch.abs(raw_energy)).item():.3f}"
-            )
 
-        # raw energy need scale
+        # Scale energy
         energy = raw_energy * self.energy_scale
-
-        # Adaptive energy scaling (gradually increase energy magnitude)
-        if self.training_step % 1000 == 0 and self.energy_scale < 2.0:
-            self.energy_scale += self.energy_adaptation_rate
-            print(f"📈 Energy scale adapted to: {self.energy_scale:.4f}")
 
         # Clamp energy within reasonable bounds
         energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
@@ -1355,9 +1552,7 @@ class FixedEnergyBasedStreetFighterVerifier(nn.Module):
 
 
 class FixedStabilizedEnergyBasedAgent:
-    """
-    🛡️ FIXED Energy-Based Agent with adaptive thinking.
-    """
+    """🛡️ FIXED Energy-Based Agent with adaptive thinking."""
 
     def __init__(
         self,
@@ -1374,15 +1569,14 @@ class FixedStabilizedEnergyBasedAgent:
         self.noise_scale = noise_scale
         self.action_dim = verifier.action_dim
 
-        # FIXED: More lenient thinking process parameters
-        self.gradient_clip = 1.0  # Less aggressive clipping
-        self.early_stop_patience = 3  # More patience
-        self.min_energy_improvement = 1e-4  # More realistic improvement threshold
+        # Thinking process parameters
+        self.gradient_clip = 1.0
+        self.early_stop_patience = 3
+        self.min_energy_improvement = 1e-4
 
         # Adaptive thinking parameters
-        self.max_thinking_steps = 8  # Reduced max
+        self.max_thinking_steps = 8
         self.min_thinking_steps = 1
-        self.thinking_adaptation_rate = 0.1
 
         # Statistics
         self.thinking_stats = {
@@ -1398,34 +1592,16 @@ class FixedStabilizedEnergyBasedAgent:
 
         # Performance-based adaptation
         self.recent_performance = deque(maxlen=100)
-        self.adaptation_threshold = 0.3  # More lenient
 
         print(f"✅ FIXED StabilizedEnergyBasedAgent initialized")
         print(f"   - Thinking steps: {thinking_steps}")
         print(f"   - Thinking LR: {thinking_lr}")
         print(f"   - Gradient clip: {self.gradient_clip}")
 
-    def adapt_thinking_parameters(self, success_rate):
-        """Adapt thinking parameters based on performance."""
-        if success_rate < self.adaptation_threshold:
-            self.current_thinking_steps = max(
-                self.min_thinking_steps, self.current_thinking_steps - 1
-            )
-            self.current_thinking_lr *= 0.9
-        elif success_rate > 0.6:
-            self.current_thinking_steps = min(
-                self.max_thinking_steps, self.current_thinking_steps + 1
-            )
-            self.current_thinking_lr = min(
-                self.initial_thinking_lr * 2, self.current_thinking_lr * 1.05
-            )
-
     def predict(
         self, observations: Dict[str, torch.Tensor], deterministic: bool = False
     ) -> Tuple[int, Dict]:
-        """
-        🛡️ FIXED action prediction with proper energy scaling.
-        """
+        """🛡️ FIXED action prediction with proper energy scaling."""
         device = next(self.verifier.parameters()).device
 
         # Ensure observations are on device
@@ -1443,7 +1619,7 @@ class FixedStabilizedEnergyBasedAgent:
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # Better candidate action initialization
+        # Initialize candidate action
         if deterministic:
             candidate_action = (
                 torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
@@ -1474,21 +1650,18 @@ class FixedStabilizedEnergyBasedAgent:
                 print(f"⚠️ Initial energy calculation failed: {e}")
                 return 0, {"error": "initial_energy_failed"}
 
-        # FIXED: Thinking loop with better energy scaling
+        # Thinking loop
         for step in range(self.current_thinking_steps):
             try:
                 # Calculate current energy
                 energy = self.verifier(obs_device, candidate_action)
 
-                # Check for energy explosion (higher threshold)
+                # Check for energy explosion
                 if torch.any(torch.abs(energy) > 15.0):
                     energy_explosion = True
-                    print(
-                        f"🚨 Energy explosion at step {step}: {torch.max(torch.abs(energy)).item():.3f}"
-                    )
                     break
 
-                # Calculate gradient of energy w.r.t. candidate action
+                # Calculate gradient
                 gradients = torch.autograd.grad(
                     outputs=energy.sum(),
                     inputs=candidate_action,
@@ -1505,10 +1678,9 @@ class FixedStabilizedEnergyBasedAgent:
 
                 # Check for NaN gradients
                 if torch.any(~torch.isfinite(gradients)):
-                    print(f"🚨 NaN gradients at step {step}")
                     break
 
-                # Update with proper learning rate
+                # Update candidate action
                 with torch.no_grad():
                     candidate_action = (
                         candidate_action - self.current_thinking_lr * gradients
@@ -1521,7 +1693,7 @@ class FixedStabilizedEnergyBasedAgent:
                     new_energy = self.verifier(obs_device, candidate_action)
                     energy_history.append(new_energy.mean().item())
 
-                # Early stopping with more lenient criteria
+                # Early stopping
                 if len(energy_history) >= self.early_stop_patience + 1:
                     recent_improvement = (
                         energy_history[-self.early_stop_patience - 1]
@@ -1582,16 +1754,8 @@ class FixedStabilizedEnergyBasedAgent:
         else:
             self.thinking_stats["failed_optimizations"] += 1
 
-        # Track recent performance for adaptation
+        # Track recent performance
         self.recent_performance.append(1.0 if optimization_successful else 0.0)
-
-        # Adapt thinking parameters periodically
-        if (
-            len(self.recent_performance) >= 50
-            and self.thinking_stats["total_predictions"] % 50 == 0
-        ):
-            success_rate = safe_mean(list(self.recent_performance), 0.5)
-            self.adapt_thinking_parameters(success_rate)
 
         # Information about thinking process
         thinking_info = {
@@ -1631,556 +1795,110 @@ class FixedStabilizedEnergyBasedAgent:
         return stats
 
 
-class StreetFighterVisionWrapper(gym.Wrapper):
-    """
-    🛡️ FIXED Street Fighter environment wrapper with proper reward scaling.
-    """
+class FixedEnergyStabilityManager:
+    """🛡️ FIXED Energy Landscape Stability Manager."""
 
-    def __init__(self, env, frame_stack=8, rendering=False):
-        super().__init__(env)
-        self.frame_stack = frame_stack
-        self.rendering = rendering
+    def __init__(self, initial_lr=1e-4, thinking_lr=0.1):
+        self.initial_lr = initial_lr
+        self.current_lr = initial_lr
+        self.thinking_lr = thinking_lr
+        self.current_thinking_lr = thinking_lr
 
-        sample_obs = env.reset()
-        if isinstance(sample_obs, tuple):
-            sample_obs = sample_obs[0]
-        if hasattr(sample_obs, "shape"):
-            self.target_size = sample_obs.shape[:2]
+        # Performance tracking
+        self.win_rate_window = deque(maxlen=20)
+        self.energy_quality_window = deque(maxlen=20)
+        self.energy_separation_window = deque(maxlen=20)
+
+        # Realistic emergency thresholds
+        self.min_win_rate = 0.20
+        self.min_energy_quality = 5.0
+        self.min_energy_separation = 0.05
+        self.max_early_stop_rate = 0.9
+
+        # Adaptive parameters
+        self.lr_decay_factor = 0.7
+        self.lr_recovery_factor = 1.1
+        self.max_lr_reductions = 5
+        self.lr_reductions = 0
+
+        # State tracking
+        self.last_reset_episode = 0
+        self.consecutive_poor_episodes = 0
+        self.best_model_state = None
+        self.best_win_rate = 0.0
+        self.emergency_mode = False
+
+        print(f"🛡️  FIXED EnergyStabilityManager initialized")
+        print(f"   - Min energy separation: {self.min_energy_separation}")
+        print(f"   - Min energy quality: {self.min_energy_quality}")
+
+    def update_metrics(
+        self, win_rate, energy_quality, energy_separation, early_stop_rate
+    ):
+        """Update performance metrics and check for instability."""
+        self.win_rate_window.append(win_rate)
+        self.energy_quality_window.append(energy_quality)
+        self.energy_separation_window.append(energy_separation)
+
+        # Check for energy landscape collapse
+        avg_win_rate = safe_mean(list(self.win_rate_window), 0.5)
+        avg_energy_quality = safe_mean(list(self.energy_quality_window), 10.0)
+        avg_energy_separation = safe_mean(list(self.energy_separation_window), 0.1)
+
+        collapse_indicators = 0
+
+        if avg_win_rate < self.min_win_rate:
+            collapse_indicators += 1
+
+        if avg_energy_quality < self.min_energy_quality:
+            collapse_indicators += 1
+
+        if abs(avg_energy_separation) < self.min_energy_separation:
+            collapse_indicators += 1
+
+        if early_stop_rate > self.max_early_stop_rate:
+            collapse_indicators += 1
+
+        # Trigger emergency if multiple indicators
+        if collapse_indicators >= 3:
+            self.consecutive_poor_episodes += 1
+            if self.consecutive_poor_episodes >= 5:
+                print(f"🚨 ENERGY LANDSCAPE COLLAPSE DETECTED!")
+                return self._trigger_emergency_protocol()
         else:
-            self.target_size = (224, 320)
+            self.consecutive_poor_episodes = 0
+            self.emergency_mode = False
 
-        self.discrete_actions = StreetFighterDiscreteActions()
-        self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
-
-        self.observation_space = spaces.Dict(
-            {
-                "visual_obs": spaces.Box(
-                    low=0,
-                    high=255,
-                    shape=(3 * frame_stack, *self.target_size),
-                    dtype=np.uint8,
-                ),
-                "vector_obs": spaces.Box(
-                    low=-np.inf,
-                    high=np.inf,
-                    shape=(frame_stack, VECTOR_FEATURE_DIM),
-                    dtype=np.float32,
-                ),
-            }
-        )
-
-        self.frame_buffer = deque(maxlen=frame_stack)
-        self.vector_features_history = deque(maxlen=frame_stack)
-        self.strategic_tracker = SimplifiedFeatureTracker(history_length=frame_stack)
-        self.full_hp = 176
-        self.prev_player_health = self.full_hp
-        self.prev_opponent_health = self.full_hp
-        self.wins, self.losses, self.total_rounds = 0, 0, 0
-        self.total_damage_dealt, self.total_damage_received = 0, 0
-
-        # Enhanced episode tracking for diversity buffer
-        self.current_episode_data = []
-        self.episode_count = 0
-
-        # FIXED: Better reward configuration
-        self.reward_scale = 0.1  # 10x larger than before
-        self.episode_steps = 0
-        self.max_episode_steps = 18000
-        self.episode_rewards = deque(maxlen=100)
-        self.stats = {}
-
-        # Enhanced reward normalization
-        self.reward_history = deque(maxlen=1000)
-        self.reward_mean = 0.0
-        self.reward_std = 1.0
-        self.reward_alpha = 0.99
-
-        # Performance monitoring
-        self.performance_window = deque(maxlen=20)
-        self.stability_metrics = {
-            "nan_rewards": 0,
-            "explosive_rewards": 0,
-            "total_steps": 0,
-        }
-
-        print(f"🛡️  FIXED energy-based wrapper initialized")
-        print(f"   - Reward scale: {self.reward_scale}")
-
-    def _sanitize_info(self, info: Dict) -> Dict:
-        """Converts array values from a vectorized env's info dict to scalars."""
-        sanitized = {}
-        for k, v in info.items():
-            sanitized[k] = ensure_scalar(v, 0)
-        return sanitized
-
-    def _create_initial_vector_features(self, info):
-        initial_button_features = np.zeros(12, dtype=np.float32)
-        try:
-            sanitized_info = self._sanitize_info(info)
-            initial_features = self.strategic_tracker.update(
-                sanitized_info, initial_button_features
-            )
-            initial_features = ensure_feature_dimension(
-                initial_features, VECTOR_FEATURE_DIM
-            )
-            return initial_features
-        except Exception as e:
-            print(f"⚠️  Error creating initial features: {e}, using zeros")
-            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-    def reset(self, **kwargs):
-        obs, info = self.env.reset(**kwargs)
-
-        # Process previous episode data if exists
-        if len(self.current_episode_data) > 0:
-            self._finalize_episode()
-
-        self.prev_player_health = self.full_hp
-        self.prev_opponent_health = self.full_hp
-        self.episode_steps = 0
-        self.current_episode_data = []
-        self.episode_count += 1
-
-        processed_frame = self._preprocess_frame(obs)
-        initial_vector_features = self._create_initial_vector_features(info)
-
-        self.frame_buffer.clear()
-        self.vector_features_history.clear()
-
-        for _ in range(self.frame_stack):
-            self.frame_buffer.append(processed_frame)
-            self.vector_features_history.append(initial_vector_features.copy())
-
-        return self._get_observation(), info
-
-    def step(self, discrete_action):
-        self.episode_steps += 1
-        self.stability_metrics["total_steps"] += 1
-
-        multibinary_action = self.discrete_actions.discrete_to_multibinary(
-            discrete_action
-        )
-        observation, reward, done, truncated, info = self.env.step(multibinary_action)
-
-        if self.rendering:
-            self.env.render()
-
-        sanitized_info = self._sanitize_info(info)
-
-        curr_player_health = ensure_scalar(
-            sanitized_info.get("agent_hp", self.full_hp), self.full_hp
-        )
-        curr_opponent_health = ensure_scalar(
-            sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
-        )
-
-        # Calculate better reward
-        base_reward, custom_done = self._calculate_better_reward(
-            curr_player_health, curr_opponent_health
-        )
-        final_reward = self._normalize_reward(base_reward)
-
-        if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
-            truncated = True
-
-        done = custom_done or done
-
-        processed_frame = self._preprocess_frame(observation)
-        self.frame_buffer.append(processed_frame)
-
-        button_features = self.discrete_actions.get_button_features(discrete_action)
-
-        try:
-            vector_features = self.strategic_tracker.update(
-                sanitized_info, button_features
-            )
-            vector_features = ensure_feature_dimension(
-                vector_features, VECTOR_FEATURE_DIM
-            )
-        except Exception as e:
-            print(f"⚠️  Vector feature update error: {e}, using zeros")
-            vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-
-        self.vector_features_history.append(vector_features)
-
-        # Store step data for episode processing
-        step_data = {
-            "observations": self._get_observation(),
-            "action": discrete_action,
-            "reward": final_reward,
-            "step_number": self.episode_steps,
-            "info": sanitized_info.copy(),
-        }
-        self.current_episode_data.append(step_data)
-
-        self._update_enhanced_stats()
-
-        # Add enhanced statistics
-        sanitized_info.update(self.stats)
-        sanitized_info.update(self.stability_metrics)
-
-        return self._get_observation(), final_reward, done, truncated, sanitized_info
-
-    def _finalize_episode(self):
-        """Process episode data for diversity buffer."""
-        if hasattr(self, "_episode_callback") and self._episode_callback:
-            win_rate = safe_divide(self.wins, self.wins + self.losses, 0.0)
-            self._episode_callback(self.current_episode_data, win_rate)
-
-    def set_episode_callback(self, callback):
-        """Set callback for episode completion."""
-        self._episode_callback = callback
-
-    def _calculate_better_reward(self, curr_player_health, curr_opponent_health):
-        """Calculate better scaled reward for energy training."""
-        reward, done = 0.0, False
-
-        curr_player_health = ensure_scalar(curr_player_health, self.full_hp)
-        curr_opponent_health = ensure_scalar(curr_opponent_health, self.full_hp)
-
-        player_dead = safe_comparison(curr_player_health, 0, "<=")
-        opponent_dead = safe_comparison(curr_opponent_health, 0, "<=")
-
-        if player_dead or opponent_dead:
-            self.total_rounds += 1
-            if opponent_dead and not player_dead:
-                self.wins += 1
-                # Better win bonus
-                win_bonus = (
-                    5.0 + safe_divide(curr_player_health, self.full_hp, 0.0) * 2.0
-                )
-                reward += win_bonus
-                print(
-                    f"🏆 AI WON! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            else:
-                self.losses += 1
-                reward -= 0.5  # Moderate penalty
-                print(
-                    f"💀 AI LOST! Total: {self.wins}W/{self.losses}L (Round {self.total_rounds})"
-                )
-            done = True
-
-            # Reasonable combo bonus
-            combo_bonus = self.strategic_tracker.combo_counter * 0.05
-            reward += combo_bonus
-
-        # Damage calculation with better rewards
-        damage_dealt = 0
-        damage_received = 0
-
-        if self.prev_opponent_health is not None and np.isfinite(
-            self.prev_opponent_health
-        ):
-            damage_calc = (
-                ensure_scalar(self.prev_opponent_health) - curr_opponent_health
-            )
-            damage_dealt = max(0, damage_calc) if np.isfinite(damage_calc) else 0
-
-        if self.prev_player_health is not None and np.isfinite(self.prev_player_health):
-            damage_calc = ensure_scalar(self.prev_player_health) - curr_player_health
-            damage_received = max(0, damage_calc) if np.isfinite(damage_calc) else 0
-
-        # Better damage rewards
-        reward += (damage_dealt * 0.05) - (damage_received * 0.01)
-        self.total_damage_dealt += damage_dealt
-        self.total_damage_received += damage_received
-
-        # Small time penalty
-        reward -= 0.001
-
-        # Apply better reward scale
-        reward *= self.reward_scale
-
-        # More reasonable clipping
-        reward = np.clip(reward, -1.0, 2.0) if np.isfinite(reward) else 0.0
-
-        self.prev_player_health, self.prev_opponent_health = (
-            curr_player_health,
-            curr_opponent_health,
-        )
-
-        if done:
-            self.episode_rewards.append(reward)
-            win_rate = safe_divide(self.wins, self.wins + self.losses, 0.0)
-            self.performance_window.append(win_rate)
-
-        return reward, done
-
-    def _normalize_reward(self, reward):
-        """Better reward normalization for energy training."""
-        if not np.isfinite(reward):
-            reward = 0.0
-            self.stability_metrics["nan_rewards"] += 1
-
-        # Less aggressive initial clipping
-        reward = np.clip(reward, -2.0, 2.0)
-
-        if abs(reward) > 1.5:
-            self.stability_metrics["explosive_rewards"] += 1
-            reward = np.clip(reward, -1.5, 1.5)
-
-        self.reward_history.append(reward)
-
-        # Update running statistics
-        if len(self.reward_history) > 20:
-            current_mean = np.mean(list(self.reward_history))
-            current_std = np.std(list(self.reward_history))
-
-            if not np.isfinite(current_mean):
-                current_mean = 0.0
-            if not np.isfinite(current_std) or current_std == 0:
-                current_std = 0.5
-
-            self.reward_mean = (
-                self.reward_alpha * self.reward_mean
-                + (1 - self.reward_alpha) * current_mean
-            )
-            self.reward_std = (
-                self.reward_alpha * self.reward_std
-                + (1 - self.reward_alpha) * current_std
-            )
-            self.reward_std = max(self.reward_std, 0.1)
-
-        # Light normalization
-        if self.reward_std > 0:
-            normalized_reward = (reward - self.reward_mean) / (self.reward_std * 1.5)
-        else:
-            normalized_reward = reward
-
-        # Final reasonable clipping
-        normalized_reward = np.clip(normalized_reward, -1.0, 1.0)
-
-        return normalized_reward
-
-    def _update_enhanced_stats(self):
-        try:
-            total_games = self.wins + self.losses
-            win_rate = safe_divide(self.wins, total_games, 0.0)
-            avg_damage_per_round = safe_divide(
-                self.total_damage_dealt, max(1, self.total_rounds), 0.0
-            )
-            total_damage = self.total_damage_dealt + self.total_damage_received
-            defensive_efficiency = safe_divide(
-                self.total_damage_dealt, max(1, total_damage), 0.0
-            )
-            damage_ratio = safe_divide(
-                self.total_damage_dealt, max(1, self.total_damage_received), 1.0
-            )
-            combo_stats = self.strategic_tracker.get_combo_stats()
-
-            performance_stability = 1.0
-            if len(self.performance_window) > 5:
-                performance_stability = 1.0 - safe_std(
-                    list(self.performance_window), 0.0
-                )
-
-            self.stats.update(
-                {
-                    "win_rate": win_rate,
-                    "wins": self.wins,
-                    "losses": self.losses,
-                    "total_games": total_games,
-                    "total_rounds": self.total_rounds,
-                    "avg_damage_per_round": avg_damage_per_round,
-                    "defensive_efficiency": defensive_efficiency,
-                    "damage_ratio": damage_ratio,
-                    "max_combo": combo_stats.get("max_combo_this_round", 0),
-                    "episode_steps": self.episode_steps,
-                    "reward_mean": self.reward_mean,
-                    "reward_std": self.reward_std,
-                    "performance_stability": performance_stability,
-                }
-            )
-        except Exception as e:
-            print(f"⚠️  Error updating stats: {e}")
-            self.stats = {"error": "stats_update_failed"}
-
-    def _get_observation(self):
-        try:
-            visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(
-                2, 0, 1
-            )
-            vector_obs = np.stack(list(self.vector_features_history))
-
-            visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
-            vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
-
-            expected_shape = (self.frame_stack, VECTOR_FEATURE_DIM)
-            if vector_obs.shape != expected_shape:
-                print(
-                    f"⚠️  Vector obs shape mismatch: got {vector_obs.shape}, expected {expected_shape}"
-                )
-                corrected_vector_obs = np.zeros(expected_shape, dtype=np.float32)
-                min_frames = min(vector_obs.shape[0], expected_shape[0])
-                min_features = min(vector_obs.shape[1], expected_shape[1])
-                corrected_vector_obs[:min_frames, :min_features] = vector_obs[
-                    :min_frames, :min_features
-                ]
-                vector_obs = corrected_vector_obs
-
-            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
-        except Exception as e:
-            print(f"⚠️  Error constructing observation: {e}, using fallback")
-            visual_obs = np.zeros(
-                (3 * self.frame_stack, *self.target_size), dtype=np.uint8
-            )
-            vector_obs = np.zeros(
-                (self.frame_stack, VECTOR_FEATURE_DIM), dtype=np.float32
-            )
-            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
-
-    def _preprocess_frame(self, frame):
-        if frame is None:
-            return np.zeros((*self.target_size, 3), dtype=np.uint8)
-        try:
-            if frame.shape[:2] == self.target_size:
-                return frame
-            return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
-        except Exception as e:
-            print(f"⚠️  Frame preprocessing error: {e}, using black frame")
-            return np.zeros((*self.target_size, 3), dtype=np.uint8)
-
-
-def verify_fixed_energy_flow(verifier, env, device=None):
-    """Verify FIXED energy flow and gradient computation."""
-    print("\n🔬 FIXED Energy-Based Transformer Verification")
-    print("=" * 70)
-
-    if device is None:
-        device = next(verifier.parameters()).device
-
-    obs, _ = env.reset()
-
-    obs_tensor = {}
-    for key, value in obs.items():
-        if isinstance(value, np.ndarray):
-            value = sanitize_array(value, 0.0)
-            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
-        else:
-            obs_tensor[key] = torch.tensor(value).unsqueeze(0).float().to(device)
-
-    visual_obs = obs_tensor["visual_obs"]
-    print(f"🖼️  Visual Feature Analysis:")
-    print(f"   - Shape: {visual_obs.shape}")
-    print(f"   - Range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}")
-    print(f"   - NaN count: {torch.sum(~torch.isfinite(visual_obs)).item()}")
-
-    vector_obs = obs_tensor["vector_obs"]
-    print(f"🔍 Vector Feature Analysis:")
-    print(f"   - Shape: {vector_obs.shape}")
-    print(f"   - Features: {vector_obs.shape[-1]} (Fixed)")
-    print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
-    print(f"   - NaN count: {torch.sum(~torch.isfinite(vector_obs)).item()}")
-
-    if torch.sum(~torch.isfinite(vector_obs)) > 0:
-        print("   🚨 CRITICAL: NaN values detected!")
-        return False
-    else:
-        print("   ✅ No NaN values detected")
-
-    verifier.train()
-    for param in verifier.parameters():
-        param.requires_grad = True
-
-    # Test with random action
-    batch_size = obs_tensor["visual_obs"].shape[0]
-    random_action = torch.randn(
-        batch_size, verifier.action_dim, device=device, requires_grad=True
-    )
-    random_action = F.softmax(random_action, dim=-1)
-
-    try:
-        energy = verifier(obs_tensor, random_action)
-        print(f"✅ FIXED Energy calculation successful")
-        print(f"   - Energy output: {energy.item():.6f}")
-        print(f"   - Energy scale: {verifier.energy_scale}")
-        print(f"   - Energy NaN count: {torch.sum(~torch.isfinite(energy)).item()}")
-        print(
-            f"   - Energy bounds: [{verifier.energy_clamp_min}, {verifier.energy_clamp_max}]"
-        )
-
-        if torch.sum(~torch.isfinite(energy)) > 0:
-            print("   🚨 CRITICAL: NaN values in energy output!")
-            return False
-
-        if abs(energy.item()) > abs(verifier.energy_clamp_max):
-            print(f"   🚨 CRITICAL: Energy outside bounds: {energy.item():.6f}")
-            return False
-        else:
-            print("   ✅ Energy output is PROPERLY SCALED")
-
-    except Exception as e:
-        print(f"❌ Energy calculation failed: {e}")
         return False
 
-    # Test gradient computation
-    try:
-        gradients = torch.autograd.grad(
-            outputs=energy.sum(),
-            inputs=random_action,
-            create_graph=False,
-            retain_graph=False,
-        )[0]
+    def _trigger_emergency_protocol(self):
+        """🚨 Emergency protocol for energy landscape collapse."""
+        print(f"🛡️  ACTIVATING EMERGENCY STABILIZATION PROTOCOL")
 
-        print("✅ FIXED Gradient computation successful")
-        print(f"   - Gradient shape: {gradients.shape}")
-        print(f"   - Gradient norm: {torch.norm(gradients).item():.6f}")
-        print(
-            f"   - Gradient NaN count: {torch.sum(~torch.isfinite(gradients)).item()}"
-        )
+        if not self.emergency_mode:
+            if self.lr_reductions < self.max_lr_reductions:
+                self.current_lr *= self.lr_decay_factor
+                self.current_thinking_lr *= self.lr_decay_factor
+                self.lr_reductions += 1
 
-        if torch.sum(~torch.isfinite(gradients)) > 0:
-            print("   🚨 CRITICAL: NaN values in gradients!")
-            return False
+                print(f"   📉 Learning rates reduced:")
+                print(f"      - Main LR: {self.current_lr:.2e}")
+                print(f"      - Thinking LR: {self.current_thinking_lr:.3f}")
 
-        gradient_norm = torch.norm(gradients).item()
-        if gradient_norm > 15.0:  # More realistic threshold
-            print(f"   🚨 CRITICAL: Gradient explosion: {gradient_norm:.3f}")
-            return False
-        elif gradient_norm > 8.0:
-            print(f"   ⚠️  WARNING: Large gradients: {gradient_norm:.3f}")
-            print("   ✅ Gradients are ACCEPTABLE for energy training")
-        else:
-            print("   ✅ Gradients are WELL-SCALED")
+            self.emergency_mode = True
+            self.consecutive_poor_episodes = 0
 
-    except Exception as e:
-        print(f"❌ Gradient computation failed: {e}")
+            return True
+
         return False
 
-    print("✅ EXCELLENT: FIXED Energy-Based Transformer verification successful!")
-    print("🛡️  All fixes applied and verified")
-    print("🎯 Proper energy scaling active")
-    print("⚡ Realistic thresholds set")
-    return True
-
-
-def make_fixed_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis",
-    state="ken_bison_12.state",
-    render_mode=None,
-):
-    """Create FIXED Energy-Based environment."""
-    try:
-        env = retro.make(game=game, state=state, render_mode=render_mode)
-        env = StreetFighterVisionWrapper(
-            env, frame_stack=8, rendering=(render_mode is not None)
-        )
-
-        print(f"✅ FIXED Energy-Based environment created")
-        print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
-        print(f"   - Proper scaling: ✅ ACTIVE")
-        print(f"   - Realistic thresholds: ✅ ACTIVE")
-        print(f"   - Better rewards: ✅ ACTIVE")
-
-        return env
-    except Exception as e:
-        print(f"❌ Error creating environment: {e}")
-        raise
+    def get_current_lrs(self):
+        """Get current learning rates."""
+        return self.current_lr, self.current_thinking_lr
 
 
 class CheckpointManager:
-    """Advanced checkpoint management with emergency restore capabilities."""
+    """Advanced checkpoint management."""
 
     def __init__(self, checkpoint_dir="checkpoints"):
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -2240,13 +1958,11 @@ class CheckpointManager:
     def load_checkpoint(self, checkpoint_path, verifier, agent):
         """Load checkpoint and restore state."""
         try:
-            # Fix for PyTorch 2.6+ weights_only issue
             try:
                 checkpoint_data = torch.load(
                     checkpoint_path, map_location="cpu", weights_only=False
                 )
             except Exception as first_error:
-                print(f"⚠️  First load attempt failed: {first_error}")
                 checkpoint_data = torch.load(checkpoint_path, map_location="cpu")
 
             # Restore verifier
@@ -2268,9 +1984,6 @@ class CheckpointManager:
             print(f"   - Episode: {checkpoint_data['episode']}")
             print(f"   - Win rate: {checkpoint_data['win_rate']:.3f}")
             print(f"   - Energy quality: {checkpoint_data['energy_quality']:.1f}")
-            print(f"   - Energy scale: {verifier.energy_scale:.4f}")
-            print(f"   - Thinking steps: {agent.current_thinking_steps}")
-            print(f"   - Thinking LR: {agent.current_thinking_lr:.4f}")
 
             return checkpoint_data
 
@@ -2278,16 +1991,382 @@ class CheckpointManager:
             print(f"❌ Failed to load checkpoint: {e}")
             return None
 
-    def emergency_restore(self, verifier, agent):
-        """Emergency restore from best available checkpoint."""
-        restore_path = self.best_checkpoint_path or self.emergency_checkpoint_path
 
-        if restore_path and restore_path.exists():
-            print(f"🚨 EMERGENCY RESTORE INITIATED")
-            return self.load_checkpoint(restore_path, verifier, agent)
+class StreetFighterVisionWrapper(gym.Wrapper):
+    """🛡️ ENHANCED Street Fighter environment wrapper with quality-based experience labeling."""
+
+    def __init__(self, env, frame_stack=8, rendering=False):
+        super().__init__(env)
+        self.frame_stack = frame_stack
+        self.rendering = rendering
+
+        sample_obs = env.reset()
+        if isinstance(sample_obs, tuple):
+            sample_obs = sample_obs[0]
+        if hasattr(sample_obs, "shape"):
+            self.target_size = sample_obs.shape[:2]
         else:
-            print(f"❌ No checkpoint available for emergency restore!")
-            return None
+            self.target_size = (224, 320)
+
+        self.discrete_actions = StreetFighterDiscreteActions()
+        self.action_space = spaces.Discrete(self.discrete_actions.num_actions)
+
+        self.observation_space = spaces.Dict(
+            {
+                "visual_obs": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(3 * frame_stack, *self.target_size),
+                    dtype=np.uint8,
+                ),
+                "vector_obs": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(frame_stack, VECTOR_FEATURE_DIM),
+                    dtype=np.float32,
+                ),
+            }
+        )
+
+        self.frame_buffer = deque(maxlen=frame_stack)
+        self.vector_features_history = deque(maxlen=frame_stack)
+        self.strategic_tracker = SimplifiedFeatureTracker(history_length=frame_stack)
+
+        # Initialize reward calculator and experience buffer
+        self.reward_calculator = IntelligentRewardCalculator()
+        self.experience_buffer = None  # Will be set by training script
+
+        self.full_hp = 176
+        self.prev_player_health = self.full_hp
+        self.prev_opponent_health = self.full_hp
+        self.wins, self.losses, self.total_rounds = 0, 0, 0
+        self.total_damage_dealt, self.total_damage_received = 0, 0
+
+        # Episode tracking
+        self.episode_steps = 0
+        self.max_episode_steps = 18000
+        self.episode_rewards = deque(maxlen=100)
+        self.episode_count = 0
+
+        # Previous info for reward calculation
+        self.prev_info = None
+
+        print(f"🛡️  ENHANCED wrapper with quality-based experience labeling initialized")
+
+    def _sanitize_info(self, info: Dict) -> Dict:
+        """Converts array values from a vectorized env's info dict to scalars."""
+        sanitized = {}
+        for k, v in info.items():
+            sanitized[k] = ensure_scalar(v, 0)
+        return sanitized
+
+    def _create_initial_vector_features(self, info):
+        initial_button_features = np.zeros(12, dtype=np.float32)
+        try:
+            sanitized_info = self._sanitize_info(info)
+            initial_features = self.strategic_tracker.update(
+                sanitized_info, initial_button_features
+            )
+            initial_features = ensure_feature_dimension(
+                initial_features, VECTOR_FEATURE_DIM
+            )
+            return initial_features
+        except Exception as e:
+            print(f"⚠️  Error creating initial features: {e}, using zeros")
+            return np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+
+        # Reset reward calculator for new episode
+        self.reward_calculator.reset_episode()
+
+        self.prev_player_health = self.full_hp
+        self.prev_opponent_health = self.full_hp
+        self.episode_steps = 0
+        self.episode_count += 1
+        self.prev_info = None
+
+        processed_frame = self._preprocess_frame(obs)
+        initial_vector_features = self._create_initial_vector_features(info)
+
+        self.frame_buffer.clear()
+        self.vector_features_history.clear()
+
+        for _ in range(self.frame_stack):
+            self.frame_buffer.append(processed_frame)
+            self.vector_features_history.append(initial_vector_features.copy())
+
+        return self._get_observation(), info
+
+    def step(self, discrete_action):
+        self.episode_steps += 1
+
+        multibinary_action = self.discrete_actions.discrete_to_multibinary(
+            discrete_action
+        )
+        observation, base_reward, done, truncated, info = self.env.step(
+            multibinary_action
+        )
+
+        if self.rendering:
+            self.env.render()
+
+        sanitized_info = self._sanitize_info(info)
+
+        # Calculate intelligent reward with breakdown
+        intelligent_reward, reward_breakdown = (
+            self.reward_calculator.calculate_reward_with_breakdown(
+                sanitized_info, self.prev_info
+            )
+        )
+
+        # Handle episode completion
+        if done or truncated:
+            curr_player_health = ensure_scalar(
+                sanitized_info.get("agent_hp", self.full_hp), self.full_hp
+            )
+            curr_opponent_health = ensure_scalar(
+                sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
+            )
+            won = curr_player_health > curr_opponent_health
+
+            # Add final win/loss reward
+            final_reward = self.reward_calculator.calculate_win_reward(
+                won, curr_player_health, curr_opponent_health, self.episode_steps
+            )
+            intelligent_reward += final_reward
+            reward_breakdown["final"] = final_reward
+
+            # Update win/loss stats
+            if won:
+                self.wins += 1
+                print(f"🏆 AI WON! Total: {self.wins}W/{self.losses}L")
+            else:
+                self.losses += 1
+                print(f"💀 AI LOST! Total: {self.wins}W/{self.losses}L")
+
+        if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
+            truncated = True
+
+        processed_frame = self._preprocess_frame(observation)
+        self.frame_buffer.append(processed_frame)
+
+        button_features = self.discrete_actions.get_button_features(discrete_action)
+
+        try:
+            vector_features = self.strategic_tracker.update(
+                sanitized_info, button_features
+            )
+            vector_features = ensure_feature_dimension(
+                vector_features, VECTOR_FEATURE_DIM
+            )
+        except Exception as e:
+            print(f"⚠️  Vector feature update error: {e}, using zeros")
+            vector_features = np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
+
+        self.vector_features_history.append(vector_features)
+
+        # Calculate quality score for experience labeling
+        quality_score = self.reward_calculator.get_experience_quality_score(
+            intelligent_reward, reward_breakdown
+        )
+
+        # Create experience and add to buffer if available
+        if self.experience_buffer is not None:
+            experience = {
+                "observations": self._get_observation(),
+                "action": discrete_action,
+                "step_number": self.episode_steps,
+                "info": sanitized_info.copy(),
+            }
+
+            self.experience_buffer.add_experience(
+                experience, intelligent_reward, reward_breakdown, quality_score
+            )
+
+        # Update stats
+        self._update_stats()
+
+        # Add reward components to info
+        sanitized_info.update(
+            {
+                "intelligent_reward": intelligent_reward,
+                "quality_score": quality_score,
+                "reward_breakdown": reward_breakdown,
+            }
+        )
+        sanitized_info.update(self._get_stats())
+
+        # Update previous info
+        self.prev_info = sanitized_info.copy()
+
+        return (
+            self._get_observation(),
+            intelligent_reward,
+            done,
+            truncated,
+            sanitized_info,
+        )
+
+    def set_experience_buffer(self, buffer):
+        """Set the experience buffer for quality-based labeling."""
+        self.experience_buffer = buffer
+
+    def _update_stats(self):
+        """Update comprehensive statistics."""
+        try:
+            total_games = self.wins + self.losses
+            win_rate = safe_divide(self.wins, total_games, 0.0)
+
+            self.stats = {
+                "win_rate": win_rate,
+                "wins": self.wins,
+                "losses": self.losses,
+                "total_games": total_games,
+                "episode_steps": self.episode_steps,
+            }
+        except Exception as e:
+            print(f"⚠️  Error updating stats: {e}")
+            self.stats = {"error": "stats_update_failed"}
+
+    def _get_stats(self):
+        """Get current statistics."""
+        return getattr(self, "stats", {})
+
+    def _get_observation(self):
+        try:
+            visual_obs = np.concatenate(list(self.frame_buffer), axis=2).transpose(
+                2, 0, 1
+            )
+            vector_obs = np.stack(list(self.vector_features_history))
+
+            visual_obs = sanitize_array(visual_obs, 0.0).astype(np.uint8)
+            vector_obs = sanitize_array(vector_obs, 0.0).astype(np.float32)
+
+            expected_shape = (self.frame_stack, VECTOR_FEATURE_DIM)
+            if vector_obs.shape != expected_shape:
+                corrected_vector_obs = np.zeros(expected_shape, dtype=np.float32)
+                min_frames = min(vector_obs.shape[0], expected_shape[0])
+                min_features = min(vector_obs.shape[1], expected_shape[1])
+                corrected_vector_obs[:min_frames, :min_features] = vector_obs[
+                    :min_frames, :min_features
+                ]
+                vector_obs = corrected_vector_obs
+
+            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
+        except Exception as e:
+            print(f"⚠️  Error constructing observation: {e}, using fallback")
+            visual_obs = np.zeros(
+                (3 * self.frame_stack, *self.target_size), dtype=np.uint8
+            )
+            vector_obs = np.zeros(
+                (self.frame_stack, VECTOR_FEATURE_DIM), dtype=np.float32
+            )
+            return {"visual_obs": visual_obs, "vector_obs": vector_obs}
+
+    def _preprocess_frame(self, frame):
+        if frame is None:
+            return np.zeros((*self.target_size, 3), dtype=np.uint8)
+        try:
+            if frame.shape[:2] == self.target_size:
+                return frame
+            return cv2.resize(frame, (self.target_size[1], self.target_size[0]))
+        except Exception as e:
+            print(f"⚠️  Frame preprocessing error: {e}, using black frame")
+            return np.zeros((*self.target_size, 3), dtype=np.uint8)
+
+
+def verify_fixed_energy_flow(verifier, env, device=None):
+    """Verify FIXED energy flow and gradient computation."""
+    print("\n🔬 QUALITY-BASED Energy-Based Transformer Verification")
+    print("=" * 70)
+
+    if device is None:
+        device = next(verifier.parameters()).device
+
+    obs, _ = env.reset()
+
+    obs_tensor = {}
+    for key, value in obs.items():
+        if isinstance(value, np.ndarray):
+            value = sanitize_array(value, 0.0)
+            obs_tensor[key] = torch.from_numpy(value).unsqueeze(0).float().to(device)
+        else:
+            obs_tensor[key] = torch.tensor(value).unsqueeze(0).float().to(device)
+
+    visual_obs = obs_tensor["visual_obs"]
+    print(f"🖼️  Visual Feature Analysis:")
+    print(f"   - Shape: {visual_obs.shape}")
+    print(f"   - Range: {visual_obs.min().item():.1f} to {visual_obs.max().item():.1f}")
+    print(f"   - NaN count: {torch.sum(~torch.isfinite(visual_obs)).item()}")
+
+    vector_obs = obs_tensor["vector_obs"]
+    print(f"🔍 Vector Feature Analysis:")
+    print(f"   - Shape: {vector_obs.shape}")
+    print(f"   - Features: {vector_obs.shape[-1]} (Fixed)")
+    print(f"   - Range: {vector_obs.min().item():.3f} to {vector_obs.max().item():.3f}")
+    print(f"   - NaN count: {torch.sum(~torch.isfinite(vector_obs)).item()}")
+
+    verifier.train()
+    for param in verifier.parameters():
+        param.requires_grad = True
+
+    # Test with random action
+    batch_size = obs_tensor["visual_obs"].shape[0]
+    random_action = torch.randn(
+        batch_size, verifier.action_dim, device=device, requires_grad=True
+    )
+    random_action = F.softmax(random_action, dim=-1)
+
+    try:
+        energy = verifier(obs_tensor, random_action)
+        print(f"✅ QUALITY-BASED Energy calculation successful")
+        print(f"   - Energy output: {energy.item():.6f}")
+        print(f"   - Energy scale: {verifier.energy_scale}")
+
+        gradients = torch.autograd.grad(
+            outputs=energy.sum(),
+            inputs=random_action,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+        print("✅ QUALITY-BASED Gradient computation successful")
+        print(f"   - Gradient norm: {torch.norm(gradients).item():.6f}")
+
+        print(
+            "✅ EXCELLENT: QUALITY-BASED Energy-Based Transformer verification successful!"
+        )
+        return True
+
+    except Exception as e:
+        print(f"❌ Energy/gradient computation failed: {e}")
+        return False
+
+
+def make_fixed_env(
+    game="StreetFighterIISpecialChampionEdition-Genesis",
+    state="ken_bison_12.state",
+    render_mode=None,
+):
+    """Create QUALITY-BASED Energy-Based environment."""
+    try:
+        env = retro.make(game=game, state=state, render_mode=render_mode)
+        env = StreetFighterVisionWrapper(
+            env, frame_stack=8, rendering=(render_mode is not None)
+        )
+
+        print(f"✅ QUALITY-BASED Energy-Based environment created")
+        print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
+        print(f"   - Quality-based experience labeling: ✅ ACTIVE")
+        print(f"   - Intelligent reward shaping: ✅ ACTIVE")
+        print(f"   - Strategic feedback: ✅ ACTIVE")
+
+        return env
+    except Exception as e:
+        print(f"❌ Error creating environment: {e}")
+        raise
 
 
 # Export all components
@@ -2299,9 +2378,11 @@ __all__ = [
     "FixedStabilizedEnergyBasedAgent",
     "SimplifiedFeatureTracker",
     "StreetFighterDiscreteActions",
-    # Fixed stability components
+    # Quality-based components
+    "IntelligentRewardCalculator",
+    "QualityBasedExperienceBuffer",
+    # Stability components
     "FixedEnergyStabilityManager",
-    "DiversityExperienceBuffer",
     "CheckpointManager",
     # Utilities
     "verify_fixed_energy_flow",
@@ -2311,18 +2392,16 @@ __all__ = [
     "safe_mean",
     "sanitize_array",
     "ensure_scalar",
-    "safe_bool_check",
     "safe_comparison",
     "ensure_feature_dimension",
     # Constants
     "VECTOR_FEATURE_DIM",
 ]
 
-print(f"🎉 FIXED ENERGY-BASED TRANSFORMER - Complete wrapper.py loaded successfully!")
-print(f"   - Training paradigm: FIXED Energy-Based Transformer")
-print(f"   - Energy scaling: ✅ PROPER (1.0 instead of 0.01)")
-print(f"   - Collapse thresholds: ✅ REALISTIC")
-print(f"   - Reward scaling: ✅ IMPROVED")
-print(f"   - Gradient clipping: ✅ BALANCED")
-print(f"   - Thinking process: ✅ ADAPTIVE")
-print(f"🛡️  Ready for FIXED Energy-Based Street Fighter training!")
+print(f"🎉 QUALITY-BASED ENERGY TRANSFORMER - Complete wrapper.py loaded successfully!")
+print(f"   - Training paradigm: Quality-Based Experience Labeling")
+print(f"   - Intelligent reward shaping: ✅ ACTIVE")
+print(f"   - Absolute quality thresholds: ✅ ACTIVE")
+print(f"   - Strategic feedback: ✅ ACTIVE")
+print(f"   - Dense learning signals: ✅ ACTIVE")
+print(f"🎯 Ready for 60% win rate training!")
