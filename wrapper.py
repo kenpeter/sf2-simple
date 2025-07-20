@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-🛡️ COMPLETE WRAPPER WITH QUALITY-BASED EXPERIENCE BUFFER
+🛡️ COMPLETE WRAPPER WITH QUALITY-BASED EXPERIENCE BUFFER - SINGLE ROUND FIGHT
 Integrates intelligent reward shaping with quality-based labeling for 60% win rate.
+Modified for single round fights.
 """
 
 import cv2
@@ -40,7 +41,7 @@ retro.make = _patched_retro_make
 os.makedirs("logs", exist_ok=True)
 os.makedirs("checkpoints", exist_ok=True)
 log_filename = (
-    f'logs/quality_based_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    f'logs/single_round_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 logging.basicConfig(
     level=logging.WARNING,
@@ -55,9 +56,10 @@ SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 32
 
-print(f"🧠 QUALITY-BASED ENERGY TRANSFORMER Configuration:")
+print(f"🥊 SINGLE ROUND FIGHT Configuration:")
 print(f"   - Features: {VECTOR_FEATURE_DIM}")
 print(f"   - Training paradigm: Quality-Based Experience Labeling")
+print(f"   - Fight mode: Single Round (first to zero health wins)")
 
 
 # Enhanced safe operations
@@ -219,20 +221,21 @@ def safe_comparison(value1, value2, operator="==", default=False):
 class IntelligentRewardCalculator:
     """
     🧠 Calculates intelligent rewards with detailed breakdown for quality scoring.
+    Modified for single round fights.
     """
 
     def __init__(self):
-        # Reward component weights (optimized for winning)
+        # Reward component weights (optimized for single round winning)
         self.weights = {
-            "damage_dealt": 15.0,
-            "damage_avoided": 8.0,
-            "health_advantage": 5.0,
-            "combo_progression": 12.0,
+            "damage_dealt": 20.0,  # Increased for single round
+            "damage_avoided": 10.0,  # Increased for single round
+            "health_advantage": 8.0,  # Increased for single round
+            "combo_progression": 15.0,  # Increased for single round
             "positioning": 6.0,
-            "pressure": 4.0,
-            "momentum": 7.0,
-            "defensive": 3.0,
-            "win_progress": 10.0,
+            "pressure": 5.0,
+            "momentum": 10.0,  # Increased for single round
+            "defensive": 4.0,
+            "win_progress": 15.0,  # Increased for single round
             "frame_efficiency": 2.0,
         }
 
@@ -257,15 +260,15 @@ class IntelligentRewardCalculator:
         self.optimal_distance_min = 60
         self.optimal_distance_max = 100
 
-        print("🧠 Intelligent Reward Calculator initialized")
+        print("🧠 Intelligent Reward Calculator initialized for single round fights")
         print(f"   - {len(self.weights)} reward components")
-        print(f"   - Optimized for strategic gameplay")
+        print(f"   - Optimized for decisive single round gameplay")
 
     def calculate_reward_with_breakdown(
         self, info: Dict, prev_info: Dict = None
     ) -> Tuple[float, Dict]:
         """
-        Calculate intelligent reward with detailed breakdown.
+        Calculate intelligent reward with detailed breakdown for single round.
 
         Returns:
             (total_reward, reward_breakdown_dict)
@@ -293,14 +296,14 @@ class IntelligentRewardCalculator:
         self.health_history.append(player_health)
         self.opponent_health_history.append(opponent_health)
 
-        # 1. DAMAGE AND HEALTH REWARDS
+        # 1. DAMAGE AND HEALTH REWARDS (Enhanced for single round)
         damage_reward = self._calculate_damage_rewards(
             player_health, opponent_health, prev_info
         )
         total_reward += damage_reward
         reward_breakdown["damage"] = damage_reward
 
-        # 2. COMBO AND SCORE REWARDS
+        # 2. COMBO AND SCORE REWARDS (Enhanced for single round)
         combo_reward = self._calculate_combo_rewards(score, prev_info)
         total_reward += combo_reward
         reward_breakdown["combo"] = combo_reward
@@ -310,31 +313,33 @@ class IntelligentRewardCalculator:
         total_reward += spacing_reward
         reward_breakdown["spacing"] = spacing_reward
 
-        # 4. PRESSURE AND TACTICAL REWARDS
+        # 4. PRESSURE AND TACTICAL REWARDS (Enhanced for single round)
         pressure_reward = self._calculate_pressure_rewards(
             player_x, opponent_x, player_health, opponent_health
         )
         total_reward += pressure_reward
         reward_breakdown["pressure"] = pressure_reward
 
-        # 5. MOMENTUM REWARDS
+        # 5. MOMENTUM REWARDS (Enhanced for single round)
         momentum_reward = self._calculate_momentum_rewards()
         total_reward += momentum_reward
         reward_breakdown["momentum"] = momentum_reward
 
-        # 6. WIN PROGRESS REWARDS
+        # 6. WIN PROGRESS REWARDS (Enhanced for single round)
         win_progress_reward = self._calculate_win_progress_rewards(
             player_health, opponent_health
         )
         total_reward += win_progress_reward
         reward_breakdown["win_progress"] = win_progress_reward
 
-        # 7. FRAME EFFICIENCY (small time penalty)
-        efficiency_reward = -0.001 * self.weights["frame_efficiency"]
+        # 7. FRAME EFFICIENCY (small time penalty to encourage decisive action)
+        efficiency_reward = (
+            -0.002 * self.weights["frame_efficiency"]
+        )  # Slightly increased penalty
         total_reward += efficiency_reward
         reward_breakdown["efficiency"] = efficiency_reward
 
-        # Apply context scaling
+        # Apply context scaling (enhanced for single round urgency)
         total_reward = self._apply_context_scaling(
             total_reward, player_health, opponent_health
         )
@@ -344,13 +349,13 @@ class IntelligentRewardCalculator:
         self.prev_opponent_health = opponent_health
         self.prev_score = score
 
-        # Normalize total reward
-        total_reward = np.clip(total_reward, -0.5, 2.0)
+        # Normalize total reward (slightly wider range for single round)
+        total_reward = np.clip(total_reward, -1.0, 3.0)
 
         return total_reward, reward_breakdown
 
     def _calculate_damage_rewards(self, player_health, opponent_health, prev_info):
-        """Calculate damage-related rewards."""
+        """Calculate damage-related rewards with enhanced single round focus."""
         reward = 0.0
 
         if prev_info is not None:
@@ -361,31 +366,40 @@ class IntelligentRewardCalculator:
                 prev_info.get("enemy_hp", opponent_health), opponent_health
             )
 
-            # Damage dealt (positive reward)
+            # Damage dealt (positive reward) - enhanced for single round
             damage_dealt = max(0, prev_opponent_health - opponent_health)
             if damage_dealt > 0:
-                # Scale reward based on opponent's remaining health
-                health_factor = 1.0 + (1.0 - opponent_health / self.max_health) * 0.5
+                # Scale reward based on opponent's remaining health (more critical in single round)
+                health_factor = (
+                    1.0 + (1.0 - opponent_health / self.max_health) * 1.0
+                )  # Doubled factor
                 reward += (
-                    damage_dealt * self.weights["damage_dealt"] * health_factor * 0.01
+                    damage_dealt
+                    * self.weights["damage_dealt"]
+                    * health_factor
+                    * 0.015  # Increased multiplier
                 )
 
-            # Damage received (negative reward)
+            # Damage received (negative reward) - enhanced penalty for single round
             damage_received = max(0, prev_player_health - player_health)
             if damage_received > 0:
-                reward -= damage_received * self.weights["damage_dealt"] * 0.005
+                reward -= (
+                    damage_received * self.weights["damage_dealt"] * 0.01
+                )  # Doubled penalty
 
-            # Health advantage change
+            # Health advantage change - more critical in single round
             current_advantage = player_health - opponent_health
             prev_advantage = prev_player_health - prev_opponent_health
             advantage_change = current_advantage - prev_advantage
             if advantage_change > 0:
-                reward += advantage_change * self.weights["health_advantage"] * 0.003
+                reward += (
+                    advantage_change * self.weights["health_advantage"] * 0.005
+                )  # Increased
 
         return reward
 
     def _calculate_combo_rewards(self, score, prev_info):
-        """Calculate combo-related rewards."""
+        """Calculate combo-related rewards with enhanced single round focus."""
         reward = 0.0
 
         if prev_info is not None:
@@ -396,17 +410,21 @@ class IntelligentRewardCalculator:
                 # Detect combo continuation
                 if self.current_frame - self.last_hit_frame <= 60:  # 1 second window
                     self.combo_count += 1
-                    # Exponential bonus for longer combos
-                    combo_multiplier = 1.0 + (self.combo_count * 0.2)
+                    # Exponential bonus for longer combos (enhanced for single round)
+                    combo_multiplier = 1.0 + (
+                        self.combo_count * 0.3
+                    )  # Increased multiplier
                     reward += (
                         score_increase
                         * self.weights["combo_progression"]
                         * combo_multiplier
-                        * 0.001
+                        * 0.002  # Doubled base reward
                     )
                 else:
                     self.combo_count = 1
-                    reward += score_increase * self.weights["combo_progression"] * 0.001
+                    reward += (
+                        score_increase * self.weights["combo_progression"] * 0.002
+                    )  # Doubled
 
                 self.last_hit_frame = self.current_frame
             else:
@@ -448,32 +466,32 @@ class IntelligentRewardCalculator:
     def _calculate_pressure_rewards(
         self, player_x, opponent_x, player_health, opponent_health
     ):
-        """Calculate tactical pressure rewards."""
+        """Calculate tactical pressure rewards with enhanced single round focus."""
         reward = 0.0
         distance = abs(player_x - opponent_x)
 
-        # Offensive pressure when ahead
+        # Offensive pressure when ahead (enhanced for single round)
         if player_health > opponent_health and distance < 80:
             self.pressure_frames += 1
-            reward += self.weights["pressure"] * 0.001
+            reward += self.weights["pressure"] * 0.002  # Doubled
         else:
             self.pressure_frames = max(0, self.pressure_frames - 1)
 
-        # Sustained pressure bonus
+        # Sustained pressure bonus (enhanced)
         if self.pressure_frames > 30:  # Half second of pressure
-            reward += self.weights["pressure"] * 0.002
+            reward += self.weights["pressure"] * 0.004  # Doubled
 
-        # Defensive spacing when behind
+        # Defensive spacing when behind (enhanced)
         if player_health < opponent_health and distance > 100:
             self.defensive_frames += 1
-            reward += self.weights["defensive"] * 0.0005
+            reward += self.weights["defensive"] * 0.001  # Doubled
         else:
             self.defensive_frames = max(0, self.defensive_frames - 1)
 
         return reward
 
     def _calculate_momentum_rewards(self):
-        """Calculate momentum rewards."""
+        """Calculate momentum rewards with enhanced single round focus."""
         reward = 0.0
 
         if len(self.health_history) >= 5 and len(self.opponent_health_history) >= 5:
@@ -490,111 +508,112 @@ class IntelligentRewardCalculator:
             relative_momentum = opponent_momentum - player_momentum
             self.momentum_tracker.append(relative_momentum)
 
-            # Reward positive momentum
+            # Reward positive momentum (enhanced for single round)
             if relative_momentum > 0:
-                reward += relative_momentum * self.weights["momentum"] * 0.01
+                reward += relative_momentum * self.weights["momentum"] * 0.02  # Doubled
 
-            # Sustained momentum bonus
+            # Sustained momentum bonus (enhanced)
             if len(self.momentum_tracker) >= 5:
                 momentum_list = list(self.momentum_tracker)
                 recent_momentum = sum(momentum_list[-5:]) / 5
                 if recent_momentum > 0.5:
-                    reward += self.weights["momentum"] * 0.002
+                    reward += self.weights["momentum"] * 0.004  # Doubled
 
         return reward
 
     def _calculate_win_progress_rewards(self, player_health, opponent_health):
-        """Calculate win condition progress rewards."""
+        """Calculate win condition progress rewards with enhanced single round focus."""
         reward = 0.0
 
         player_health_pct = player_health / self.max_health
         opponent_health_pct = opponent_health / self.max_health
 
-        # Reward for maintaining high health
+        # Reward for maintaining high health (enhanced)
         if player_health_pct > 0.7:
-            reward += self.weights["win_progress"] * 0.001
+            reward += self.weights["win_progress"] * 0.002  # Doubled
 
-        # Big bonus for getting opponent to critical health
+        # Big bonus for getting opponent to critical health (enhanced)
         if opponent_health_pct < 0.3:
-            reward += self.weights["win_progress"] * 0.005
+            reward += self.weights["win_progress"] * 0.01  # Doubled
 
         if opponent_health_pct < 0.1:
-            reward += self.weights["win_progress"] * 0.01  # Close to victory!
+            reward += self.weights["win_progress"] * 0.02  # Doubled - Close to victory!
 
-        # Health advantage scaling
+        # Health advantage scaling (enhanced)
         health_advantage = player_health_pct - opponent_health_pct
         if health_advantage > 0:
-            reward += health_advantage * self.weights["win_progress"] * 0.002
+            reward += health_advantage * self.weights["win_progress"] * 0.004  # Doubled
 
         return reward
 
     def _apply_context_scaling(self, base_reward, player_health, opponent_health):
-        """Apply intelligent scaling based on game context."""
-        # Scale up rewards when the game is close (more critical decisions)
+        """Apply intelligent scaling based on game context with single round urgency."""
+        # Scale up rewards when the game is close (more critical decisions in single round)
         health_diff = abs(player_health - opponent_health)
         if health_diff < 30:  # Very close game
-            base_reward *= 1.3
+            base_reward *= 1.5  # Increased scaling
         elif health_diff < 60:  # Somewhat close
-            base_reward *= 1.1
+            base_reward *= 1.3  # Increased scaling
 
-        # Scale up rewards in critical health situations
+        # Scale up rewards in critical health situations (enhanced for single round)
         if player_health < 40 or opponent_health < 40:
-            base_reward *= 1.2
+            base_reward *= 1.4  # Increased scaling
 
         return base_reward
 
     def calculate_win_reward(
         self, won: bool, player_health: int, opponent_health: int, episode_length: int
     ) -> float:
-        """Calculate final win/loss reward."""
+        """Calculate final win/loss reward for single round."""
         if won:
-            base_win_reward = 1.0
-            health_bonus = (player_health / self.max_health) * 0.3
+            base_win_reward = 2.0  # Increased base reward for single round victory
+            health_bonus = (
+                player_health / self.max_health
+            ) * 0.5  # Increased health bonus
 
-            # Speed bonus
-            if episode_length < 1000:
+            # Speed bonus (more important in single round)
+            if episode_length < 800:  # Quick victory
+                speed_bonus = 0.5
+            elif episode_length < 1500:  # Moderate speed
                 speed_bonus = 0.2
-            elif episode_length < 2000:
-                speed_bonus = 0.1
             else:
                 speed_bonus = 0.0
 
             return base_win_reward + health_bonus + speed_bonus
         else:
-            return -0.1
+            return -0.2  # Slightly increased loss penalty
 
     def get_experience_quality_score(
         self, reward: float, reward_breakdown: Dict
     ) -> float:
         """
-        Calculate quality score for experience buffer labeling.
-        This replaces the broken percentile-based system.
+        Calculate quality score for experience buffer labeling (enhanced for single round).
         """
         # Initialize strategic bonus
         strategic_bonus = 0.0
 
         # Base quality from total reward using tanh normalization
-        base_quality = math.tanh(reward * 2.0) * 0.5 + 0.5  # Normalize to [0, 1]
+        base_quality = math.tanh(reward * 1.5) * 0.5 + 0.5  # Adjusted for single round
 
-        # Strategic bonuses for key actions
-        if reward_breakdown.get("damage", 0) > 0.01:  # Actually dealing damage
+        # Strategic bonuses for key actions (enhanced for single round)
+        if reward_breakdown.get("damage", 0) > 0.02:  # Significant damage dealing
+            strategic_bonus += 0.25
+
+        if reward_breakdown.get("combo", 0) > 0.01:  # Building combos
             strategic_bonus += 0.2
-
-        if reward_breakdown.get("combo", 0) > 0.005:  # Building combos
-            strategic_bonus += 0.15
 
         if reward_breakdown.get("spacing", 0) > 0.001:  # Good positioning
             strategic_bonus += 0.1
 
-        if reward_breakdown.get("momentum", 0) > 0.001:  # Positive momentum
-            strategic_bonus += 0.1
-
-        if reward_breakdown.get("win_progress", 0) > 0.005:  # Progress toward winning
+        if reward_breakdown.get("momentum", 0) > 0.002:  # Positive momentum
             strategic_bonus += 0.15
 
-        # Penalties for bad actions
-        if reward_breakdown.get("damage", 0) < -0.01:  # Taking significant damage
-            strategic_bonus -= 0.2
+        if reward_breakdown.get("win_progress", 0) > 0.01:  # Progress toward winning
+            strategic_bonus += 0.2
+
+        # Penalties for bad actions (enhanced for single round)
+        if reward_breakdown.get("damage", 0) < -0.02:  # Taking significant damage
+            strategic_bonus -= 0.25
 
         if reward_breakdown.get("spacing", 0) < -0.001:  # Poor positioning
             strategic_bonus -= 0.1
@@ -1055,18 +1074,9 @@ class SimplifiedFeatureTracker:
             status_diff = (agent_status - enemy_status) / 100.0
             features[17] = np.clip(status_diff, -1.0, 1.0)
 
-            agent_victories = ensure_scalar(info.get("agent_victories", 0), 0)
-            enemy_victories = ensure_scalar(info.get("enemy_victories", 0), 0)
-            features[18] = (
-                min(agent_victories / 10.0, 1.0)
-                if np.isfinite(agent_victories)
-                else 0.0
-            )
-            features[19] = (
-                min(enemy_victories / 10.0, 1.0)
-                if np.isfinite(enemy_victories)
-                else 0.0
-            )
+            # Single round specific features (18-19) - no multi-round tracking
+            features[18] = 0.0  # No multi-round victories in single round mode
+            features[19] = 0.0  # No multi-round victories in single round mode
 
             # Button features (20-31)
             try:
@@ -1993,7 +2003,7 @@ class CheckpointManager:
 
 
 class StreetFighterVisionWrapper(gym.Wrapper):
-    """🛡️ ENHANCED Street Fighter environment wrapper with quality-based experience labeling."""
+    """🥊 ENHANCED Street Fighter environment wrapper for SINGLE ROUND FIGHTS."""
 
     def __init__(self, env, frame_stack=8, rendering=False):
         super().__init__(env)
@@ -2039,19 +2049,26 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.full_hp = 176
         self.prev_player_health = self.full_hp
         self.prev_opponent_health = self.full_hp
-        self.wins, self.losses, self.total_rounds = 0, 0, 0
+
+        # SINGLE ROUND TRACKING - only track current round
+        self.current_round_won = False
+        self.current_round_lost = False
+        self.wins, self.losses = 0, 0  # Track total single rounds won/lost
         self.total_damage_dealt, self.total_damage_received = 0, 0
 
         # Episode tracking
         self.episode_steps = 0
-        self.max_episode_steps = 18000
+        self.max_episode_steps = 12000  # Reduced for single round
         self.episode_rewards = deque(maxlen=100)
         self.episode_count = 0
 
         # Previous info for reward calculation
         self.prev_info = None
 
-        print(f"🛡️  ENHANCED wrapper with quality-based experience labeling initialized")
+        print(f"🥊 SINGLE ROUND FIGHT wrapper initialized")
+        print(f"   - Each episode is ONE decisive round")
+        print(f"   - First fighter to reach 0 HP loses")
+        print(f"   - Max steps per round: {self.max_episode_steps}")
 
     def _sanitize_info(self, info: Dict) -> Dict:
         """Converts array values from a vectorized env's info dict to scalars."""
@@ -2078,7 +2095,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
 
-        # Reset reward calculator for new episode
+        # Reset reward calculator for new single round
         self.reward_calculator.reset_episode()
 
         self.prev_player_health = self.full_hp
@@ -2086,6 +2103,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.episode_steps = 0
         self.episode_count += 1
         self.prev_info = None
+
+        # Reset single round tracking
+        self.current_round_won = False
+        self.current_round_lost = False
 
         processed_frame = self._preprocess_frame(obs)
         initial_vector_features = self._create_initial_vector_features(info)
@@ -2121,33 +2142,76 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             )
         )
 
-        # Handle episode completion
-        if done or truncated:
-            curr_player_health = ensure_scalar(
-                sanitized_info.get("agent_hp", self.full_hp), self.full_hp
-            )
-            curr_opponent_health = ensure_scalar(
-                sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
-            )
-            won = curr_player_health > curr_opponent_health
+        # SINGLE ROUND FIGHT LOGIC - Check for knockout conditions
+        curr_player_health = ensure_scalar(
+            sanitized_info.get("agent_hp", self.full_hp), self.full_hp
+        )
+        curr_opponent_health = ensure_scalar(
+            sanitized_info.get("enemy_hp", self.full_hp), self.full_hp
+        )
 
-            # Add final win/loss reward
+        # Single round fight ends when either fighter reaches 0 health
+        single_round_done = False
+        won = False
+
+        if curr_player_health <= 0:
+            # AI lost this single round
+            single_round_done = True
+            won = False
+            self.current_round_lost = True
+            self.losses += 1
+            print(
+                f"💀 AI KNOCKED OUT! Single Round Lost! Total: {self.wins}W/{self.losses}L"
+            )
+
+        elif curr_opponent_health <= 0:
+            # AI won this single round
+            single_round_done = True
+            won = True
+            self.current_round_won = True
+            self.wins += 1
+            print(
+                f"🏆 AI WINS BY KNOCKOUT! Single Round Won! Total: {self.wins}W/{self.losses}L"
+            )
+
+        # Add final win/loss reward for single round completion
+        if single_round_done:
             final_reward = self.reward_calculator.calculate_win_reward(
                 won, curr_player_health, curr_opponent_health, self.episode_steps
             )
             intelligent_reward += final_reward
             reward_breakdown["final"] = final_reward
+            done = True  # End episode immediately after single round decision
 
-            # Update win/loss stats
-            if won:
-                self.wins += 1
-                print(f"🏆 AI WON! Total: {self.wins}W/{self.losses}L")
-            else:
-                self.losses += 1
-                print(f"💀 AI LOST! Total: {self.wins}W/{self.losses}L")
-
+        # Episode ends if max steps reached (draw/timeout)
         if safe_comparison(self.episode_steps, self.max_episode_steps, ">="):
             truncated = True
+            # In case of timeout, determine winner by health
+            if curr_player_health > curr_opponent_health:
+                won = True
+                self.wins += 1
+                print(
+                    f"⏰ TIME! AI wins by health advantage! Total: {self.wins}W/{self.losses}L"
+                )
+            elif curr_opponent_health > curr_player_health:
+                won = False
+                self.losses += 1
+                print(
+                    f"⏰ TIME! AI loses by health disadvantage! Total: {self.wins}W/{self.losses}L"
+                )
+            else:
+                # True draw - no winner
+                won = False
+                print(
+                    f"⏰ TIME! True draw - no winner! Total: {self.wins}W/{self.losses}L"
+                )
+
+            # Add timeout reward
+            timeout_reward = self.reward_calculator.calculate_win_reward(
+                won, curr_player_health, curr_opponent_health, self.episode_steps
+            )
+            intelligent_reward += timeout_reward
+            reward_breakdown["timeout"] = timeout_reward
 
         processed_frame = self._preprocess_frame(observation)
         self.frame_buffer.append(processed_frame)
@@ -2194,6 +2258,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "intelligent_reward": intelligent_reward,
                 "quality_score": quality_score,
                 "reward_breakdown": reward_breakdown,
+                "single_round_won": self.current_round_won,
+                "single_round_lost": self.current_round_lost,
             }
         )
         sanitized_info.update(self._get_stats())
@@ -2214,7 +2280,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.experience_buffer = buffer
 
     def _update_stats(self):
-        """Update comprehensive statistics."""
+        """Update comprehensive statistics for single round fights."""
         try:
             total_games = self.wins + self.losses
             win_rate = safe_divide(self.wins, total_games, 0.0)
@@ -2223,8 +2289,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "win_rate": win_rate,
                 "wins": self.wins,
                 "losses": self.losses,
-                "total_games": total_games,
+                "total_single_rounds": total_games,
                 "episode_steps": self.episode_steps,
+                "current_round_won": self.current_round_won,
+                "current_round_lost": self.current_round_lost,
             }
         except Exception as e:
             print(f"⚠️  Error updating stats: {e}")
@@ -2278,8 +2346,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
 
 def verify_fixed_energy_flow(verifier, env, device=None):
-    """Verify FIXED energy flow and gradient computation."""
-    print("\n🔬 QUALITY-BASED Energy-Based Transformer Verification")
+    """Verify FIXED energy flow and gradient computation for single round fights."""
+    print("\n🔬 SINGLE ROUND Energy-Based Transformer Verification")
     print("=" * 70)
 
     if device is None:
@@ -2321,7 +2389,7 @@ def verify_fixed_energy_flow(verifier, env, device=None):
 
     try:
         energy = verifier(obs_tensor, random_action)
-        print(f"✅ QUALITY-BASED Energy calculation successful")
+        print(f"✅ SINGLE ROUND Energy calculation successful")
         print(f"   - Energy output: {energy.item():.6f}")
         print(f"   - Energy scale: {verifier.energy_scale}")
 
@@ -2332,11 +2400,11 @@ def verify_fixed_energy_flow(verifier, env, device=None):
             retain_graph=False,
         )[0]
 
-        print("✅ QUALITY-BASED Gradient computation successful")
+        print("✅ SINGLE ROUND Gradient computation successful")
         print(f"   - Gradient norm: {torch.norm(gradients).item():.6f}")
 
         print(
-            "✅ EXCELLENT: QUALITY-BASED Energy-Based Transformer verification successful!"
+            "✅ EXCELLENT: SINGLE ROUND Energy-Based Transformer verification successful!"
         )
         return True
 
@@ -2350,15 +2418,16 @@ def make_fixed_env(
     state="ken_bison_12.state",
     render_mode=None,
 ):
-    """Create QUALITY-BASED Energy-Based environment."""
+    """Create SINGLE ROUND Energy-Based environment."""
     try:
         env = retro.make(game=game, state=state, render_mode=render_mode)
         env = StreetFighterVisionWrapper(
             env, frame_stack=8, rendering=(render_mode is not None)
         )
 
-        print(f"✅ QUALITY-BASED Energy-Based environment created")
+        print(f"✅ SINGLE ROUND Energy-Based environment created")
         print(f"   - Feature dimension: {VECTOR_FEATURE_DIM}")
+        print(f"   - Single round fights: ✅ ACTIVE")
         print(f"   - Quality-based experience labeling: ✅ ACTIVE")
         print(f"   - Intelligent reward shaping: ✅ ACTIVE")
         print(f"   - Strategic feedback: ✅ ACTIVE")
@@ -2398,10 +2467,11 @@ __all__ = [
     "VECTOR_FEATURE_DIM",
 ]
 
-print(f"🎉 QUALITY-BASED ENERGY TRANSFORMER - Complete wrapper.py loaded successfully!")
+print(f"🥊 SINGLE ROUND FIGHT - Complete wrapper.py loaded successfully!")
 print(f"   - Training paradigm: Quality-Based Experience Labeling")
+print(f"   - Fight mode: Single decisive rounds")
 print(f"   - Intelligent reward shaping: ✅ ACTIVE")
 print(f"   - Absolute quality thresholds: ✅ ACTIVE")
 print(f"   - Strategic feedback: ✅ ACTIVE")
 print(f"   - Dense learning signals: ✅ ACTIVE")
-print(f"🎯 Ready for 60% win rate training!")
+print(f"🎯 Ready for single round 60% win rate training!")
