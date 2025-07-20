@@ -2181,6 +2181,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             )
             intelligent_reward += final_reward
             reward_breakdown["final"] = final_reward
+            # set it done, then at the end we finish
             done = True  # End episode immediately after single round decision
 
         # Episode ends if max steps reached (draw/timeout)

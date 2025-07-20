@@ -432,6 +432,18 @@ class SingleRoundEnergyTrainer:
                 else:
                     episodes_since_improvement += 1
 
+                # --- ADDED FIX: Save periodically based on save_freq ---
+                if episode > 0 and episode % self.args.save_freq == 0:
+                    energy_quality = safe_mean(list(self.energy_separations), 0.0)
+                    print(f"\n💾 Saving periodic checkpoint at episode {episode}...")
+                    self.checkpoint_manager.save_checkpoint(
+                        self.verifier,
+                        self.agent,
+                        episode,
+                        current_win_rate,
+                        energy_quality,
+                    )
+
                 # Track consecutive good rounds
                 if current_win_rate > 0.5:
                     consecutive_good_rounds += 1

@@ -10,14 +10,14 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 python train.py \
-  --total-episodes 200 \
+  --total-episodes 100 \
   --lr 3e-4 \
   --thinking-lr 0.6 \
-  --thinking-steps 3 \
-  --batch-size 16 \
+  --thinking-steps 5 \
+  --batch-size 128 \
   --device cuda \
   --render
-
+  --resume checkpoints_single_round/checkpoint_ep199_wr0.470_eq0.7_20250720_191037.pt
 
 
 
