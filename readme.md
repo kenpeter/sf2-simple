@@ -7,7 +7,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 python train.py \
-    --max-episodes 100 \
+    --max-episodes 1000 \
     --learning-rate 1e-5 \
     --thinking-lr 0.03 \
     --checkpoint-frequency 20 \
@@ -22,7 +22,7 @@ python train.py \
 
 
 
-    
+
   ta.json 
 {
     "info": {
