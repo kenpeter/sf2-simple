@@ -535,13 +535,17 @@ class MinimalFixTrainer:
                 self.win_rate_history.append(performance_stats["win_rate"])
 
                 # Calculate energy quality metrics
-                energy_separation = train_stats.get("energy_separation", 0.0)
-                energy_quality = abs(energy_separation) * 10.0
+                if train_stats:  # Check if train_stats is not None
+                    energy_separation = train_stats.get("energy_separation", 0.0)
+                    energy_quality = abs(energy_separation) * 10.0
+                else:
+                    energy_separation = 0.0
+                    energy_quality = 0.0
                 self.energy_quality_history.append(energy_quality)
 
                 # Policy memory operations
                 policy_memory_action = self.handle_policy_memory_operations(
-                    performance_stats, train_stats
+                    performance_stats, train_stats or {}  # Handle None case
                 )
 
                 # Update stability manager
