@@ -449,6 +449,8 @@ class StreetFighterDiscreteActions:
         }
 
         self.n_actions = len(self.action_map)
+        # Reverse mapping for button combinations to indices
+        self.button_to_index = {tuple(v): k for k, v in self.action_map.items()}
 
     def get_action(self, action_idx):
         """Convert action index to button combination."""
@@ -527,7 +529,6 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         button_combination = self.action_mapper.get_action(action)
 
         # Execute action (for retro, we need to convert to the expected format)
-        # This might need adjustment based on your specific retro setup
         retro_action = self._convert_to_retro_action(button_combination)
         obs, reward, done, truncated, info = self.env.step(retro_action)
 
@@ -584,57 +585,15 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _convert_to_retro_action(self, button_combination):
-        """Convert button combination to retro action format - FIXED VERSION."""
-        # For retro environments, we need to return an integer action index
-        # that corresponds to the button combination in the retro action space
-
-        # Map button combinations to retro action indices
-        # This mapping needs to match your specific retro ROM's action space
-        retro_action_map = {
-            (): 0,  # No action
-            ("LEFT",): 6,
-            ("RIGHT",): 7,
-            ("UP",): 4,
-            ("DOWN",): 5,
-            ("A",): 8,  # Light punch
-            ("B",): 0,  # Medium punch (adjust index as needed)
-            ("C",): 9,  # Heavy punch
-            ("X",): 1,  # Light kick
-            ("Y",): 2,  # Medium kick
-            ("Z",): 10,  # Heavy kick
-            # Add more combinations as needed
-            ("LEFT", "A"): 11,
-            ("RIGHT", "A"): 12,
-            ("DOWN", "A"): 13,
-            # ... add more combinations
-        }
-
+        """Convert button combination to retro action index."""
         # Convert list to tuple for dictionary lookup
         button_tuple = tuple(button_combination)
-
-        # Try to find exact match first
-        if button_tuple in retro_action_map:
-            return retro_action_map[button_tuple]
-
-        # Fallback: if no exact match, try individual buttons
-        if len(button_combination) == 1:
-            button = button_combination[0]
-            single_button_map = {
-                "LEFT": 6,
-                "RIGHT": 7,
-                "UP": 4,
-                "DOWN": 5,
-                "A": 8,
-                "B": 0,
-                "C": 9,
-                "X": 1,
-                "Y": 2,
-                "Z": 10,
-            }
-            return single_button_map.get(button, 0)
-
-        # Final fallback: return no action
-        return 0
+        # Use reverse mapping to get the correct action index
+        if button_tuple in self.action_mapper.button_to_index:
+            return self.action_mapper.button_to_index[button_tuple]
+        else:
+            print(f"⚠️  Unknown button combination: {button_combination}, returning 0")
+            return 0  # Fallback to no action
 
     def _build_observation(self, visual_obs, info):
         """Build combined observation."""
