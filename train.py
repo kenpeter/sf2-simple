@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🥊 COMPLETE TRAINING SCRIPT FOR SINGLE ROUND FIGHTS
-Integrates intelligent reward shaping with quality-based labeling for 60% win rate in single rounds.
+🛡️ Enhanced Energy-Based Training with Policy Memory
+Prevents catastrophic forgetting through checkpoint averaging and golden experience buffer.
 """
 
 import torch
@@ -10,752 +10,944 @@ import torch.optim as optim
 import numpy as np
 import argparse
 import time
-from pathlib import Path
-from tqdm import tqdm
-import signal
-import sys
+import os
 from collections import deque
-import math
+from pathlib import Path
+import logging
+from datetime import datetime
 
-# Import wrapper components
+# Import our enhanced wrapper components
 from wrapper import (
     make_fixed_env,
-    FixedEnergyBasedStreetFighterVerifier,
-    FixedStabilizedEnergyBasedAgent,
-    FixedEnergyStabilityManager,
-    QualityBasedExperienceBuffer,
-    CheckpointManager,
     verify_fixed_energy_flow,
+    EnhancedFixedEnergyBasedStreetFighterVerifier,
+    EnhancedFixedStabilizedEnergyBasedAgent,
+    EnhancedQualityBasedExperienceBuffer,
+    PolicyMemoryManager,
+    EnhancedEnergyStabilityManager,
+    EnhancedCheckpointManager,
     safe_mean,
     safe_std,
-    VECTOR_FEATURE_DIM,
+    safe_divide,
 )
 
 
-class SingleRoundEnergyTrainer:
-    """
-    🥊 Single round trainer for achieving 60% win rate using intelligent rewards.
-    """
+class EnhancedPolicyMemoryTrainer:
+    """🛡️ Enhanced trainer with policy memory and golden experience buffer."""
 
     def __init__(self, args):
         self.args = args
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() and args.device == "cuda" else "cpu"
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Initialize environment
+        print(f"🎮 Initializing enhanced training environment...")
+        self.env = make_fixed_env()
+
+        # Initialize verifier and agent
+        self.verifier = EnhancedFixedEnergyBasedStreetFighterVerifier(
+            observation_space=self.env.observation_space,
+            action_space=self.env.action_space,
+            features_dim=args.features_dim,
+        ).to(self.device)
+
+        # Verify energy flow
+        if not verify_fixed_energy_flow(
+            self.verifier, self.env.observation_space, self.env.action_space
+        ):
+            raise RuntimeError("Energy flow verification failed!")
+
+        self.agent = EnhancedFixedStabilizedEnergyBasedAgent(
+            verifier=self.verifier,
+            thinking_steps=args.thinking_steps,
+            thinking_lr=args.thinking_lr,
+            noise_scale=args.noise_scale,
         )
 
-        # Initialize components
-        self.env = None
-        self.verifier = None
-        self.agent = None
-        self.optimizer = None
-        self.scheduler = None
-        self.stability_manager = None
-        self.experience_buffer = None
-        self.checkpoint_manager = None
+        # Initialize Policy Memory Manager (KEY COMPONENT)
+        self.policy_memory = PolicyMemoryManager(
+            performance_drop_threshold=args.performance_drop_threshold,
+            averaging_weight=args.averaging_weight,
+        )
+
+        # Initialize enhanced experience buffer with golden buffer
+        self.experience_buffer = EnhancedQualityBasedExperienceBuffer(
+            capacity=args.buffer_capacity,
+            quality_threshold=args.quality_threshold,
+            golden_buffer_capacity=args.golden_buffer_capacity,
+        )
+
+        # Initialize stability manager with policy memory integration
+        self.stability_manager = EnhancedEnergyStabilityManager(
+            initial_lr=args.learning_rate,
+            thinking_lr=args.thinking_lr,
+            policy_memory_manager=self.policy_memory,
+        )
+
+        # Initialize enhanced checkpoint manager
+        self.checkpoint_manager = EnhancedCheckpointManager(
+            checkpoint_dir=args.checkpoint_dir
+        )
+
+        # Initialize optimizer with enhanced parameters
+        self.optimizer = optim.Adam(
+            self.verifier.parameters(),
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,  # Increased for better regularization
+            eps=1e-8,
+            betas=(0.9, 0.999),
+        )
 
         # Training state
         self.episode = 0
         self.total_steps = 0
-        self.training_active = True
-
-        # Performance tracking for single rounds
-        self.episode_rewards = deque(maxlen=100)
-        self.single_round_wins = deque(maxlen=100)  # Track single round wins
-        self.energy_separations = deque(maxlen=50)
-        self.training_losses = deque(maxlen=50)
-        self.quality_scores = deque(maxlen=200)
-        self.knockout_wins = deque(maxlen=50)  # Track knockout vs timeout wins
-        self.episode_lengths = deque(maxlen=100)  # Track fight duration
-
-        # Target tracking for single rounds
-        self.target_win_rate = 0.6
         self.best_win_rate = 0.0
-        self.win_rate_history = deque(maxlen=20)
 
-        # Single round specific tracking
-        self.consecutive_wins = 0
-        self.max_consecutive_wins = 0
-        self.quick_knockout_count = 0  # Wins in < 800 steps
+        # Performance tracking for policy memory
+        self.win_rate_history = deque(maxlen=args.win_rate_window)
+        self.energy_quality_history = deque(maxlen=50)
+        self.last_checkpoint_episode = 0
 
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Enhanced logging
+        self.setup_logging()
 
-        print(f"🥊 Single Round Energy Trainer initialized")
-        print(f"   - Target win rate: {self.target_win_rate:.1%}")
+        print(f"🛡️ Enhanced Policy Memory Trainer initialized")
         print(f"   - Device: {self.device}")
-        print(f"   - Fight mode: Single decisive rounds")
-        print(f"   - Quality-based experience labeling: ✅ ACTIVE")
+        print(f"   - Learning rate: {args.learning_rate:.2e}")
+        print(f"   - Weight decay: {args.weight_decay:.2e}")
+        print(f"   - Performance drop threshold: {args.performance_drop_threshold}")
+        print(f"   - Checkpoint averaging weight: {args.averaging_weight}")
+        print(f"   - Golden buffer capacity: {args.golden_buffer_capacity}")
 
-    def _signal_handler(self, signum, frame):
-        """Handle graceful shutdown."""
-        print(f"\n🛑 Graceful shutdown initiated")
-        self.training_active = False
+    def setup_logging(self):
+        """Setup enhanced logging system."""
+        log_dir = Path("logs_enhanced")
+        log_dir.mkdir(exist_ok=True)
 
-        if self.checkpoint_manager and self.verifier and self.agent:
-            self._save_emergency_checkpoint()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"enhanced_training_{timestamp}.log"
 
-        sys.exit(0)
-
-    def setup_training(self):
-        """Initialize all training components with single round parameters."""
-        print("🔧 Setting up single round training components...")
-
-        # Create environment
-        render_mode = "human" if self.args.render else None
-        self.env = make_fixed_env(render_mode=render_mode)
-
-        # Create verifier
-        self.verifier = FixedEnergyBasedStreetFighterVerifier(
-            self.env.observation_space, self.env.action_space, features_dim=256
-        ).to(self.device)
-
-        # Create agent with parameters optimized for single rounds
-        self.agent = FixedStabilizedEnergyBasedAgent(
-            self.verifier,
-            thinking_steps=self.args.thinking_steps,
-            thinking_lr=self.args.thinking_lr,
-            noise_scale=0.03,  # Reduced noise for more decisive actions
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
         )
+        self.logger = logging.getLogger(__name__)
 
-        # Create optimizer
-        self.optimizer = optim.Adam(
-            self.verifier.parameters(), lr=self.args.lr, weight_decay=1e-5, eps=1e-8
-        )
+    def calculate_experience_quality(self, reward, reward_breakdown, episode_stats):
+        """Calculate quality score for experience (improved formula)."""
+        base_quality = 0.5  # Neutral starting point
 
-        # Learning rate scheduler optimized for single rounds
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode="max", factor=0.8, patience=40  # Faster adaptation
-        )
+        # Reward component (capped to prevent exploitation)
+        reward_component = min(max(reward, -1.0), 2.0) * 0.3
 
-        # Create stability manager
-        self.stability_manager = FixedEnergyStabilityManager(
-            initial_lr=self.args.lr, thinking_lr=self.args.thinking_lr
-        )
-
-        # Create quality-based experience buffer (smaller for single rounds)
-        self.experience_buffer = QualityBasedExperienceBuffer(
-            capacity=25000,  # Reduced capacity for single rounds
-            quality_threshold=0.58,  # Slightly higher threshold for decisive actions
-        )
-
-        # Connect experience buffer to environment
-        self.env.set_experience_buffer(self.experience_buffer)
-
-        # Create checkpoint manager
-        self.checkpoint_manager = CheckpointManager("checkpoints_single_round")
-
-        print("✅ Single round training components initialized")
-
-    def verify_setup(self):
-        """Verify energy flow before training."""
-        print("🔬 Verifying energy flow for single round fights...")
-
-        if verify_fixed_energy_flow(self.verifier, self.env, self.device):
-            print("   ✅ Energy flow verified - ready for single round training!")
-            return True
+        # Win/loss component (most important)
+        if "round_won" in reward_breakdown:
+            win_component = 0.4  # Strong positive signal
+        elif "round_lost" in reward_breakdown:
+            win_component = -0.3  # Negative signal
         else:
-            print("   ❌ Energy flow verification failed!")
-            return False
+            win_component = 0.0
 
-    def calculate_contrastive_loss(self, good_batch, bad_batch):
-        """Calculate contrastive loss with quality-based experiences for single rounds."""
-        if not good_batch or not bad_batch:
-            return torch.tensor(0.0, device=self.device), torch.tensor(
-                0.0, device=self.device
+        # Health advantage component
+        health_component = reward_breakdown.get("health_advantage", 0.0) * 0.1
+
+        # Damage dealing component (capped)
+        damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.2)
+
+        # Episode performance component
+        if episode_stats:
+            episode_component = 0.1 if episode_stats.get("won", False) else -0.1
+        else:
+            episode_component = 0.0
+
+        quality_score = (
+            base_quality
+            + reward_component
+            + win_component
+            + health_component
+            + damage_component
+            + episode_component
+        )
+
+        # Clamp to reasonable range
+        return max(0.0, min(1.0, quality_score))
+
+    def run_episode(self):
+        """Run a single episode with enhanced tracking."""
+        obs, info = self.env.reset()
+        done = False
+        truncated = False
+
+        episode_reward = 0.0
+        episode_steps = 0
+        episode_experiences = []
+
+        # Episode-level tracking
+        damage_dealt_total = 0.0
+        damage_taken_total = 0.0
+        round_won = False
+
+        while (
+            not done and not truncated and episode_steps < self.args.max_episode_steps
+        ):
+            # Agent prediction with enhanced thinking
+            action, thinking_info = self.agent.predict(obs, deterministic=False)
+
+            # Execute action
+            next_obs, reward, done, truncated, info = self.env.step(action)
+
+            episode_reward += reward
+            episode_steps += 1
+            self.total_steps += 1
+
+            # Track episode stats
+            reward_breakdown = info.get("reward_breakdown", {})
+            damage_dealt_total += reward_breakdown.get("damage_dealt", 0.0)
+            damage_taken_total += abs(reward_breakdown.get("damage_taken", 0.0))
+
+            if "round_won" in reward_breakdown:
+                round_won = True
+
+            # Calculate experience quality
+            episode_stats = {
+                "won": round_won,
+                "damage_ratio": safe_divide(
+                    damage_dealt_total, damage_taken_total + 1e-6, 1.0
+                ),
+            }
+            quality_score = self.calculate_experience_quality(
+                reward, reward_breakdown, episode_stats
             )
 
-        good_energies = []
-        bad_energies = []
+            # Store experience
+            experience = {
+                "obs": obs,
+                "action": action,
+                "reward": reward,
+                "next_obs": next_obs,
+                "done": done,
+                "thinking_info": thinking_info,
+                "episode": self.episode,
+                "step": episode_steps,
+            }
 
-        # Process good experiences (winning actions in single rounds)
-        for exp in good_batch:
-            obs = exp["observations"]
-            action = exp["action"]
+            episode_experiences.append((experience, quality_score))
+            obs = next_obs
 
-            # Convert observations to tensors
-            obs_tensor = {}
-            for key, value in obs.items():
-                if isinstance(value, np.ndarray):
-                    obs_tensor[key] = (
-                        torch.from_numpy(value).unsqueeze(0).float().to(self.device)
-                    )
-                else:
-                    obs_tensor[key] = (
-                        torch.tensor(value).unsqueeze(0).float().to(self.device)
-                    )
+        # Episode completed - process experiences
+        episode_stats_final = {
+            "won": round_won,
+            "damage_ratio": safe_divide(
+                damage_dealt_total, damage_taken_total + 1e-6, 1.0
+            ),
+            "reward": episode_reward,
+            "steps": episode_steps,
+        }
 
-            # Create action tensor (one-hot)
-            action_tensor = torch.zeros(1, self.verifier.action_dim, device=self.device)
-            action_tensor[0, action] = 1.0
-
-            energy = self.verifier(obs_tensor, action_tensor)
-            good_energies.append(energy)
-
-        # Process bad experiences (losing actions in single rounds)
-        for exp in bad_batch:
-            obs = exp["observations"]
-            action = exp["action"]
-
-            # Convert observations to tensors
-            obs_tensor = {}
-            for key, value in obs.items():
-                if isinstance(value, np.ndarray):
-                    obs_tensor[key] = (
-                        torch.from_numpy(value).unsqueeze(0).float().to(self.device)
-                    )
-                else:
-                    obs_tensor[key] = (
-                        torch.tensor(value).unsqueeze(0).float().to(self.device)
-                    )
-
-            # Create action tensor (one-hot)
-            action_tensor = torch.zeros(1, self.verifier.action_dim, device=self.device)
-            action_tensor[0, action] = 1.0
-
-            energy = self.verifier(obs_tensor, action_tensor)
-            bad_energies.append(energy)
-
-        if not good_energies or not bad_energies:
-            return torch.tensor(0.0, device=self.device), torch.tensor(
-                0.0, device=self.device
+        # Add experiences to buffer
+        for experience, quality_score in episode_experiences:
+            reward_breakdown = experience.get("reward_breakdown", {})
+            self.experience_buffer.add_experience(
+                experience, experience["reward"], reward_breakdown, quality_score
             )
 
-        # Stack energies
-        good_energy_tensor = torch.cat(good_energies)
-        bad_energy_tensor = torch.cat(bad_energies)
+        return episode_stats_final
 
-        # Calculate contrastive loss (good should have lower energy than bad)
-        good_mean = good_energy_tensor.mean()
-        bad_mean = bad_energy_tensor.mean()
+    def calculate_contrastive_loss(self, good_batch, bad_batch, margin=2.0):
+        """Calculate enhanced contrastive loss with tighter bounds."""
+        device = self.device
 
-        # Energy separation (bad - good should be positive and > margin)
-        energy_separation = bad_mean - good_mean
-        margin = self.args.contrastive_margin
-        contrastive_loss = torch.clamp(margin - energy_separation, min=0.0)
+        def process_batch(batch):
+            if not batch:
+                return None, None
 
-        return contrastive_loss, energy_separation
+            obs_batch = []
+            action_batch = []
+
+            for exp in batch:
+                obs = exp["obs"]
+                action = exp["action"]
+
+                # Convert observations to tensors
+                if isinstance(obs, dict):
+                    obs_tensor = {
+                        key: (
+                            torch.from_numpy(val).float()
+                            if isinstance(val, np.ndarray)
+                            else val.float()
+                        )
+                        for key, val in obs.items()
+                    }
+                else:
+                    obs_tensor = torch.from_numpy(obs).float()
+
+                # Convert action to one-hot
+                action_one_hot = torch.zeros(self.env.action_space.n)
+                action_one_hot[action] = 1.0
+
+                obs_batch.append(obs_tensor)
+                action_batch.append(action_one_hot)
+
+            return obs_batch, action_batch
+
+        # Process batches
+        good_obs, good_actions = process_batch(good_batch)
+        bad_obs, bad_actions = process_batch(bad_batch)
+
+        if good_obs is None or bad_obs is None:
+            return torch.tensor(0.0, device=device)
+
+        # Stack observations and actions
+        def stack_obs_dict(obs_list):
+            stacked = {}
+            for key in obs_list[0].keys():
+                stacked[key] = torch.stack([obs[key] for obs in obs_list]).to(device)
+            return stacked
+
+        good_obs_stacked = stack_obs_dict(good_obs)
+        bad_obs_stacked = stack_obs_dict(bad_obs)
+        good_actions_stacked = torch.stack(good_actions).to(device)
+        bad_actions_stacked = torch.stack(bad_actions).to(device)
+
+        # Calculate energies
+        good_energies = self.verifier(good_obs_stacked, good_actions_stacked)
+        bad_energies = self.verifier(bad_obs_stacked, bad_actions_stacked)
+
+        # Enhanced contrastive loss with tighter bounds
+        good_energy_mean = good_energies.mean()
+        bad_energy_mean = bad_energies.mean()
+
+        # We want good energies to be lower (more negative) than bad energies
+        energy_diff = bad_energy_mean - good_energy_mean
+        contrastive_loss = torch.clamp(margin - energy_diff, min=0.0)
+
+        # Add regularization to prevent energy explosion
+        energy_reg = 0.01 * (good_energies.pow(2).mean() + bad_energies.pow(2).mean())
+
+        total_loss = contrastive_loss + energy_reg
+
+        return total_loss, {
+            "contrastive_loss": contrastive_loss.item(),
+            "energy_reg": energy_reg.item(),
+            "good_energy_mean": good_energy_mean.item(),
+            "bad_energy_mean": bad_energy_mean.item(),
+            "energy_separation": energy_diff.item(),
+        }
 
     def train_step(self):
-        """Single training step optimized for single round learning."""
-        # Sample balanced batch
-        good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
-            self.args.batch_size
+        """Enhanced training step with policy memory integration."""
+        # Sample balanced batch with golden experiences
+        good_batch, bad_batch, golden_batch = (
+            self.experience_buffer.sample_enhanced_balanced_batch(
+                self.args.batch_size, golden_ratio=0.15
+            )
         )
 
         if good_batch is None or bad_batch is None:
-            return 0.0, 0.0, {"message": "insufficient_data"}
+            return None  # Not enough experiences yet
 
-        # Zero gradients
+        # Calculate loss
+        loss, loss_info = self.calculate_contrastive_loss(
+            good_batch, bad_batch, margin=self.args.contrastive_margin
+        )
+
+        # Get current learning rate from stability manager
+        current_lr, current_thinking_lr = self.stability_manager.get_current_lrs()
+
+        # Update optimizer learning rate if changed
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = current_lr
+
+        # Update agent thinking learning rate
+        self.agent.current_thinking_lr = current_thinking_lr
+
+        # Backward pass with gradient clipping
         self.optimizer.zero_grad()
+        loss.backward()
 
-        # Calculate contrastive loss
-        contrastive_loss, energy_separation = self.calculate_contrastive_loss(
-            good_batch, bad_batch
+        # Enhanced gradient clipping
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.verifier.parameters(), max_norm=1.0
         )
 
-        # Backward pass
-        if contrastive_loss.requires_grad and contrastive_loss.item() > 0:
-            contrastive_loss.backward()
+        # Check for gradient explosion
+        if grad_norm > 10.0:
+            print(f"⚠️ Large gradient norm detected: {grad_norm:.2f}")
+            return None
 
-            # Gradient clipping (slightly more aggressive for single rounds)
-            torch.nn.utils.clip_grad_norm_(self.verifier.parameters(), max_norm=0.8)
+        self.optimizer.step()
 
-            self.optimizer.step()
+        # Add gradient norm to loss info
+        loss_info["grad_norm"] = grad_norm.item()
+        loss_info["learning_rate"] = current_lr
+        loss_info["thinking_lr"] = current_thinking_lr
 
-        return (
-            contrastive_loss.item(),
-            energy_separation.item(),
-            {
-                "good_quality": safe_mean(
-                    [exp["quality_score"] for exp in good_batch], 0.0
-                ),
-                "bad_quality": safe_mean(
-                    [exp["quality_score"] for exp in bad_batch], 0.0
-                ),
-            },
-        )
+        return loss_info
 
-    def run_single_round(self):
-        """Run single decisive round."""
-        obs, info = self.env.reset()
-        total_intelligent_reward = 0.0
-        steps = 0
-        won = False
-        knockout_win = False
+    def evaluate_performance(self):
+        """Evaluate current performance for policy memory decisions."""
+        eval_episodes = min(5, max(1, self.episode // 100))  # Adaptive evaluation count
 
-        thinking_successes = 0
-        thinking_attempts = 0
-        episode_quality_scores = []
+        wins = 0
+        total_reward = 0.0
+        total_steps = 0
 
-        while True:
-            # Get action from agent
-            action, thinking_info = self.agent.predict(obs, deterministic=False)
+        for _ in range(eval_episodes):
+            obs, info = self.env.reset()
+            done = False
+            truncated = False
+            episode_reward = 0.0
+            episode_steps = 0
 
-            # Track thinking process
-            thinking_attempts += 1
-            if thinking_info.get("optimization_successful", False):
-                thinking_successes += 1
+            while (
+                not done
+                and not truncated
+                and episode_steps < self.args.max_episode_steps
+            ):
+                action, _ = self.agent.predict(
+                    obs, deterministic=True
+                )  # Deterministic for evaluation
+                obs, reward, done, truncated, info = self.env.step(action)
 
-            # Take step
-            obs, reward, done, truncated, info = self.env.step(action)
-            total_intelligent_reward += reward
-            steps += 1
-            self.total_steps += 1
+                episode_reward += reward
+                episode_steps += 1
 
-            # Track quality scores
-            if "quality_score" in info:
-                episode_quality_scores.append(info["quality_score"])
+                # Check for win
+                reward_breakdown = info.get("reward_breakdown", {})
+                if "round_won" in reward_breakdown:
+                    wins += 1
+                    break
 
-            # Check if single round ended
-            if done or truncated:
-                won = info.get("single_round_won", False)
+            total_reward += episode_reward
+            total_steps += episode_steps
 
-                # Determine if it was a knockout win (quick decisive victory)
-                if won and steps < 800:  # Quick knockout
-                    knockout_win = True
-                    self.quick_knockout_count += 1
-
-                break
-
-        thinking_success_rate = thinking_successes / max(thinking_attempts, 1)
-        avg_quality_score = safe_mean(episode_quality_scores, 0.5)
+        win_rate = wins / eval_episodes
+        avg_reward = total_reward / eval_episodes
+        avg_steps = total_steps / eval_episodes
 
         return {
-            "total_reward": total_intelligent_reward,
-            "steps": steps,
-            "won": won,
-            "knockout_win": knockout_win,
-            "thinking_success_rate": thinking_success_rate,
-            "avg_quality_score": avg_quality_score,
-            "info": info,
+            "win_rate": win_rate,
+            "avg_reward": avg_reward,
+            "avg_steps": avg_steps,
+            "eval_episodes": eval_episodes,
         }
 
-    def _save_emergency_checkpoint(self):
-        """Save emergency checkpoint."""
-        try:
-            current_win_rate = safe_mean(list(self.single_round_wins), 0.0)
-            energy_quality = safe_mean(list(self.energy_separations), 0.0)
+    def handle_policy_memory_operations(self, performance_stats, train_stats):
+        """Handle policy memory operations - KEY METHOD."""
 
-            path = self.checkpoint_manager.save_checkpoint(
+    def handle_policy_memory_operations(self, performance_stats, train_stats):
+        """Handle policy memory operations - KEY METHOD."""
+        current_win_rate = performance_stats["win_rate"]
+        current_lr = self.optimizer.param_groups[0]["lr"]
+
+        # Update policy memory with current performance
+        performance_improved, performance_drop = self.policy_memory.update_performance(
+            current_win_rate, self.episode, self.verifier.state_dict(), current_lr
+        )
+
+        # Update experience buffer win rate for golden buffer filtering
+        self.experience_buffer.update_win_rate(current_win_rate)
+
+        policy_memory_action_taken = False
+
+        # Handle performance improvement
+        if performance_improved:
+            print(f"🏆 NEW PEAK PERFORMANCE DETECTED!")
+            # Save peak checkpoint
+            self.checkpoint_manager.save_checkpoint(
                 self.verifier,
                 self.agent,
                 self.episode,
                 current_win_rate,
-                energy_quality,
-                is_emergency=True,
+                train_stats.get("energy_separation", 0.0),
+                is_peak=True,
+                policy_memory_stats=self.policy_memory.get_stats(),
             )
-            if path:
-                print(f"💾 Emergency checkpoint saved: {path.name}")
-        except Exception as e:
-            print(f"❌ Failed to save emergency checkpoint: {e}")
+            policy_memory_action_taken = True
 
-    def train(self):
-        """Main single round training loop focused on 60% win rate."""
-        if not self.verify_setup():
-            print("❌ Setup verification failed!")
-            return
+        # Handle performance drop - CRITICAL POLICY MEMORY LOGIC
+        elif performance_drop:
+            print(f"📉 PERFORMANCE DROP DETECTED - Activating Policy Memory!")
 
-        print(f"\n🥊 Starting SINGLE ROUND Energy-Based Training")
-        print(f"🏆 Target: {self.target_win_rate:.1%} win rate in single rounds")
-        print(f"📊 Using intelligent reward shaping with quality-based labeling")
-
-        # Training metrics
-        consecutive_good_rounds = 0
-        episodes_since_improvement = 0
-
-        # Progress tracking
-        pbar = tqdm(range(self.args.total_episodes), desc="🥊 Single Round Training")
-
-        for episode in pbar:
-            if not self.training_active:
-                break
-
-            self.episode = episode
-
-            # Run single round
-            round_result = self.run_single_round()
-
-            # Track performance
-            self.episode_rewards.append(round_result["total_reward"])
-            self.single_round_wins.append(1.0 if round_result["won"] else 0.0)
-            self.quality_scores.append(round_result["avg_quality_score"])
-            self.episode_lengths.append(round_result["steps"])
-
-            if round_result["knockout_win"]:
-                self.knockout_wins.append(1.0)
-            else:
-                self.knockout_wins.append(0.0)
-
-            # Track consecutive wins
-            if round_result["won"]:
-                self.consecutive_wins += 1
-                self.max_consecutive_wins = max(
-                    self.max_consecutive_wins, self.consecutive_wins
+            # Attempt checkpoint averaging if we should
+            if self.policy_memory.should_perform_averaging(self.episode):
+                print(f"🔄 Performing checkpoint averaging...")
+                averaging_success = self.policy_memory.perform_checkpoint_averaging(
+                    self.verifier
                 )
-            else:
-                self.consecutive_wins = 0
 
-            # Training step (if we have enough data)
-            buffer_stats = self.experience_buffer.get_stats()
-            train_info = {"message": "collecting_data"}
+                if averaging_success:
+                    print(f"✅ Checkpoint averaging completed successfully")
+                    policy_memory_action_taken = True
 
-            if buffer_stats["total_size"] >= self.args.batch_size * 2:
-                loss, separation, train_info = self.train_step()
+                    # Also reduce learning rate
+                    if self.policy_memory.should_reduce_lr():
+                        new_lr = self.policy_memory.get_reduced_lr(current_lr)
+                        for param_group in self.optimizer.param_groups:
+                            param_group["lr"] = new_lr
 
-                if loss > 0:  # Only track meaningful losses
-                    self.training_losses.append(loss)
-                    self.energy_separations.append(abs(separation))
-
-                # Calculate current performance metrics
-                current_win_rate = safe_mean(list(self.single_round_wins), 0.0)
-                self.win_rate_history.append(current_win_rate)
-
-                # Update learning rate based on win rate
-                self.scheduler.step(current_win_rate)
-
-                # Check for improvement
-                if current_win_rate > self.best_win_rate:
-                    self.best_win_rate = current_win_rate
-                    episodes_since_improvement = 0
-
-                    # Save checkpoint for new best
-                    if episode > 30:  # Save more frequently for single rounds
-                        energy_quality = safe_mean(list(self.energy_separations), 0.0)
-                        self.checkpoint_manager.save_checkpoint(
-                            self.verifier,
-                            self.agent,
-                            episode,
-                            current_win_rate,
-                            energy_quality,
+                        # Update stability manager
+                        self.stability_manager.current_lr = new_lr
+                        print(
+                            f"📉 Learning rate reduced to {new_lr:.2e} after policy memory recovery"
                         )
                 else:
-                    episodes_since_improvement += 1
+                    print(f"❌ Checkpoint averaging failed")
 
-                # --- ADDED FIX: Save periodically based on save_freq ---
-                if episode > 0 and episode % self.args.save_freq == 0:
-                    energy_quality = safe_mean(list(self.energy_separations), 0.0)
-                    print(f"\n💾 Saving periodic checkpoint at episode {episode}...")
-                    self.checkpoint_manager.save_checkpoint(
-                        self.verifier,
-                        self.agent,
-                        episode,
-                        current_win_rate,
-                        energy_quality,
-                    )
+            # Save emergency checkpoint
+            self.checkpoint_manager.save_checkpoint(
+                self.verifier,
+                self.agent,
+                self.episode,
+                current_win_rate,
+                train_stats.get("energy_separation", 0.0),
+                is_emergency=True,
+                policy_memory_stats=self.policy_memory.get_stats(),
+            )
 
-                # Track consecutive good rounds
-                if current_win_rate > 0.5:
-                    consecutive_good_rounds += 1
-                else:
-                    consecutive_good_rounds = 0
+        return policy_memory_action_taken
+
+    def train(self):
+        """Main enhanced training loop with policy memory."""
+        print(f"🛡️ Starting Enhanced Policy Memory Training")
+        print(f"   - Target episodes: {self.args.max_episodes}")
+        print(f"   - Batch size: {self.args.batch_size}")
+        print(f"   - Contrastive margin: {self.args.contrastive_margin}")
+        print(f"   - Policy memory enabled: ✅")
+
+        # Training metrics
+        episode_rewards = deque(maxlen=100)
+        recent_losses = deque(maxlen=50)
+        training_start_time = time.time()
+
+        for episode in range(self.args.max_episodes):
+            self.episode = episode
+            episode_start_time = time.time()
+
+            # Run episode
+            episode_stats = self.run_episode()
+            episode_rewards.append(episode_stats["reward"])
+
+            # Training step if we have enough experiences
+            if (
+                len(self.experience_buffer.good_experiences)
+                >= self.args.batch_size // 2
+            ):
+                train_stats = self.train_step()
+                if train_stats:
+                    recent_losses.append(train_stats.get("contrastive_loss", 0.0))
+            else:
+                train_stats = {}
+
+            # Periodic evaluation and policy memory operations
+            if episode % self.args.eval_frequency == 0:
+                # Performance evaluation
+                performance_stats = self.evaluate_performance()
+                self.win_rate_history.append(performance_stats["win_rate"])
+
+                # Calculate energy quality metrics
+                energy_separation = train_stats.get("energy_separation", 0.0)
+                energy_quality = abs(energy_separation) * 10.0  # Scale for readability
+                self.energy_quality_history.append(energy_quality)
+
+                # Policy memory operations (CRITICAL SECTION)
+                policy_memory_action = self.handle_policy_memory_operations(
+                    performance_stats, train_stats
+                )
 
                 # Update stability manager
-                avg_energy_quality = safe_mean(list(self.energy_separations), 0.0)
-                avg_energy_separation = safe_mean(list(self.energy_separations), 0.0)
-                thinking_stats = self.agent.get_thinking_stats()
-                early_stop_rate = thinking_stats.get("early_stop_rate", 0.0)
+                early_stop_rate = safe_divide(
+                    self.agent.thinking_stats.get("early_stops", 0),
+                    self.agent.thinking_stats.get("total_predictions", 1),
+                    0.0,
+                )
 
-                emergency_triggered = self.stability_manager.update_metrics(
-                    current_win_rate,
-                    avg_energy_quality,
-                    avg_energy_separation,
+                stability_emergency = self.stability_manager.update_metrics(
+                    performance_stats["win_rate"],
+                    energy_quality,
+                    energy_separation,
                     early_stop_rate,
                 )
 
-                if emergency_triggered:
-                    print(f"\n🚨 Stability intervention at episode {episode}")
-                    # Reduce learning rates
+                # Handle stability emergency
+                if stability_emergency and not policy_memory_action:
+                    print(f"🚨 Stability emergency triggered!")
+                    # Update learning rates from stability manager
                     new_lr, new_thinking_lr = self.stability_manager.get_current_lrs()
                     for param_group in self.optimizer.param_groups:
                         param_group["lr"] = new_lr
                     self.agent.current_thinking_lr = new_thinking_lr
 
-                    # Emergency buffer purge
-                    self.experience_buffer.emergency_purge(keep_ratio=0.4)
-
-                # Adjust quality threshold periodically
+                # Regular checkpoint saving
                 if (
-                    episode % 40 == 0 and episode > 80
-                ):  # More frequent for single rounds
-                    self.experience_buffer.adjust_threshold(target_good_ratio=0.5)
+                    episode - self.last_checkpoint_episode
+                    >= self.args.checkpoint_frequency
+                    or performance_stats["win_rate"] > self.best_win_rate
+                ):
 
-                # Calculate additional metrics
-                avg_episode_length = safe_mean(list(self.episode_lengths), 1000)
-                knockout_rate = safe_mean(list(self.knockout_wins), 0.0)
+                    self.checkpoint_manager.save_checkpoint(
+                        self.verifier,
+                        self.agent,
+                        episode,
+                        performance_stats["win_rate"],
+                        energy_quality,
+                        policy_memory_stats=self.policy_memory.get_stats(),
+                    )
+                    self.last_checkpoint_episode = episode
 
-                # Progress bar update
-                pbar.set_postfix(
-                    {
-                        "WR": f"{current_win_rate:.2f}",
-                        "Best": f"{self.best_win_rate:.2f}",
-                        "Consecutive": f"{self.consecutive_wins}",
-                        "KO%": f"{knockout_rate:.2f}",
-                        "Steps": f"{avg_episode_length:.0f}",
-                        "Quality": f"{round_result['avg_quality_score']:.2f}",
-                        "Good": f"{buffer_stats['good_count']}",
-                        "Bad": f"{buffer_stats['bad_count']}",
-                    }
+                    if performance_stats["win_rate"] > self.best_win_rate:
+                        self.best_win_rate = performance_stats["win_rate"]
+
+                # Adjust experience buffer threshold
+                self.experience_buffer.adjust_threshold(episode_number=episode)
+
+                # Comprehensive logging
+                self.log_training_progress(
+                    episode,
+                    episode_stats,
+                    performance_stats,
+                    train_stats,
+                    episode_start_time,
+                    training_start_time,
                 )
 
-                # Detailed reporting every 20 episodes (more frequent for single rounds)
-                if episode % 20 == 0 and episode > 0:
-                    self._print_single_round_report(
-                        episode, current_win_rate, round_result, buffer_stats
-                    )
-
-                # Early success check
-                if current_win_rate >= self.target_win_rate and episode > 80:
+            # Early stopping check
+            if len(self.win_rate_history) >= 20:
+                recent_win_rate = safe_mean(list(self.win_rate_history)[-10:], 0.0)
+                if recent_win_rate >= self.args.target_win_rate:
                     print(
-                        f"\n🎉 TARGET ACHIEVED! Single Round Win Rate: {current_win_rate:.1%}"
+                        f"🎯 Target win rate {self.args.target_win_rate:.1%} achieved!"
                     )
-                    print(
-                        f"🏆 Reached {self.target_win_rate:.1%} target at episode {episode}"
-                    )
-                    print(f"🥊 Max consecutive wins: {self.max_consecutive_wins}")
-                    print(f"⚡ Quick knockouts: {self.quick_knockout_count}")
+                    print(f"   Current win rate: {recent_win_rate:.1%}")
                     break
 
-            else:
-                # Still collecting data
-                current_win_rate = safe_mean(list(self.single_round_wins), 0.0)
-                pbar.set_postfix(
-                    {
-                        "WR": f"{current_win_rate:.2f}",
-                        "Won": "✅" if round_result["won"] else "❌",
-                        "Steps": f"{round_result['steps']}",
-                        "Quality": f"{round_result['avg_quality_score']:.2f}",
-                        "Collecting": f"{buffer_stats['total_size']}/{self.args.batch_size * 2}",
-                        "Good": f"{buffer_stats['good_count']}",
-                        "Bad": f"{buffer_stats['bad_count']}",
-                    }
-                )
+        # Training completed
+        final_performance = self.evaluate_performance()
+        print(f"\n🏁 Enhanced Policy Memory Training Completed!")
+        print(f"   - Total episodes: {self.episode + 1}")
+        print(f"   - Final win rate: {final_performance['win_rate']:.1%}")
+        print(f"   - Best win rate: {self.best_win_rate:.1%}")
+        print(
+            f"   - Policy memory activations: {self.policy_memory.averaging_performed}"
+        )
+        print(f"   - Training time: {time.time() - training_start_time:.1f}s")
 
-        pbar.close()
+        # Save final checkpoint
+        self.checkpoint_manager.save_checkpoint(
+            self.verifier,
+            self.agent,
+            self.episode,
+            final_performance["win_rate"],
+            self.energy_quality_history[-1] if self.energy_quality_history else 0.0,
+            policy_memory_stats=self.policy_memory.get_stats(),
+        )
 
-        # Final results
-        final_win_rate = safe_mean(list(self.single_round_wins), 0.0)
-        final_energy_quality = safe_mean(list(self.energy_separations), 0.0)
-        final_avg_quality = safe_mean(list(self.quality_scores), 0.0)
-        avg_episode_length = safe_mean(list(self.episode_lengths), 1000)
-        knockout_rate = safe_mean(list(self.knockout_wins), 0.0)
-
-        print(f"\n📊 FINAL SINGLE ROUND TRAINING RESULTS:")
-        print(f"   🥊 Final Single Round Win Rate: {final_win_rate:.1%}")
-        print(f"   🏆 Best Single Round Win Rate: {self.best_win_rate:.1%}")
-        print(f"   🔥 Max Consecutive Wins: {self.max_consecutive_wins}")
-        print(f"   ⚡ Quick Knockout Rate: {knockout_rate:.1%}")
-        print(f"   ⏱️  Average Fight Duration: {avg_episode_length:.0f} steps")
-        print(f"   ⚡ Energy Quality: {final_energy_quality:.3f}")
-        print(f"   🎲 Average Quality Score: {final_avg_quality:.3f}")
-        print(f"   📈 Total Single Rounds: {len(self.episode_rewards)}")
-        print(f"   💰 Average Reward: {safe_mean(list(self.episode_rewards), 0.0):.2f}")
+    def log_training_progress(
+        self,
+        episode,
+        episode_stats,
+        performance_stats,
+        train_stats,
+        episode_start_time,
+        training_start_time,
+    ):
+        """Enhanced logging with policy memory metrics."""
+        episode_time = time.time() - episode_start_time
+        total_time = time.time() - training_start_time
 
         # Buffer statistics
         buffer_stats = self.experience_buffer.get_stats()
-        print(f"   📚 Buffer Stats:")
-        print(f"      - Total experiences: {buffer_stats['total_size']}")
-        print(f"      - Good experiences: {buffer_stats['good_count']}")
-        print(f"      - Bad experiences: {buffer_stats['bad_count']}")
-        print(f"      - Quality threshold: {buffer_stats['quality_threshold']:.3f}")
+        golden_stats = buffer_stats["golden_buffer"]
 
-        # Success evaluation for single rounds
-        if final_win_rate >= self.target_win_rate:
+        # Policy memory statistics
+        policy_memory_stats = self.policy_memory.get_stats()
+
+        # Agent thinking statistics
+        thinking_stats = self.agent.get_thinking_stats()
+
+        # Energy statistics
+        energy_stats = self.verifier.get_energy_stats()
+
+        print(f"\n{'='*80}")
+        print(f"🥊 Episode {episode:,} | Policy Memory Training")
+        print(f"{'='*80}")
+
+        # Performance metrics
+        print(f"📊 Performance Metrics:")
+        print(
+            f"   Win Rate: {performance_stats['win_rate']:.1%} | "
+            f"Avg Reward: {performance_stats['avg_reward']:.2f} | "
+            f"Episode Reward: {episode_stats['reward']:.2f}"
+        )
+
+        if len(self.win_rate_history) > 1:
+            win_rate_trend = safe_mean(list(self.win_rate_history)[-5:], 0.0)
+            print(f"   Win Rate Trend (5-ep): {win_rate_trend:.1%}")
+
+        # Policy memory status
+        print(f"🧠 Policy Memory Status:")
+        print(
+            f"   Peak Win Rate: {policy_memory_stats['peak_win_rate']:.1%} | "
+            f"Episodes Since Peak: {policy_memory_stats['episodes_since_peak']}"
+        )
+        print(
+            f"   Performance Drop: {'🚨 YES' if policy_memory_stats['performance_drop_detected'] else '✅ NO'} | "
+            f"Averaging Performed: {policy_memory_stats['averaging_performed']}"
+        )
+
+        # Experience buffer metrics
+        print(f"🎯 Experience Buffer:")
+        print(
+            f"   Total: {buffer_stats['total_size']:,} | "
+            f"Good: {buffer_stats['good_count']:,} ({buffer_stats['good_ratio']:.1%}) | "
+            f"Bad: {buffer_stats['bad_count']:,}"
+        )
+        print(
+            f"   Quality Threshold: {buffer_stats['quality_threshold']:.3f} | "
+            f"Avg Quality: {buffer_stats['avg_quality_score']:.3f}"
+        )
+        print(
+            f"   🏆 Golden Buffer: {golden_stats['size']}/{golden_stats['capacity']} "
+            f"({golden_stats['utilization']:.1%}) | "
+            f"Avg Quality: {golden_stats['avg_quality']:.3f}"
+        )
+
+        # Training metrics
+        if train_stats:
+            print(f"🔧 Training Metrics:")
             print(
-                f"   🎉 SUCCESS: {self.target_win_rate:.1%} SINGLE ROUND TARGET ACHIEVED!"
+                f"   Contrastive Loss: {train_stats.get('contrastive_loss', 0.0):.4f} | "
+                f"Energy Reg: {train_stats.get('energy_reg', 0.0):.4f}"
             )
-            print(f"   🥊 AI has mastered single round combat!")
-        elif final_win_rate >= 0.5:
             print(
-                f"   ⭐ STRONG PROGRESS: {final_win_rate:.1%} - Close to single round mastery!"
+                f"   Energy Separation: {train_stats.get('energy_separation', 0.0):.4f} | "
+                f"Learning Rate: {train_stats.get('learning_rate', 0.0):.2e}"
             )
+            print(
+                f"   Good Energy: {train_stats.get('good_energy_mean', 0.0):.3f} | "
+                f"Bad Energy: {train_stats.get('bad_energy_mean', 0.0):.3f}"
+            )
+
+        # Agent thinking metrics
+        print(f"🤔 Agent Thinking:")
+        print(
+            f"   Success Rate: {thinking_stats.get('success_rate', 0.0):.1%} | "
+            f"Avg Steps: {thinking_stats.get('avg_thinking_steps', 0.0):.1f} | "
+            f"Early Stop Rate: {thinking_stats.get('early_stop_rate', 0.0):.1%}"
+        )
+        print(
+            f"   Energy Explosions: {thinking_stats.get('energy_explosions', 0)} | "
+            f"Gradient Explosions: {thinking_stats.get('gradient_explosions', 0)}"
+        )
+
+        # Energy monitoring
+        print(f"⚡ Energy Monitoring:")
+        print(
+            f"   Mean Energy: {energy_stats.get('energy_mean', 0.0):.3f} | "
+            f"Energy Std: {energy_stats.get('energy_std', 0.0):.3f}"
+        )
+        print(
+            f"   NaN Count: {energy_stats.get('nan_count', 0)} | "
+            f"Explosion Count: {energy_stats.get('explosion_count', 0)}"
+        )
+
+        # Timing
+        print(f"⏱️  Timing:")
+        print(
+            f"   Episode: {episode_time:.1f}s | "
+            f"Total: {total_time/60:.1f}m | "
+            f"ETA: {self._estimate_time_remaining(episode, total_time)}"
+        )
+
+        print(f"{'='*80}\n")
+
+        # Log to file
+        self.logger.info(
+            f"Ep {episode}: WinRate={performance_stats['win_rate']:.3f}, "
+            f"Reward={episode_stats['reward']:.2f}, "
+            f"PeakWR={policy_memory_stats['peak_win_rate']:.3f}, "
+            f"MemoryAvg={policy_memory_stats['averaging_performed']}, "
+            f"GoldenBuf={golden_stats['size']}"
+        )
+
+    def _estimate_time_remaining(self, current_episode, elapsed_time):
+        """Estimate time remaining for training."""
+        if current_episode == 0:
+            return "Unknown"
+
+        avg_time_per_episode = elapsed_time / (current_episode + 1)
+        remaining_episodes = self.args.max_episodes - current_episode - 1
+        remaining_time = remaining_episodes * avg_time_per_episode
+
+        if remaining_time < 3600:
+            return f"{remaining_time/60:.1f}m"
         else:
-            print(
-                f"   📈 GOOD FOUNDATION: Continue training for single round dominance"
-            )
-
-        # Save final checkpoint
-        final_path = self.checkpoint_manager.save_checkpoint(
-            self.verifier, self.agent, episode, final_win_rate, final_energy_quality
-        )
-        if final_path:
-            print(f"💾 Final checkpoint saved: {final_path.name}")
-
-        return {
-            "final_win_rate": final_win_rate,
-            "best_win_rate": self.best_win_rate,
-            "max_consecutive_wins": self.max_consecutive_wins,
-            "knockout_rate": knockout_rate,
-            "avg_episode_length": avg_episode_length,
-            "energy_quality": final_energy_quality,
-            "avg_quality_score": final_avg_quality,
-            "total_episodes": len(self.episode_rewards),
-            "buffer_stats": buffer_stats,
-        }
-
-    def _print_single_round_report(
-        self, episode, current_win_rate, round_result, buffer_stats
-    ):
-        """Print detailed single round training report."""
-        avg_episode_length = safe_mean(list(self.episode_lengths), 1000)
-        knockout_rate = safe_mean(list(self.knockout_wins), 0.0)
-
-        print(f"\n🥊 Episode {episode} - Single Round Training Report:")
-        print(
-            f"   📊 Single Round Win Rate: {current_win_rate:.1%} (Best: {self.best_win_rate:.1%})"
-        )
-        print(f"   🏆 Last Round: {'WON' if round_result['won'] else 'LOST'}")
-        print(
-            f"   🔥 Consecutive Wins: {self.consecutive_wins} (Max: {self.max_consecutive_wins})"
-        )
-        print(f"   ⚡ Knockout Rate: {knockout_rate:.1%}")
-        print(f"   ⏱️  Average Fight Duration: {avg_episode_length:.0f} steps")
-        print(f"   💰 Intelligent Reward: {round_result['total_reward']:.2f}")
-        print(f"   🎲 Round Quality Score: {round_result['avg_quality_score']:.3f}")
-        print(f"   🧠 Thinking Success: {round_result['thinking_success_rate']:.1%}")
-        print(
-            f"   📚 Buffer: {buffer_stats['total_size']} total ({buffer_stats['good_count']} good, {buffer_stats['bad_count']} bad)"
-        )
-        print(f"   🎯 Quality Threshold: {buffer_stats['quality_threshold']:.3f}")
-        print(f"   📈 Average Buffer Quality: {buffer_stats['avg_quality_score']:.3f}")
-
-        # Progress toward target
-        progress = current_win_rate / self.target_win_rate
-        print(
-            f"   🎯 Target Progress: {progress:.1%} toward {self.target_win_rate:.1%}"
-        )
-
-        # Fight analysis
-        if round_result["won"]:
-            if round_result["knockout_win"]:
-                print(f"   🥊 KNOCKOUT VICTORY in {round_result['steps']} steps!")
-            else:
-                print(f"   🏆 Victory by decision in {round_result['steps']} steps")
-        else:
-            print(
-                f"   💀 Defeated in {round_result['steps']} steps - analyzing for improvement"
-            )
+            return f"{remaining_time/3600:.1f}h"
 
 
 def main():
+    """Main training function with enhanced argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Single Round Energy-Based Training for 60% Win Rate"
+        description="Enhanced Energy-Based Training with Policy Memory"
     )
 
-    # Training parameters (optimized for single round learning)
+    # Environment arguments (updated to match your existing args)
     parser.add_argument(
-        "--total-episodes", type=int, default=300, help="Total single rounds to train"
+        "--total-episodes",
+        type=int,
+        default=2000,
+        help="Maximum number of training episodes",
     )
     parser.add_argument(
-        "--lr",
-        type=float,
-        default=1.2e-4,
-        help="Learning rate (optimized for single rounds)",
+        "--max-episode-steps", type=int, default=1000, help="Maximum steps per episode"
+    )
+    parser.add_argument(
+        "--eval-frequency",
+        type=int,
+        default=10,
+        help="Evaluate performance every N episodes",
+    )
+    parser.add_argument(
+        "--save-freq", type=int, default=50, help="Save checkpoint every N episodes"
+    )
+
+    # Model arguments (updated to match your existing args)
+    parser.add_argument(
+        "--features-dim", type=int, default=256, help="Feature dimension for verifier"
+    )
+    parser.add_argument(
+        "--thinking-steps",
+        type=int,
+        default=3,
+        help="Number of thinking steps for agent",
     )
     parser.add_argument(
         "--thinking-lr",
         type=float,
-        default=0.18,
-        help="Thinking learning rate (optimized for decisive actions)",
+        default=0.06,
+        help="Learning rate for thinking process",
     )
     parser.add_argument(
-        "--thinking-steps", type=int, default=3, help="Number of thinking steps"
+        "--noise-scale",
+        type=float,
+        default=0.02,
+        help="Noise scale for action initialization",
+    )
+
+    # Training arguments (updated to match your existing args)
+    parser.add_argument(
+        "--lr", type=float, default=3e-5, help="Learning rate for verifier"
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=14,
-        help="Batch size (optimized for single rounds)",
+        "--weight-decay",
+        type=float,
+        default=2e-4,
+        help="Weight decay for regularization",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=64, help="Training batch size"
     )
     parser.add_argument(
         "--contrastive-margin",
         type=float,
-        default=1.3,
-        help="Contrastive loss margin (optimized for decisive learning)",
+        default=2.0,
+        help="Margin for contrastive loss",
     )
 
-    # System parameters
+    # Device and rendering (matching your existing args)
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to use",
+        "--device", type=str, default="cuda", help="Device to use for training"
     )
-    parser.add_argument("--render", action="store_true", help="Render environment")
+    parser.add_argument("--render", action="store_true", help="Render the environment")
+
+    # Experience buffer arguments
     parser.add_argument(
-        "--save-freq",
+        "--buffer-capacity", type=int, default=30000, help="Experience buffer capacity"
+    )
+    parser.add_argument(
+        "--quality-threshold",
+        type=float,
+        default=0.6,
+        help="Quality threshold for experience labeling",
+    )
+    parser.add_argument(
+        "--golden-buffer-capacity",
         type=int,
-        default=30,
-        help="Save frequency (more frequent for single rounds)",
+        default=1000,
+        help="Golden experience buffer capacity",
+    )
+
+    # Policy memory arguments
+    parser.add_argument(
+        "--performance-drop-threshold",
+        type=float,
+        default=0.05,
+        help="Performance drop threshold for policy memory",
     )
     parser.add_argument(
-        "--resume", type=str, default=None, help="Resume from checkpoint"
+        "--averaging-weight",
+        type=float,
+        default=0.7,
+        help="Weight for best checkpoint in averaging",
+    )
+
+    # Evaluation arguments
+    parser.add_argument(
+        "--target-win-rate",
+        type=float,
+        default=0.60,
+        help="Target win rate for early stopping",
+    )
+    parser.add_argument(
+        "--win-rate-window",
+        type=int,
+        default=50,
+        help="Window size for win rate calculation",
+    )
+
+    # Checkpoint arguments
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints_enhanced",
+        help="Directory for saving checkpoints",
+    )
+    parser.add_argument(
+        "--load-checkpoint", type=str, default=None, help="Path to checkpoint to load"
     )
 
     args = parser.parse_args()
 
-    print(f"🥊 SINGLE ROUND Energy-Based Training for 60% Win Rate")
-    print(f"💡 Using INTELLIGENT REWARD SHAPING + QUALITY-BASED LABELING")
-    print(f"   - Single rounds: {args.total_episodes}")
-    print(f"   - Learning rate: {args.lr} (optimized for single rounds)")
-    print(f"   - Thinking LR: {args.thinking_lr} (optimized for decisive actions)")
-    print(f"   - Contrastive margin: {args.contrastive_margin} (optimized)")
-    print(f"   - Batch size: {args.batch_size} (optimized)")
-    print(f"   - Device: {args.device}")
-    print(f"   🎲 Quality threshold: 0.58 (optimized for decisive actions)")
+    # Map your argument names to the internal structure
+    args.max_episodes = args.total_episodes
+    args.learning_rate = args.lr
+    args.checkpoint_frequency = args.save_freq
 
-    # Create and run trainer
-    trainer = SingleRoundEnergyTrainer(args)
-    trainer.setup_training()
+    # Print configuration
+    print(f"🛡️ Enhanced Policy Memory Training Configuration:")
+    print(f"   Max Episodes: {args.max_episodes:,}")
+    print(f"   Learning Rate: {args.learning_rate:.2e}")
+    print(f"   Weight Decay: {args.weight_decay:.2e}")
+    print(f"   Contrastive Margin: {args.contrastive_margin}")
+    print(f"   Performance Drop Threshold: {args.performance_drop_threshold}")
+    print(f"   Checkpoint Averaging Weight: {args.averaging_weight}")
+    print(f"   Golden Buffer Capacity: {args.golden_buffer_capacity:,}")
+    print(f"   Target Win Rate: {args.target_win_rate:.1%}")
+    print(f"   Device: {args.device}")
+    print(f"   Render: {args.render}")
 
-    # Resume from checkpoint if specified
-    if args.resume:
-        checkpoint_path = Path(args.resume)
-        if checkpoint_path.exists():
-            trainer.checkpoint_manager.load_checkpoint(
-                checkpoint_path, trainer.verifier, trainer.agent
-            )
-        else:
-            print(f"⚠️  Checkpoint not found: {args.resume}")
+    # Initialize and run trainer
+    trainer = EnhancedPolicyMemoryTrainer(args)
 
-    # Start single round training
-    results = trainer.train()
-
-    # Final success evaluation
-    if results["final_win_rate"] >= 0.6:
-        print(f"\n🎉🏆 SINGLE ROUND MASTERY ACHIEVED! 🏆🎉")
-        print(f"✅ Successfully achieved 60% single round win rate target!")
-        print(f"🥇 Final single round win rate: {results['final_win_rate']:.1%}")
-        print(f"🔥 Best single round win rate: {results['best_win_rate']:.1%}")
-        print(f"🏆 Max consecutive wins: {results['max_consecutive_wins']}")
-        print(f"⚡ Knockout rate: {results['knockout_rate']:.1%}")
-        print(f"⏱️  Average fight duration: {results['avg_episode_length']:.0f} steps")
-        print(f"🎲 Quality-based labeling worked perfectly for single rounds!")
-        print(f"📊 Buffer had {results['buffer_stats']['total_size']} experiences")
-        print(f"⚡ Energy separation: {results['energy_quality']:.3f}")
-
-        # Performance analysis
-        if results["knockout_rate"] > 0.3:
-            print(f"🥊 DOMINANT FIGHTER: High knockout rate shows aggressive mastery!")
-        if results["avg_episode_length"] < 1000:
-            print(f"⚡ EFFICIENT FIGHTER: Quick decisive victories!")
-        if results["max_consecutive_wins"] >= 5:
-            print(f"🔥 CONSISTENT CHAMPION: Excellent win streaks!")
-
-    else:
-        print(f"\n📈 Strong single round foundation built!")
-        print(
-            f"Current: {results['final_win_rate']:.1%} | Best: {results['best_win_rate']:.1%}"
+    # Load checkpoint if specified
+    if args.load_checkpoint:
+        print(f"📂 Loading checkpoint: {args.load_checkpoint}")
+        trainer.checkpoint_manager.load_checkpoint(
+            Path(args.load_checkpoint), trainer.verifier, trainer.agent
         )
-        print(f"🥊 Single round fight stats:")
-        print(f"   - Max consecutive wins: {results['max_consecutive_wins']}")
-        print(f"   - Knockout rate: {results['knockout_rate']:.1%}")
-        print(f"   - Average fight duration: {results['avg_episode_length']:.0f} steps")
-        print(f"   - Average quality score: {results['avg_quality_score']:.3f}")
-        print(f"   - Buffer experiences: {results['buffer_stats']['total_size']}")
-        print(f"   - Good/bad ratio: {results['buffer_stats']['good_ratio']:.2f}")
-        print(f"💡 The single round system is working - just needs more episodes!")
+
+    # Start training
+    trainer.train()
 
 
 if __name__ == "__main__":

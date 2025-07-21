@@ -17,8 +17,25 @@ python train.py \
   --batch-size 128 \
   --device cuda \
   --render
-  --resume checkpoints_single_round/checkpoint_ep199_wr0.470_eq0.7_20250720_191037.pt
+  --resume checkpoints_single_round/checkpoint_ep60_wr0.475_eq0.7_20250720_213117.pt
 
+
+
+
+python train.py 
+    --resume checkpoints_single_round/checkpoint_ep60_wr0.475_eq0.7_20250720_213117.pt \
+    --total-episodes 100 \
+    --lr 5e-5 \
+    --thinking-lr 0.08 \
+    --save-freq 20 \
+    --thinking-steps 5 \
+    --batch-size 128 \
+    --device cuda \
+    --render
+
+
+
+python train.py --total-episodes 600 --lr 4e-5 --thinking-lr 0.06 --thinking-steps 3 --batch-size 18 --contrastive-margin 2.0 --device cuda --save-freq 30  --render
 
 
   ta.json 
