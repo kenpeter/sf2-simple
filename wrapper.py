@@ -493,6 +493,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.episode_count = 0
         self.step_count = 0
 
+        # Track previous health for round end detection
+        self.previous_player_health = MAX_HEALTH
+        self.previous_opponent_health = MAX_HEALTH
+
         print(f"🥊 StreetFighterVisionWrapper initialized")
         print(f"   - Action space: {self.action_space.n} discrete actions")
         print(f"   - Visual observation: {visual_space.shape}")
@@ -506,6 +510,10 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.reward_calculator.reset()
         self.feature_tracker.reset()
         self.vector_history.clear()
+
+        # Reset previous health values
+        self.previous_player_health = MAX_HEALTH
+        self.previous_opponent_health = MAX_HEALTH
 
         self.episode_count += 1
         self.step_count = 0
@@ -534,6 +542,16 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # Extract health values
         player_health, opponent_health = self._extract_health(info)
+
+        # Detect round end: if health drops from >0 to <=0, end the episode
+        if (self.previous_player_health > 0 and player_health <= 0) or (
+            self.previous_opponent_health > 0 and opponent_health <= 0
+        ):
+            done = True
+
+        # Update previous health values
+        self.previous_player_health = player_health
+        self.previous_opponent_health = opponent_health
 
         # Calculate intelligent reward
         intelligent_reward, reward_breakdown = self.reward_calculator.calculate_reward(
