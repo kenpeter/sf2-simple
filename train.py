@@ -799,7 +799,7 @@ def main():
         help="Maximum number of training episodes",
     )
     parser.add_argument(
-        "--max-episode-steps", type=int, default=1000, help="Maximum steps per episode"
+        "--max-episode-steps", type=int, default=3500, help="Maximum steps per episode"
     )
     parser.add_argument(
         "--eval-frequency",
