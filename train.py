@@ -138,42 +138,11 @@ class EnergyBasedTransformerTrainer:
         self.logger = logging.getLogger(__name__)
 
     def calculate_experience_quality(self, reward, reward_breakdown, episode_stats):
-        """Calculate quality score for experience."""
-        base_quality = 0.5
-
-        # Reward component
-        reward_component = min(max(reward, -1.0), 2.0) * 0.3
-
-        # Win/loss component
-        if "round_won" in reward_breakdown:
-            win_component = 0.4
-        elif "round_lost" in reward_breakdown:
-            win_component = -0.3
-        else:
-            win_component = 0.0
-
-        # Health advantage component
-        health_component = reward_breakdown.get("health_advantage", 0.0) * 0.1
-
-        # Damage component
-        damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.2)
-
-        # Episode performance component
-        if episode_stats:
-            episode_component = 0.1 if episode_stats.get("won", False) else -0.1
-        else:
-            episode_component = 0.0
-
-        quality_score = (
-            base_quality
-            + reward_component
-            + win_component
-            + health_component
-            + damage_component
-            + episode_component
+        """Calculate quality score for experience - FIXED to create better separation."""
+        # Use the buffer's method for consistency
+        return self.experience_buffer.calculate_experience_quality(
+            reward, reward_breakdown, episode_stats
         )
-
-        return max(0.0, min(1.0, quality_score))
 
     def run_episode(self):
         """Run single episode and collect experiences."""
@@ -365,19 +334,35 @@ class EnergyBasedTransformerTrainer:
         return total_loss, loss_info
 
     def train_step(self):
-        """Perform single training step."""
+        """Perform single training step - FIXED to ensure training happens."""
         # Sample balanced batch
         good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
             self.args.batch_size
         )
 
         if good_batch is None or bad_batch is None:
+            print(
+                f"⚠️ Insufficient experiences: good={len(self.experience_buffer.good_experiences)}, bad={len(self.experience_buffer.bad_experiences)}"
+            )
             return None  # Not enough experiences yet
+
+        # CRITICAL FIX: Ensure we actually have experiences to train on
+        if len(good_batch) == 0 or len(bad_batch) == 0:
+            print(f"⚠️ Empty batches: good={len(good_batch)}, bad={len(bad_batch)}")
+            return None
+
+        print(
+            f"🎯 Training step: {len(good_batch)} good, {len(bad_batch)} bad experiences"
+        )
 
         # Calculate loss
         loss, loss_info = self.calculate_energy_contrastive_loss(
             good_batch, bad_batch, margin=self.args.contrastive_margin
         )
+
+        if loss.item() == 0.0:
+            print(f"⚠️ Zero loss detected - training may not be working properly!")
+            return None
 
         # Backward pass with gradient clipping
         self.optimizer.zero_grad()
@@ -398,6 +383,10 @@ class EnergyBasedTransformerTrainer:
         # Add gradient norm to loss info
         loss_info["grad_norm"] = grad_norm.item()
         loss_info["learning_rate"] = self.optimizer.param_groups[0]["lr"]
+
+        print(
+            f"✅ Training step completed: loss={loss.item():.4f}, grad_norm={grad_norm:.3f}"
+        )
 
         return loss_info
 
@@ -484,10 +473,11 @@ class EnergyBasedTransformerTrainer:
             episode_stats = self.run_episode()
             episode_rewards.append(episode_stats["reward"])
 
-            # Training step if we have enough experiences
+            # Training step if we have enough experiences - FIXED CONDITION
+            buffer_stats = self.experience_buffer.get_stats()
             if (
-                len(self.experience_buffer.good_experiences)
-                >= self.args.batch_size // 4
+                buffer_stats["good_count"] >= self.args.batch_size // 4
+                and buffer_stats["bad_count"] >= self.args.batch_size // 4
             ):
                 train_stats = self.train_step()
                 if train_stats:
@@ -498,6 +488,9 @@ class EnergyBasedTransformerTrainer:
                     )
             else:
                 train_stats = {}
+                print(
+                    f"⚠️ Not enough experiences for training: good={buffer_stats['good_count']}, bad={buffer_stats['bad_count']}, need {self.args.batch_size // 4} each"
+                )
 
             # Update learning rate
             self.scheduler.step()

@@ -6,14 +6,8 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --max-episodes 100 --temperature 0.8 --visual-lr 2e-4 --render
+python train.py --max-episodes 20 --eval-frequency 2 --quality-threshold 0.3 --render
 
-
-
-python train.py --max-episodes 100 --temperature 0.8 
-    --visual-lr 2e-4 \
-    --resume checkpoints/transformer_ep300_wr0.000_loss0.000_20250723_081918.pt \
-    --render
 
 
   ta.json 

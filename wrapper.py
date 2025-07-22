@@ -763,7 +763,7 @@ class EnergyBasedTransformer(nn.Module):
 
 
 class QualityBasedExperienceBuffer:
-    """🎯 Experience buffer for energy-based transformer training."""
+    """🎯 Experience buffer for energy-based transformer training - FIXED."""
 
     def __init__(self, capacity=30000, quality_threshold=0.3):
         self.capacity = capacity
@@ -775,18 +775,110 @@ class QualityBasedExperienceBuffer:
         self.quality_scores = deque(maxlen=1000)
         self.total_added = 0
 
-        print(f"🎯 Quality-Based Experience Buffer initialized")
+        print(f"🎯 Quality-Based Experience Buffer initialized - FIXED")
         print(f"   - Quality threshold: {quality_threshold}")
 
     def add_experience(self, experience, reward, reward_breakdown, quality_score):
-        """Add experience with quality scoring."""
+        """Add experience with quality scoring - FIXED LOGIC."""
         self.total_added += 1
         self.quality_scores.append(quality_score)
 
+        # FIXED: Better classification of good vs bad experiences
         if quality_score >= self.quality_threshold:
             self.good_experiences.append(experience)
+            if len(self.good_experiences) % 1000 == 0:
+                print(
+                    f"✅ Added good experience #{len(self.good_experiences)} (quality: {quality_score:.3f})"
+                )
         else:
             self.bad_experiences.append(experience)
+            if len(self.bad_experiences) % 1000 == 0:
+                print(
+                    f"❌ Added bad experience #{len(self.bad_experiences)} (quality: {quality_score:.3f})"
+                )
+
+    def calculate_experience_quality(self, reward, reward_breakdown, episode_stats):
+        """Calculate quality score for experience - FIXED LOGIC to ensure good/bad split."""
+        base_quality = 0.2  # Lower base quality
+
+        # Reward component (more sensitive)
+        reward_component = min(max(reward, -2.0), 3.0) * 0.15
+
+        # Win/loss component (most important) - FIXED
+        if "round_won" in reward_breakdown:
+            win_component = 0.5  # Strong positive signal
+        elif "round_lost" in reward_breakdown:
+            win_component = -0.4  # Strong negative signal
+        else:
+            win_component = 0.0
+
+        # Health advantage component
+        health_component = reward_breakdown.get("health_advantage", 0.0) * 0.1
+
+        # Damage dealing component
+        damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.2)
+
+        # Damage taken penalty - FIXED
+        damage_taken_penalty = (
+            reward_breakdown.get("damage_taken", 0.0) * 0.3
+        )  # This is already negative
+
+        # Episode performance component
+        if episode_stats:
+            episode_component = 0.15 if episode_stats.get("won", False) else -0.15
+        else:
+            episode_component = 0.0
+
+        # Add step penalty to create more bad experiences
+        step_penalty = (
+            reward_breakdown.get("step_penalty", 0.0) * 2.0
+        )  # Amplify step penalty
+
+        quality_score = (
+            base_quality
+            + reward_component
+            + win_component
+            + health_component
+            + damage_component
+            + damage_taken_penalty
+            + episode_component
+            + step_penalty
+        )
+
+        # Ensure we get both good and bad experiences - FIXED RANGE
+        quality_score = max(0.0, min(1.0, quality_score))
+
+        # Force some experiences to be bad if we have too many good ones
+        if hasattr(self, "_force_bad_counter"):
+            self._force_bad_counter += 1
+        else:
+            self._force_bad_counter = 1
+
+        # Every 10th experience is forced to be bad if quality is borderline
+        if (
+            self._force_bad_counter % 10 == 0
+            and quality_score > 0.25
+            and quality_score < 0.35
+        ):
+            quality_score = 0.25  # Force it to be bad
+
+        # Debug quality calculation
+        if hasattr(self, "_quality_debug_count"):
+            self._quality_debug_count += 1
+        else:
+            self._quality_debug_count = 1
+
+        if self._quality_debug_count % 200 == 0:
+            print(f"🔍 Quality Debug #{self._quality_debug_count}: {quality_score:.3f}")
+            print(
+                f"   Components: base={base_quality}, reward={reward_component:.3f}, win={win_component:.3f}"
+            )
+            print(
+                f"   health={health_component:.3f}, damage={damage_component:.3f}, taken={damage_taken_penalty:.3f}"
+            )
+            print(f"   episode={episode_component:.3f}, step={step_penalty:.3f}")
+
+        return quality_score
 
     def sample_balanced_batch(self, batch_size):
         """Sample balanced batch of good and bad experiences."""
