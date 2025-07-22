@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-🛡️ MINIMAL FIX Training - Only fixes the quality threshold issue
-Keeps your original training logic and only changes what's needed
+🚀 Energy-Based Transformer Training for Street Fighter
+Based on energy-based transformers: https://energy-based-transformers.github.io/
 """
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 import argparse
 import time
@@ -16,86 +17,86 @@ from pathlib import Path
 import logging
 from datetime import datetime
 
-# Import the MINIMAL FIX wrapper components
+# Import energy-based transformer components
 from wrapper import (
-    make_fixed_env,
-    verify_fixed_energy_flow,
-    EnhancedFixedEnergyBasedStreetFighterVerifier,
-    EnhancedFixedStabilizedEnergyBasedAgent,
-    EnhancedQualityBasedExperienceBuffer,  # THE MAIN FIX IS IN HERE
-    PolicyMemoryManager,
-    EnhancedEnergyStabilityManager,
-    EnhancedCheckpointManager,
+    make_env,
+    verify_transformer_flow,
+    EnergyBasedTransformer,
+    QualityBasedExperienceBuffer,
+    CheckpointManager,
     safe_mean,
     safe_std,
     safe_divide,
     MAX_FIGHT_STEPS,
+    TRANSFORMER_DIM,
+    TRANSFORMER_HEADS,
+    TRANSFORMER_LAYERS,
 )
 
 
-class MinimalFixTrainer:
-    """🛡️ MINIMAL FIX trainer - only changes quality threshold."""
+class EnergyBasedTransformerTrainer:
+    """🚀 Energy-Based Transformer trainer for Street Fighter."""
 
     def __init__(self, args):
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Initialize environment
-        print(f"🎮 Initializing environment (minimal changes)...")
-        self.env = make_fixed_env()
+        print(f"🎮 Initializing environment...")
+        self.env = make_env(render=args.render)
 
-        # Initialize verifier and agent
-        self.verifier = EnhancedFixedEnergyBasedStreetFighterVerifier(
+        # Initialize energy-based transformer
+        self.model = EnergyBasedTransformer(
             observation_space=self.env.observation_space,
             action_space=self.env.action_space,
-            features_dim=args.features_dim,
         ).to(self.device)
 
-        # Verify energy flow
-        if not verify_fixed_energy_flow(
-            self.verifier, self.env.observation_space, self.env.action_space
+        # Verify model works
+        if not verify_transformer_flow(
+            self.model, self.env.observation_space, self.env.action_space
         ):
-            raise RuntimeError("Energy flow verification failed!")
+            raise RuntimeError("Transformer flow verification failed!")
 
-        self.agent = EnhancedFixedStabilizedEnergyBasedAgent(
-            verifier=self.verifier,
-            thinking_steps=args.thinking_steps,
-            thinking_lr=args.thinking_lr,
-            noise_scale=args.noise_scale,
-        )
-
-        # Initialize Policy Memory Manager
-        self.policy_memory = PolicyMemoryManager(
-            performance_drop_threshold=args.performance_drop_threshold,
-            averaging_weight=args.averaging_weight,
-        )
-
-        # THE MAIN FIX: Experience buffer with LOWERED quality threshold
-        self.experience_buffer = EnhancedQualityBasedExperienceBuffer(
+        # Initialize experience buffer
+        self.experience_buffer = QualityBasedExperienceBuffer(
             capacity=args.buffer_capacity,
-            quality_threshold=args.quality_threshold,  # THIS IS THE KEY FIX (0.3 instead of 0.6)
-            golden_buffer_capacity=args.golden_buffer_capacity,
+            quality_threshold=args.quality_threshold,
         )
 
-        # Initialize stability manager
-        self.stability_manager = EnhancedEnergyStabilityManager(
-            initial_lr=args.learning_rate,
-            thinking_lr=args.thinking_lr,
-            policy_memory_manager=self.policy_memory,
-        )
+        # Initialize checkpoint manager (SINGLE FOLDER)
+        self.checkpoint_manager = CheckpointManager(checkpoint_dir="checkpoints")
 
-        # Initialize checkpoint manager
-        self.checkpoint_manager = EnhancedCheckpointManager(
-            checkpoint_dir=args.checkpoint_dir
-        )
-
-        # Initialize optimizer
-        self.optimizer = optim.Adam(
-            self.verifier.parameters(),
-            lr=args.learning_rate,
+        # Initialize optimizer with different learning rates for different components
+        self.optimizer = optim.AdamW(
+            [
+                {
+                    "params": self.model.visual_encoder.parameters(),
+                    "lr": args.visual_lr,
+                },
+                {
+                    "params": self.model.transformer.parameters(),
+                    "lr": args.transformer_lr,
+                },
+                {"params": self.model.energy_net.parameters(), "lr": args.energy_lr},
+                {
+                    "params": [
+                        self.model.sequence_embedding.weight,
+                        self.model.positional_encoding,
+                    ],
+                    "lr": args.transformer_lr,
+                },
+                {
+                    "params": self.model.action_embedding.parameters(),
+                    "lr": args.energy_lr,
+                },
+            ],
             weight_decay=args.weight_decay,
             eps=1e-8,
-            betas=(0.9, 0.999),
+        )
+
+        # Learning rate scheduler
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=args.max_episodes, eta_min=args.min_lr
         )
 
         # Training state
@@ -105,24 +106,28 @@ class MinimalFixTrainer:
 
         # Performance tracking
         self.win_rate_history = deque(maxlen=args.win_rate_window)
-        self.energy_quality_history = deque(maxlen=50)
-        self.last_checkpoint_episode = 0
+        self.loss_history = deque(maxlen=100)
+        self.energy_history = deque(maxlen=100)
 
-        # Enhanced logging
+        # Enhanced logging (SINGLE LOG FOLDER)
         self.setup_logging()
 
-        print(f"🛡️ MINIMAL FIX Trainer initialized")
+        print(f"🚀 Energy-Based Transformer Trainer initialized")
         print(f"   - Device: {self.device}")
-        print(f"   - Learning rate: {args.learning_rate:.2e}")
-        print(f"   - Quality threshold: {args.quality_threshold} (THE MAIN FIX)")
+        print(f"   - Transformer dim: {TRANSFORMER_DIM}")
+        print(f"   - Attention heads: {TRANSFORMER_HEADS}")
+        print(f"   - Transformer layers: {TRANSFORMER_LAYERS}")
+        print(f"   - Visual LR: {args.visual_lr:.2e}")
+        print(f"   - Transformer LR: {args.transformer_lr:.2e}")
+        print(f"   - Energy LR: {args.energy_lr:.2e}")
 
     def setup_logging(self):
-        """Setup logging system."""
-        log_dir = Path("logs_minimal_fix")
+        """Setup logging system (SINGLE LOG FOLDER)."""
+        log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"minimal_fix_training_{timestamp}.log"
+        log_file = log_dir / f"energy_transformer_training_{timestamp}.log"
 
         logging.basicConfig(
             level=logging.INFO,
@@ -132,24 +137,24 @@ class MinimalFixTrainer:
         self.logger = logging.getLogger(__name__)
 
     def calculate_experience_quality(self, reward, reward_breakdown, episode_stats):
-        """Your original quality calculation - UNCHANGED."""
-        base_quality = 0.5  # Neutral starting point
+        """Calculate quality score for experience."""
+        base_quality = 0.5
 
-        # Reward component (capped to prevent exploitation)
+        # Reward component
         reward_component = min(max(reward, -1.0), 2.0) * 0.3
 
-        # Win/loss component (most important)
+        # Win/loss component
         if "round_won" in reward_breakdown:
-            win_component = 0.4  # Strong positive signal
+            win_component = 0.4
         elif "round_lost" in reward_breakdown:
-            win_component = -0.3  # Negative signal
+            win_component = -0.3
         else:
             win_component = 0.0
 
         # Health advantage component
         health_component = reward_breakdown.get("health_advantage", 0.0) * 0.1
 
-        # Damage dealing component (capped)
+        # Damage component
         damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.2)
 
         # Episode performance component
@@ -167,11 +172,10 @@ class MinimalFixTrainer:
             + episode_component
         )
 
-        # Clamp to reasonable range
         return max(0.0, min(1.0, quality_score))
 
     def run_episode(self):
-        """Your original episode running - UNCHANGED."""
+        """Run single episode and collect experiences."""
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -188,8 +192,21 @@ class MinimalFixTrainer:
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
-            # Agent prediction
-            action, thinking_info = self.agent.predict(obs, deterministic=False)
+            # Convert observations to tensors
+            obs_tensor = {
+                key: (
+                    torch.from_numpy(val).unsqueeze(0).to(self.device)
+                    if isinstance(val, np.ndarray)
+                    else val.unsqueeze(0).to(self.device)
+                )
+                for key, val in obs.items()
+            }
+
+            # Predict action using energy-based transformer
+            with torch.no_grad():
+                action = self.model.predict_action(
+                    obs_tensor, temperature=self.args.temperature, deterministic=False
+                ).item()
 
             # Execute action
             next_obs, reward, done, truncated, info = self.env.step(action)
@@ -224,7 +241,6 @@ class MinimalFixTrainer:
                 "reward": reward,
                 "next_obs": next_obs,
                 "done": done,
-                "thinking_info": thinking_info,
                 "episode": self.episode,
                 "step": episode_steps,
             }
@@ -251,8 +267,8 @@ class MinimalFixTrainer:
 
         return episode_stats_final
 
-    def calculate_contrastive_loss(self, good_batch, bad_batch, margin=2.0):
-        """Your original contrastive loss - UNCHANGED."""
+    def calculate_energy_contrastive_loss(self, good_batch, bad_batch, margin=2.0):
+        """Calculate contrastive loss for energy-based transformer."""
         device = self.device
 
         def process_batch(batch):
@@ -279,12 +295,8 @@ class MinimalFixTrainer:
                 else:
                     obs_tensor = torch.from_numpy(obs).float()
 
-                # Convert action to one-hot
-                action_one_hot = torch.zeros(self.env.action_space.n)
-                action_one_hot[action] = 1.0
-
                 obs_batch.append(obs_tensor)
-                action_batch.append(action_one_hot)
+                action_batch.append(action)
 
             return obs_batch, action_batch
 
@@ -293,9 +305,9 @@ class MinimalFixTrainer:
         bad_obs, bad_actions = process_batch(bad_batch)
 
         if good_obs is None or bad_obs is None:
-            return torch.tensor(0.0, device=device)
+            return torch.tensor(0.0, device=device), {}
 
-        # Stack observations and actions
+        # Stack observations
         def stack_obs_dict(obs_list):
             stacked = {}
             for key in obs_list[0].keys():
@@ -304,60 +316,67 @@ class MinimalFixTrainer:
 
         good_obs_stacked = stack_obs_dict(good_obs)
         bad_obs_stacked = stack_obs_dict(bad_obs)
-        good_actions_stacked = torch.stack(good_actions).to(device)
-        bad_actions_stacked = torch.stack(bad_actions).to(device)
+        good_actions_tensor = torch.tensor(good_actions, device=device)
+        bad_actions_tensor = torch.tensor(bad_actions, device=device)
 
         # Calculate energies
-        good_energies = self.verifier(good_obs_stacked, good_actions_stacked)
-        bad_energies = self.verifier(bad_obs_stacked, bad_actions_stacked)
+        good_energies = self.model(good_obs_stacked, good_actions_tensor)
+        bad_energies = self.model(bad_obs_stacked, bad_actions_tensor)
 
-        # Contrastive loss
+        # Contrastive loss: good experiences should have lower energy than bad ones
         good_energy_mean = good_energies.mean()
         bad_energy_mean = bad_energies.mean()
 
-        # We want good energies to be lower (more negative) than bad energies
-        energy_diff = bad_energy_mean - good_energy_mean
-        contrastive_loss = torch.clamp(margin - energy_diff, min=0.0)
+        energy_separation = bad_energy_mean - good_energy_mean
+        contrastive_loss = torch.clamp(margin - energy_separation, min=0.0)
 
         # Add regularization
         energy_reg = 0.01 * (good_energies.pow(2).mean() + bad_energies.pow(2).mean())
 
-        total_loss = contrastive_loss + energy_reg
+        # Add diversity loss to encourage exploration
+        good_energy_std = (
+            good_energies.std()
+            if len(good_energies) > 1
+            else torch.tensor(0.0, device=device)
+        )
+        bad_energy_std = (
+            bad_energies.std()
+            if len(bad_energies) > 1
+            else torch.tensor(0.0, device=device)
+        )
+        diversity_loss = 0.001 * torch.clamp(
+            1.0 - (good_energy_std + bad_energy_std), min=0.0
+        )
 
-        return total_loss, {
+        total_loss = contrastive_loss + energy_reg + diversity_loss
+
+        loss_info = {
             "contrastive_loss": contrastive_loss.item(),
             "energy_reg": energy_reg.item(),
+            "diversity_loss": diversity_loss.item(),
             "good_energy_mean": good_energy_mean.item(),
             "bad_energy_mean": bad_energy_mean.item(),
-            "energy_separation": energy_diff.item(),
+            "energy_separation": energy_separation.item(),
+            "good_energy_std": good_energy_std.item(),
+            "bad_energy_std": bad_energy_std.item(),
         }
 
+        return total_loss, loss_info
+
     def train_step(self):
-        """Your original training step - UNCHANGED."""
+        """Perform single training step."""
         # Sample balanced batch
-        good_batch, bad_batch, golden_batch = (
-            self.experience_buffer.sample_enhanced_balanced_batch(
-                self.args.batch_size, golden_ratio=0.15
-            )
+        good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
+            self.args.batch_size
         )
 
         if good_batch is None or bad_batch is None:
             return None  # Not enough experiences yet
 
         # Calculate loss
-        loss, loss_info = self.calculate_contrastive_loss(
+        loss, loss_info = self.calculate_energy_contrastive_loss(
             good_batch, bad_batch, margin=self.args.contrastive_margin
         )
-
-        # Get current learning rates
-        current_lr, current_thinking_lr = self.stability_manager.get_current_lrs()
-
-        # Update optimizer learning rate if changed
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = current_lr
-
-        # Update agent thinking learning rate
-        self.agent.current_thinking_lr = current_thinking_lr
 
         # Backward pass with gradient clipping
         self.optimizer.zero_grad()
@@ -365,7 +384,7 @@ class MinimalFixTrainer:
 
         # Gradient clipping
         grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.verifier.parameters(), max_norm=1.0
+            self.model.parameters(), max_norm=1.0
         )
 
         # Check for gradient explosion
@@ -377,18 +396,19 @@ class MinimalFixTrainer:
 
         # Add gradient norm to loss info
         loss_info["grad_norm"] = grad_norm.item()
-        loss_info["learning_rate"] = current_lr
-        loss_info["thinking_lr"] = current_thinking_lr
+        loss_info["learning_rate"] = self.optimizer.param_groups[0]["lr"]
 
         return loss_info
 
     def evaluate_performance(self):
-        """Your original evaluation - UNCHANGED."""
+        """Evaluate current model performance."""
         eval_episodes = min(5, max(1, self.episode // 100))
 
         wins = 0
         total_reward = 0.0
         total_steps = 0
+
+        self.model.eval()
 
         for _ in range(eval_episodes):
             obs, info = self.env.reset()
@@ -402,9 +422,22 @@ class MinimalFixTrainer:
                 and not truncated
                 and episode_steps < self.args.max_episode_steps
             ):
-                action, _ = self.agent.predict(obs, deterministic=True)
-                obs, reward, done, truncated, info = self.env.step(action)
+                # Convert observations to tensors
+                obs_tensor = {
+                    key: (
+                        torch.from_numpy(val).unsqueeze(0).to(self.device)
+                        if isinstance(val, np.ndarray)
+                        else val.unsqueeze(0).to(self.device)
+                    )
+                    for key, val in obs.items()
+                }
 
+                with torch.no_grad():
+                    action = self.model.predict_action(
+                        obs_tensor, deterministic=True
+                    ).item()
+
+                obs, reward, done, truncated, info = self.env.step(action)
                 episode_reward += reward
                 episode_steps += 1
 
@@ -417,6 +450,8 @@ class MinimalFixTrainer:
             total_reward += episode_reward
             total_steps += episode_steps
 
+        self.model.train()
+
         win_rate = wins / eval_episodes
         avg_reward = total_reward / eval_episodes
         avg_steps = total_steps / eval_episodes
@@ -428,81 +463,12 @@ class MinimalFixTrainer:
             "eval_episodes": eval_episodes,
         }
 
-    def handle_policy_memory_operations(self, performance_stats, train_stats):
-        """Your original policy memory operations - UNCHANGED."""
-        current_win_rate = performance_stats["win_rate"]
-        current_lr = self.optimizer.param_groups[0]["lr"]
-
-        # Update policy memory with current performance
-        performance_improved, performance_drop = self.policy_memory.update_performance(
-            current_win_rate, self.episode, self.verifier.state_dict(), current_lr
-        )
-
-        # Update experience buffer win rate for golden buffer filtering
-        self.experience_buffer.update_win_rate(current_win_rate)
-
-        policy_memory_action_taken = False
-
-        # Handle performance improvement
-        if performance_improved:
-            print(f"🏆 NEW PEAK PERFORMANCE DETECTED!")
-            # Save peak checkpoint
-            self.checkpoint_manager.save_checkpoint(
-                self.verifier,
-                self.agent,
-                self.episode,
-                current_win_rate,
-                train_stats.get("energy_separation", 0.0),
-                is_peak=True,
-                policy_memory_stats=self.policy_memory.get_stats(),
-            )
-            policy_memory_action_taken = True
-
-        # Handle performance drop
-        elif performance_drop:
-            print(f"📉 PERFORMANCE DROP DETECTED - Activating Policy Memory!")
-
-            # Attempt checkpoint averaging
-            if self.policy_memory.should_perform_averaging(self.episode):
-                print(f"🔄 Performing checkpoint averaging...")
-                averaging_success = self.policy_memory.perform_checkpoint_averaging(
-                    self.verifier
-                )
-
-                if averaging_success:
-                    print(f"✅ Checkpoint averaging completed successfully")
-                    policy_memory_action_taken = True
-
-                    # Also reduce learning rate
-                    if self.policy_memory.should_reduce_lr():
-                        new_lr = self.policy_memory.get_reduced_lr(current_lr)
-                        for param_group in self.optimizer.param_groups:
-                            param_group["lr"] = new_lr
-
-                        # Update stability manager
-                        self.stability_manager.current_lr = new_lr
-                        print(f"📉 Learning rate reduced to {new_lr:.2e}")
-                else:
-                    print(f"❌ Checkpoint averaging failed")
-
-            # Save emergency checkpoint
-            self.checkpoint_manager.save_checkpoint(
-                self.verifier,
-                self.agent,
-                self.episode,
-                current_win_rate,
-                train_stats.get("energy_separation", 0.0),
-                is_emergency=True,
-                policy_memory_stats=self.policy_memory.get_stats(),
-            )
-
-        return policy_memory_action_taken
-
     def train(self):
-        """Main training loop with MINIMAL changes."""
-        print(f"🛡️ Starting MINIMAL FIX Training")
+        """Main training loop."""
+        print(f"🚀 Starting Energy-Based Transformer Training")
         print(f"   - Target episodes: {self.args.max_episodes}")
-        print(f"   - Quality threshold: {self.args.quality_threshold} (THE MAIN FIX)")
+        print(f"   - Quality threshold: {self.args.quality_threshold}")
+        print(f"   - Temperature: {self.args.temperature}")
 
         # Training metrics
         episode_rewards = deque(maxlen=100)
@@ -520,166 +486,121 @@ class MinimalFixTrainer:
             # Training step if we have enough experiences
             if (
                 len(self.experience_buffer.good_experiences)
-                >= self.args.batch_size // 2
+                >= self.args.batch_size // 4
             ):
                 train_stats = self.train_step()
                 if train_stats:
                     recent_losses.append(train_stats.get("contrastive_loss", 0.0))
+                    self.loss_history.append(train_stats.get("contrastive_loss", 0.0))
+                    self.energy_history.append(
+                        train_stats.get("energy_separation", 0.0)
+                    )
             else:
                 train_stats = {}
 
-            # Periodic evaluation and policy memory operations
+            # Update learning rate
+            self.scheduler.step()
+
+            # Periodic evaluation
             if episode % self.args.eval_frequency == 0:
                 # Performance evaluation
                 performance_stats = self.evaluate_performance()
                 self.win_rate_history.append(performance_stats["win_rate"])
 
-                # Calculate energy quality metrics
-                if train_stats:  # Check if train_stats is not None
-                    energy_separation = train_stats.get("energy_separation", 0.0)
-                    energy_quality = abs(energy_separation) * 10.0
-                else:
-                    energy_separation = 0.0
-                    energy_quality = 0.0
-                self.energy_quality_history.append(energy_quality)
+                # Buffer stats
+                buffer_stats = self.experience_buffer.get_stats()
 
-                # Policy memory operations
-                policy_memory_action = self.handle_policy_memory_operations(
-                    performance_stats, train_stats or {}  # Handle None case
+                # Energy stats
+                avg_energy_separation = (
+                    safe_mean(list(self.energy_history)[-10:], 0.0)
+                    if self.energy_history
+                    else 0.0
+                )
+                avg_loss = (
+                    safe_mean(list(recent_losses)[-10:], 0.0) if recent_losses else 0.0
                 )
 
-                # Update stability manager
-                early_stop_rate = safe_divide(
-                    self.agent.thinking_stats.get("early_stops", 0),
-                    self.agent.thinking_stats.get("total_predictions", 1),
-                    0.0,
-                )
-
-                stability_emergency = self.stability_manager.update_metrics(
-                    performance_stats["win_rate"],
-                    energy_quality,
-                    energy_separation,
-                    early_stop_rate,
-                )
-
-                # Handle stability emergency
-                if stability_emergency and not policy_memory_action:
-                    print(f"🚨 Stability emergency triggered!")
-                    # Update learning rates from stability manager
-                    new_lr, new_thinking_lr = self.stability_manager.get_current_lrs()
-                    for param_group in self.optimizer.param_groups:
-                        param_group["lr"] = new_lr
-                    self.agent.current_thinking_lr = new_thinking_lr
-
-                # Regular checkpoint saving
+                # Checkpoint saving
                 if (
-                    episode - self.last_checkpoint_episode
-                    >= self.args.checkpoint_frequency
+                    episode % self.args.checkpoint_frequency == 0
                     or performance_stats["win_rate"] > self.best_win_rate
                 ):
 
                     self.checkpoint_manager.save_checkpoint(
-                        self.verifier,
-                        self.agent,
-                        episode,
-                        performance_stats["win_rate"],
-                        energy_quality,
-                        policy_memory_stats=self.policy_memory.get_stats(),
+                        self.model, episode, performance_stats["win_rate"], avg_loss
                     )
-                    self.last_checkpoint_episode = episode
 
                     if performance_stats["win_rate"] > self.best_win_rate:
                         self.best_win_rate = performance_stats["win_rate"]
+                        print(f"🏆 NEW BEST WIN RATE: {self.best_win_rate:.3f}")
 
-                # Adjust experience buffer threshold
-                self.experience_buffer.adjust_threshold(episode_number=episode)
+                # Progress logging
+                episode_time = time.time() - episode_start_time
+                total_time = time.time() - training_start_time
 
-                # THE KEY DIFFERENCE: Show buffer stats to confirm the fix worked
-                buffer_stats = self.experience_buffer.get_stats()
-                print(f"\n🎯 BUFFER STATUS (Episode {episode}):")
                 print(
-                    f"   - Good experiences: {buffer_stats['good_count']:,} (THIS SHOULD BE > 0)"
+                    f"\n🚀 Episode {episode} ({episode_time:.1f}s, total: {total_time/60:.1f}m)"
                 )
-                print(f"   - Bad experiences: {buffer_stats['bad_count']:,}")
                 print(
-                    f"   - Quality threshold: {buffer_stats['quality_threshold']:.3f}"
+                    f"   Win Rate: {performance_stats['win_rate']:.1%} (best: {self.best_win_rate:.1%})"
                 )
-                print(f"   - Average quality: {buffer_stats['avg_quality_score']:.3f}")
-                print(f"   - Win rate: {performance_stats['win_rate']:.1%}")
+                print(f"   Avg Reward: {performance_stats['avg_reward']:.2f}")
+                print(f"   Avg Loss: {avg_loss:.4f}")
+                print(f"   Energy Separation: {avg_energy_separation:.4f}")
+                print(
+                    f"   Buffer: {buffer_stats['good_count']} good, {buffer_stats['bad_count']} bad"
+                )
+                print(f"   Quality: {buffer_stats['avg_quality_score']:.3f}")
 
-                if buffer_stats["good_count"] > 0:
-                    print(f"   ✅ FIX WORKING: Good experiences are being added!")
-                else:
-                    print(f"   ❌ FIX NOT WORKING: Still no good experiences!")
+                if train_stats:
+                    print(f"   LR: {train_stats.get('learning_rate', 0):.2e}")
+                    print(f"   Grad Norm: {train_stats.get('grad_norm', 0):.3f}")
 
                 # Log to file
                 self.logger.info(
                     f"Ep {episode}: WinRate={performance_stats['win_rate']:.3f}, "
-                    f"Good={buffer_stats['good_count']}, "
-                    f"Bad={buffer_stats['bad_count']}, "
-                    f"Quality={buffer_stats['avg_quality_score']:.3f}"
+                    f"Loss={avg_loss:.4f}, Good={buffer_stats['good_count']}, "
+                    f"Bad={buffer_stats['bad_count']}, Quality={buffer_stats['avg_quality_score']:.3f}"
                 )
 
-            # Early stopping check
-            if len(self.win_rate_history) >= 20:
-                recent_win_rate = safe_mean(list(self.win_rate_history)[-10:], 0.0)
-                if recent_win_rate >= self.args.target_win_rate:
-                    print(
-                        f"🎯 Target win rate {self.args.target_win_rate:.1%} achieved!"
-                    )
-                    break
+                # Check for early stopping
+                if len(self.win_rate_history) >= 20:
+                    recent_win_rate = safe_mean(list(self.win_rate_history)[-10:], 0.0)
+                    if recent_win_rate >= self.args.target_win_rate:
+                        print(
+                            f"🎯 Target win rate {self.args.target_win_rate:.1%} achieved!"
+                        )
+                        break
 
         # Training completed
         final_performance = self.evaluate_performance()
-        print(f"\n🏁 MINIMAL FIX Training Completed!")
+        print(f"\n🏁 Energy-Based Transformer Training Completed!")
         print(f"   - Total episodes: {self.episode + 1}")
         print(f"   - Final win rate: {final_performance['win_rate']:.1%}")
         print(f"   - Best win rate: {self.best_win_rate:.1%}")
 
-        # Show final buffer stats
-        final_buffer_stats = self.experience_buffer.get_stats()
-        print(f"\n🎯 FINAL BUFFER STATS:")
-        print(f"   - Good experiences: {final_buffer_stats['good_count']:,}")
-        print(f"   - Bad experiences: {final_buffer_stats['bad_count']:,}")
-        print(f"   - Good ratio: {final_buffer_stats['good_ratio']:.1%}")
-
-        if final_buffer_stats["good_count"] > 100:
-            print(f"   ✅ SUCCESS: Quality threshold fix worked!")
-        else:
-            print(f"   ❌ ISSUE: Still very few good experiences")
-
         # Save final checkpoint
         self.checkpoint_manager.save_checkpoint(
-            self.verifier,
-            self.agent,
+            self.model,
             self.episode,
             final_performance["win_rate"],
-            self.energy_quality_history[-1] if self.energy_quality_history else 0.0,
-            policy_memory_stats=self.policy_memory.get_stats(),
+            safe_mean(list(recent_losses)[-10:], 0.0) if recent_losses else 0.0,
         )
 
 
 def main():
-    """Main training function with MINIMAL changes."""
-    parser = argparse.ArgumentParser(
-        description="MINIMAL FIX Training - Only Quality Threshold Fixed"
-    )
+    """Main training function."""
+    parser = argparse.ArgumentParser(description="Energy-Based Transformer Training")
 
     # Environment arguments
     parser.add_argument(
-        "--max-episodes",
-        type=int,
-        default=1000,
-        help="Maximum number of training episodes",
+        "--max-episodes", type=int, default=1000, help="Maximum training episodes"
     )
     parser.add_argument(
         "--max-episode-steps", type=int, default=1200, help="Maximum steps per episode"
     )
     parser.add_argument(
-        "--eval-frequency",
-        type=int,
-        default=5,
-        help="Evaluate performance every N episodes",
+        "--eval-frequency", type=int, default=5, help="Evaluate every N episodes"
     )
     parser.add_argument(
         "--checkpoint-frequency",
@@ -690,54 +611,34 @@ def main():
 
     # Model arguments
     parser.add_argument(
-        "--features-dim", type=int, default=256, help="Feature dimension for verifier"
-    )
-    parser.add_argument(
-        "--thinking-steps",
-        type=int,
-        default=3,
-        help="Number of thinking steps for agent",
-    )
-    parser.add_argument(
-        "--thinking-lr",
-        type=float,
-        default=0.06,
-        help="Learning rate for thinking process",
-    )
-    parser.add_argument(
-        "--noise-scale",
-        type=float,
-        default=0.02,
-        help="Noise scale for action initialization",
+        "--temperature", type=float, default=1.0, help="Sampling temperature"
     )
 
     # Training arguments
     parser.add_argument(
-        "--learning-rate", type=float, default=3e-5, help="Learning rate for verifier"
+        "--visual-lr", type=float, default=1e-4, help="Learning rate for visual encoder"
     )
     parser.add_argument(
-        "--weight-decay",
+        "--transformer-lr",
         type=float,
-        default=2e-4,
-        help="Weight decay for regularization",
+        default=5e-5,
+        help="Learning rate for transformer",
     )
+    parser.add_argument(
+        "--energy-lr", type=float, default=3e-4, help="Learning rate for energy network"
+    )
+    parser.add_argument(
+        "--min-lr", type=float, default=1e-6, help="Minimum learning rate"
+    )
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")
     parser.add_argument(
         "--batch-size", type=int, default=64, help="Training batch size"
     )
     parser.add_argument(
-        "--contrastive-margin",
-        type=float,
-        default=2.0,
-        help="Margin for contrastive loss",
+        "--contrastive-margin", type=float, default=2.0, help="Contrastive loss margin"
     )
 
-    # Device and rendering
-    parser.add_argument(
-        "--device", type=str, default="cuda", help="Device to use for training"
-    )
-    parser.add_argument("--render", action="store_true", help="Render the environment")
-
-    # THE MAIN FIX: Experience buffer arguments with FIXED quality threshold
+    # Experience buffer arguments
     parser.add_argument(
         "--buffer-capacity", type=int, default=30000, help="Experience buffer capacity"
     )
@@ -745,27 +646,7 @@ def main():
         "--quality-threshold",
         type=float,
         default=0.3,
-        help="Quality threshold (THE MAIN FIX)",
-    )
-    parser.add_argument(
-        "--golden-buffer-capacity",
-        type=int,
-        default=1000,
-        help="Golden experience buffer capacity",
-    )
-
-    # Policy memory arguments
-    parser.add_argument(
-        "--performance-drop-threshold",
-        type=float,
-        default=0.05,
-        help="Performance drop threshold",
-    )
-    parser.add_argument(
-        "--averaging-weight",
-        type=float,
-        default=0.7,
-        help="Weight for best checkpoint in averaging",
+        help="Quality threshold for experiences",
     )
 
     # Evaluation arguments
@@ -784,42 +665,34 @@ def main():
 
     # Checkpoint arguments
     parser.add_argument(
-        "--checkpoint-dir",
-        type=str,
-        default="checkpoints_minimal_fix",
-        help="Directory for saving checkpoints",
-    )
-    parser.add_argument(
         "--load-checkpoint", type=str, default=None, help="Path to checkpoint to load"
     )
 
+    # Rendering arguments
+    parser.add_argument("--render", action="store_true", help="Render the environment")
+
     args = parser.parse_args()
 
-    # Print configuration with emphasis on THE MAIN FIX
-    print(f"🛡️ MINIMAL FIX Training Configuration:")
+    # Print configuration
+    print(f"🚀 Energy-Based Transformer Training Configuration:")
     print(f"   Max Episodes: {args.max_episodes:,}")
-    print(f"   Learning Rate: {args.learning_rate:.2e}")
-    print(f"   🎯 Quality Threshold: {args.quality_threshold} (THE MAIN FIX - was 0.6)")
+    print(f"   Visual LR: {args.visual_lr:.2e}")
+    print(f"   Transformer LR: {args.transformer_lr:.2e}")
+    print(f"   Energy LR: {args.energy_lr:.2e}")
+    print(f"   Quality Threshold: {args.quality_threshold}")
+    print(f"   Temperature: {args.temperature}")
     print(f"   Target Win Rate: {args.target_win_rate:.1%}")
     print(f"   Max Fight Steps: {MAX_FIGHT_STEPS}")
-    print(f"   Device: {args.device}")
-
-    # Warn if threshold is still too high
-    if args.quality_threshold > 0.5:
-        print(
-            f"   ⚠️  WARNING: Quality threshold {args.quality_threshold} might still be too high"
-        )
-        print(f"      Consider using 0.3 or lower for better learning")
 
     # Initialize and run trainer
     try:
-        trainer = MinimalFixTrainer(args)
+        trainer = EnergyBasedTransformerTrainer(args)
 
         # Load checkpoint if specified
         if args.load_checkpoint:
             print(f"📂 Loading checkpoint: {args.load_checkpoint}")
             trainer.checkpoint_manager.load_checkpoint(
-                Path(args.load_checkpoint), trainer.verifier, trainer.agent
+                Path(args.load_checkpoint), trainer.model
             )
 
         # Start training

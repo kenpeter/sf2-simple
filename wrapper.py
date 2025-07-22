@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🛡️ MINIMAL FIX WRAPPER - Only fixes the quality threshold issue
-Keeps your original health system and only changes what's needed
+🥊 Energy-Based Transformer Street Fighter Wrapper
+Based on energy-based transformers: https://energy-based-transformers.github.io/
 """
 
 import cv2
@@ -37,11 +37,11 @@ def _patched_retro_make(game, state=None, **kwargs):
 
 retro.make = _patched_retro_make
 
-# Configure logging
+# Configure logging - SINGLE LOG FOLDER
 os.makedirs("logs", exist_ok=True)
 os.makedirs("checkpoints", exist_ok=True)
 log_filename = (
-    f'logs/minimal_fix_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    f'logs/energy_transformer_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 logging.basicConfig(
     level=logging.WARNING,
@@ -56,14 +56,18 @@ SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 32
 MAX_FIGHT_STEPS = 1200
+TRANSFORMER_DIM = 256
+TRANSFORMER_HEADS = 8
+TRANSFORMER_LAYERS = 4
 
-print(f"🥊 MINIMAL FIX Configuration:")
-print(f"   - Only fixing quality threshold (0.6 → 0.3)")
-print(f"   - Keeping your original health detection")
-print(f"   - Max steps per fight: {MAX_FIGHT_STEPS}")
+print(f"🚀 Energy-Based Transformer Configuration:")
+print(f"   - Using Energy-Based Transformers")
+print(f"   - Transformer dim: {TRANSFORMER_DIM}")
+print(f"   - Attention heads: {TRANSFORMER_HEADS}")
+print(f"   - Transformer layers: {TRANSFORMER_LAYERS}")
 
 
-# Keep all your original safe operations
+# Safe operations
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
     try:
@@ -185,58 +189,8 @@ def ensure_scalar(value, default=0.0):
             return default
 
 
-def ensure_feature_dimension(features, target_dim):
-    """Ensure features match target dimension exactly."""
-    if not isinstance(features, np.ndarray):
-        if isinstance(features, (int, float)):
-            features = np.array([features], dtype=np.float32)
-        else:
-            return np.zeros(target_dim, dtype=np.float32)
-
-    if features.ndim == 0:
-        features = np.array([features.item()], dtype=np.float32)
-
-    try:
-        current_length = len(features)
-    except TypeError:
-        return np.zeros(target_dim, dtype=np.float32)
-
-    if current_length == target_dim:
-        return features.astype(np.float32)
-    elif current_length < target_dim:
-        padding = np.zeros(target_dim - current_length, dtype=np.float32)
-        return np.concatenate([features, padding]).astype(np.float32)
-    else:
-        return features[:target_dim].astype(np.float32)
-
-
-def safe_comparison(value1, value2, operator="==", default=False):
-    """Safe comparison that handles arrays."""
-    try:
-        val1 = ensure_scalar(value1)
-        val2 = ensure_scalar(value2)
-
-        if operator == "==":
-            return val1 == val2
-        elif operator == "!=":
-            return val1 != val2
-        elif operator == "<":
-            return val1 < val2
-        elif operator == "<=":
-            return val1 <= val2
-        elif operator == ">":
-            return val1 > val2
-        elif operator == ">=":
-            return val1 >= val2
-        else:
-            return default
-    except:
-        return default
-
-
-# Keep your original classes but with FIXED quality threshold
 class IntelligentRewardCalculator:
-    """🎯 Your original reward calculator - UNCHANGED."""
+    """🎯 Reward calculator for Street Fighter."""
 
     def __init__(self):
         self.previous_opponent_health = MAX_HEALTH
@@ -251,7 +205,7 @@ class IntelligentRewardCalculator:
         self.round_lost = False
 
     def calculate_reward(self, player_health, opponent_health, done, info):
-        """Your original reward calculation - UNCHANGED."""
+        """Calculate reward based on game state."""
         reward = 0.0
         reward_breakdown = {}
 
@@ -316,10 +270,10 @@ class IntelligentRewardCalculator:
         self.round_lost = False
 
 
-class SimplifiedFeatureTracker:
-    """📊 Your original feature tracker - UNCHANGED."""
+class TransformerFeatureTracker:
+    """📊 Feature tracker for transformer input."""
 
-    def __init__(self, history_length=5):
+    def __init__(self, history_length=10):
         self.history_length = history_length
         self.reset()
 
@@ -327,13 +281,17 @@ class SimplifiedFeatureTracker:
         """Reset all tracking for new episode."""
         self.player_health_history = deque(maxlen=self.history_length)
         self.opponent_health_history = deque(maxlen=self.history_length)
+        self.action_history = deque(maxlen=self.history_length)
+        self.reward_history = deque(maxlen=self.history_length)
         self.last_action = 0
         self.combo_count = 0
 
-    def update(self, player_health, opponent_health, action, reward_breakdown):
+    def update(self, player_health, opponent_health, action, reward, reward_breakdown):
         """Update tracking with current state."""
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
+        self.action_history.append(action)
+        self.reward_history.append(reward)
 
         if "damage_dealt" in reward_breakdown and reward_breakdown["damage_dealt"] > 0:
             if action == self.last_action:
@@ -343,41 +301,40 @@ class SimplifiedFeatureTracker:
 
         self.last_action = action
 
-    def get_features(self):
-        """Get current feature vector."""
-        features = []
+    def get_sequence_features(self):
+        """Get sequential features for transformer."""
+        seq_features = []
 
+        # Pad sequences to history length
         player_hist = list(self.player_health_history)
         opponent_hist = list(self.opponent_health_history)
+        action_hist = list(self.action_history)
+        reward_hist = list(self.reward_history)
 
         while len(player_hist) < self.history_length:
             player_hist.insert(0, 1.0)
         while len(opponent_hist) < self.history_length:
             opponent_hist.insert(0, 1.0)
+        while len(action_hist) < self.history_length:
+            action_hist.insert(0, 0)
+        while len(reward_hist) < self.history_length:
+            reward_hist.insert(0, 0.0)
 
-        features.extend(player_hist)
-        features.extend(opponent_hist)
-
-        current_player_health = player_hist[-1] if player_hist else 1.0
-        current_opponent_health = opponent_hist[-1] if opponent_hist else 1.0
-
-        features.extend(
-            [
-                current_player_health,
-                current_opponent_health,
-                current_player_health - current_opponent_health,
-                self.last_action / 55.0,
-                min(self.combo_count / 5.0, 1.0),
+        for i in range(self.history_length):
+            step_features = [
+                player_hist[i],
+                opponent_hist[i],
+                action_hist[i] / 55.0,  # Normalize action
+                reward_hist[i],
+                player_hist[i] - opponent_hist[i],  # Health difference
             ]
-        )
+            seq_features.append(step_features)
 
-        return ensure_feature_dimension(
-            np.array(features, dtype=np.float32), VECTOR_FEATURE_DIM
-        )
+        return np.array(seq_features, dtype=np.float32)
 
 
 class StreetFighterDiscreteActions:
-    """🎮 Your original action mapping - UNCHANGED."""
+    """🎮 Action mapping for Street Fighter."""
 
     def __init__(self):
         self.action_map = {
@@ -386,12 +343,12 @@ class StreetFighterDiscreteActions:
             2: ["RIGHT"],
             3: ["UP"],
             4: ["DOWN"],
-            5: ["A"],  # Light punch
-            6: ["B"],  # Medium punch
-            7: ["C"],  # Heavy punch
-            8: ["X"],  # Light kick
-            9: ["Y"],  # Medium kick
-            10: ["Z"],  # Heavy kick
+            5: ["A"],
+            6: ["B"],
+            7: ["C"],
+            8: ["X"],
+            9: ["Y"],
+            10: ["Z"],
             # Combinations
             11: ["LEFT", "A"],
             12: ["LEFT", "B"],
@@ -424,18 +381,15 @@ class StreetFighterDiscreteActions:
             38: ["DOWN", "RIGHT", "X"],
             39: ["DOWN", "RIGHT", "Y"],
             40: ["DOWN", "RIGHT", "Z"],
-            # Quarter circle back
             41: ["DOWN", "LEFT", "A"],
             42: ["DOWN", "LEFT", "B"],
             43: ["DOWN", "LEFT", "C"],
             44: ["DOWN", "LEFT", "X"],
             45: ["DOWN", "LEFT", "Y"],
             46: ["DOWN", "LEFT", "Z"],
-            # Dragon punch motion
             47: ["RIGHT", "DOWN", "A"],
             48: ["RIGHT", "DOWN", "B"],
             49: ["RIGHT", "DOWN", "C"],
-            # Additional combinations
             50: ["A", "B"],
             51: ["B", "C"],
             52: ["X", "Y"],
@@ -443,9 +397,7 @@ class StreetFighterDiscreteActions:
             54: ["A", "X"],
             55: ["C", "Z"],
         }
-
         self.n_actions = len(self.action_map)
-        # Reverse mapping for button combinations to indices
         self.button_to_index = {tuple(v): k for k, v in self.action_map.items()}
 
     def get_action(self, action_idx):
@@ -453,62 +405,59 @@ class StreetFighterDiscreteActions:
         return self.action_map.get(action_idx, [])
 
 
-class StreetFighterVisionWrapper(gym.Wrapper):
-    """🥊 Your original wrapper with ONLY timeout fix."""
+class StreetFighterTransformerWrapper(gym.Wrapper):
+    """🥊 Street Fighter wrapper for Energy-Based Transformers."""
 
     def __init__(self, env):
         super().__init__(env)
 
         self.reward_calculator = IntelligentRewardCalculator()
-        self.feature_tracker = SimplifiedFeatureTracker()
+        self.feature_tracker = TransformerFeatureTracker()
         self.action_mapper = StreetFighterDiscreteActions()
 
+        # Observation space: visual + sequential features
         visual_space = gym.spaces.Box(
             low=0, high=255, shape=(3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8
         )
-        vector_space = gym.spaces.Box(
-            low=-10.0, high=10.0, shape=(5, VECTOR_FEATURE_DIM), dtype=np.float32
+        sequence_space = gym.spaces.Box(
+            low=-10.0,
+            high=10.0,
+            shape=(10, 5),
+            dtype=np.float32,  # 10 timesteps, 5 features each
         )
 
         self.observation_space = gym.spaces.Dict(
-            {"visual_obs": visual_space, "vector_obs": vector_space}
+            {"visual_obs": visual_space, "sequence_obs": sequence_space}
         )
 
         self.action_space = gym.spaces.Discrete(self.action_mapper.n_actions)
-        self.vector_history = deque(maxlen=5)
 
         self.episode_count = 0
         self.step_count = 0
-
-        # Your original health tracking
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
-        print(f"🥊 StreetFighterVisionWrapper initialized (minimal changes)")
+        print(f"🥊 StreetFighterTransformerWrapper initialized")
 
     def reset(self, **kwargs):
-        """Your original reset with timeout fix."""
+        """Reset environment."""
         obs, info = self.env.reset(**kwargs)
 
         self.reward_calculator.reset()
         self.feature_tracker.reset()
-        self.vector_history.clear()
-
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
-
         self.episode_count += 1
         self.step_count = 0
 
         player_health, opponent_health = self._extract_health(info)
-        self.feature_tracker.update(player_health, opponent_health, 0, {})
+        self.feature_tracker.update(player_health, opponent_health, 0, 0.0, {})
 
         observation = self._build_observation(obs, info)
-
         return observation, info
 
     def step(self, action):
-        """Your original step with ONLY timeout fix."""
+        """Execute action in environment."""
         self.step_count += 1
 
         button_combination = self.action_mapper.get_action(action)
@@ -517,12 +466,12 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         player_health, opponent_health = self._extract_health(info)
 
-        # ONLY FIX: Add timeout for single fights
+        # Check for fight end conditions
         if (self.previous_player_health > 0 and player_health <= 0) or (
             self.previous_opponent_health > 0 and opponent_health <= 0
         ):
             done = True
-        elif self.step_count >= MAX_FIGHT_STEPS:  # ONLY ADDITION
+        elif self.step_count >= MAX_FIGHT_STEPS:
             done = True
 
         self.previous_player_health = player_health
@@ -533,7 +482,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         )
 
         self.feature_tracker.update(
-            player_health, opponent_health, action, reward_breakdown
+            player_health, opponent_health, action, intelligent_reward, reward_breakdown
         )
 
         observation = self._build_observation(obs, info)
@@ -552,7 +501,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return observation, intelligent_reward, done, truncated, info
 
     def _extract_health(self, info):
-        """Your original health extraction - UNCHANGED."""
+        """Extract health from game info."""
         player_health = info.get("player_health", MAX_HEALTH)
         opponent_health = info.get("opponent_health", MAX_HEALTH)
 
@@ -566,7 +515,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _convert_to_retro_action(self, button_combination):
-        """Your original action conversion - UNCHANGED."""
+        """Convert button combination to retro action."""
         button_tuple = tuple(button_combination)
         if button_tuple in self.action_mapper.button_to_index:
             return self.action_mapper.button_to_index[button_tuple]
@@ -574,7 +523,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             return 0
 
     def _build_observation(self, visual_obs, info):
-        """Your original observation building - UNCHANGED."""
+        """Build observation dictionary."""
         if isinstance(visual_obs, np.ndarray):
             if len(visual_obs.shape) == 3 and visual_obs.shape[2] == 3:
                 visual_obs = np.transpose(visual_obs, (2, 0, 1))
@@ -584,350 +533,38 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                     visual_obs.transpose(1, 2, 0), (SCREEN_WIDTH, SCREEN_HEIGHT)
                 ).transpose(2, 0, 1)
 
-        vector_features = self.feature_tracker.get_features()
-        self.vector_history.append(vector_features)
-
-        while len(self.vector_history) < 5:
-            self.vector_history.appendleft(
-                np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
-            )
-
-        vector_obs = np.stack(list(self.vector_history), axis=0)
+        sequence_features = self.feature_tracker.get_sequence_features()
 
         return {
             "visual_obs": visual_obs.astype(np.uint8),
-            "vector_obs": vector_obs.astype(np.float32),
+            "sequence_obs": sequence_features.astype(np.float32),
         }
 
 
-class GoldenExperienceBuffer:
-    """🏆 Golden buffer with FIXED threshold."""
-
-    def __init__(self, capacity=1000):
-        self.capacity = capacity
-        self.experiences = deque(maxlen=capacity)
-        self.min_quality_for_golden = 0.6  # Keep high for golden
-        self.peak_win_rate_threshold = 0.3  # FIXED: Lower threshold
-        self.current_win_rate = 0.0
-
-    def update_win_rate(self, win_rate):
-        self.current_win_rate = win_rate
-
-    def add_experience(self, experience, quality_score):
-        if (
-            self.current_win_rate >= self.peak_win_rate_threshold
-            and quality_score >= self.min_quality_for_golden
-        ):
-            golden_experience = experience.copy()
-            golden_experience["is_golden"] = True
-            golden_experience["golden_win_rate"] = self.current_win_rate
-            golden_experience["golden_quality"] = quality_score
-            self.experiences.append(golden_experience)
-
-    def sample_golden_batch(self, batch_size):
-        if len(self.experiences) < batch_size:
-            return list(self.experiences)
-        indices = np.random.choice(len(self.experiences), batch_size, replace=False)
-        return [self.experiences[i] for i in indices]
-
-    def get_stats(self):
-        if len(self.experiences) > 0:
-            qualities = [exp.get("golden_quality", 0.0) for exp in self.experiences]
-            win_rates = [exp.get("golden_win_rate", 0.0) for exp in self.experiences]
-            avg_quality = np.mean(qualities)
-            avg_win_rate = np.mean(win_rates)
-            utilization = len(self.experiences) / self.capacity
-        else:
-            avg_quality = 0.0
-            avg_win_rate = 0.0
-            utilization = 0.0
-
-        return {
-            "size": len(self.experiences),
-            "capacity": self.capacity,
-            "utilization": utilization,
-            "avg_quality": avg_quality,
-            "avg_win_rate": avg_win_rate,
-            "min_quality_threshold": self.min_quality_for_golden,
-            "peak_win_rate_threshold": self.peak_win_rate_threshold,
-        }
-
-
-class EnhancedQualityBasedExperienceBuffer:
-    """🎯 MAIN FIX: Quality threshold lowered from 0.6 to 0.3."""
-
-    def __init__(
-        self, capacity=30000, quality_threshold=0.3, golden_buffer_capacity=1000
-    ):  # MAIN FIX HERE
-        self.capacity = capacity
-        self.quality_threshold = quality_threshold  # THIS IS THE KEY FIX
-
-        self.good_experiences = deque(maxlen=capacity // 2)
-        self.bad_experiences = deque(maxlen=capacity // 2)
-
-        self.golden_buffer = GoldenExperienceBuffer(capacity=golden_buffer_capacity)
-
-        self.quality_scores = deque(maxlen=1000)
-        self.total_added = 0
-
-        self.adjustment_rate = 0.05
-        self.threshold_adjustment_frequency = 25
-        self.threshold_adjustments = 0
-
-        print(f"🎯 FIXED Quality-Based Experience Buffer initialized")
-        print(f"   - Quality threshold: {quality_threshold} (THE MAIN FIX)")
-
-    def add_experience(self, experience, reward, reward_breakdown, quality_score):
-        """Add experience with FIXED threshold."""
-        self.total_added += 1
-        self.quality_scores.append(quality_score)
-
-        # THE CORE FIX: This will now work because threshold is 0.3 instead of 0.6
-        if quality_score >= self.quality_threshold:
-            self.good_experiences.append(experience)
-            print(
-                f"✅ Good experience added (quality: {quality_score:.3f} >= {self.quality_threshold:.3f})"
-            )
-            self.golden_buffer.add_experience(experience, quality_score)
-        else:
-            self.bad_experiences.append(experience)
-
-    def update_win_rate(self, win_rate):
-        self.golden_buffer.update_win_rate(win_rate)
-
-    def sample_enhanced_balanced_batch(self, batch_size, golden_ratio=0.15):
-        if (
-            len(self.good_experiences) < batch_size // 4
-            or len(self.bad_experiences) < batch_size // 4
-        ):
-            return None, None, None
-
-        golden_count = int(batch_size * golden_ratio)
-        remaining_good = (batch_size // 2) - golden_count
-        bad_count = batch_size // 2
-
-        golden_batch = (
-            self.golden_buffer.sample_golden_batch(golden_count)
-            if golden_count > 0
-            else []
-        )
-
-        good_indices = np.random.choice(
-            len(self.good_experiences), remaining_good, replace=False
-        )
-        good_batch = [self.good_experiences[i] for i in good_indices]
-
-        bad_indices = np.random.choice(
-            len(self.bad_experiences), bad_count, replace=False
-        )
-        bad_batch = [self.bad_experiences[i] for i in bad_indices]
-
-        combined_good_batch = good_batch + golden_batch
-        return combined_good_batch, bad_batch, golden_batch
-
-    def get_stats(self):
-        total_size = len(self.good_experiences) + len(self.bad_experiences)
-
-        if len(self.quality_scores) > 0:
-            avg_quality = np.mean(list(self.quality_scores))
-            quality_std = safe_std(list(self.quality_scores), 0.0)
-        else:
-            avg_quality = 0.0
-            quality_std = 0.0
-
-        golden_stats = self.golden_buffer.get_stats()
-
-        return {
-            "total_size": total_size,
-            "good_count": len(self.good_experiences),
-            "bad_count": len(self.bad_experiences),
-            "good_ratio": len(self.good_experiences) / max(1, total_size),
-            "quality_threshold": self.quality_threshold,
-            "avg_quality_score": avg_quality,
-            "quality_std": quality_std,
-            "total_added": self.total_added,
-            "acceptance_rate": total_size / max(1, self.total_added),
-            "threshold_adjustments": self.threshold_adjustments,
-            "golden_buffer": golden_stats,
-        }
-
-    def adjust_threshold(self, target_good_ratio=0.5, episode_number=0):
-        if episode_number % self.threshold_adjustment_frequency != 0:
-            return
-
-        if len(self.quality_scores) < 100:
-            return
-
-        total_size = len(self.good_experiences) + len(self.bad_experiences)
-        current_good_ratio = len(self.good_experiences) / max(1, total_size)
-
-        if current_good_ratio < target_good_ratio - 0.15:
-            self.quality_threshold *= 1 - self.adjustment_rate
-            self.threshold_adjustments += 1
-            print(f"📉 Lowered quality threshold to {self.quality_threshold:.3f}")
-        elif current_good_ratio > target_good_ratio + 0.15:
-            self.quality_threshold *= 1 + self.adjustment_rate
-            self.threshold_adjustments += 1
-            print(f"📈 Raised quality threshold to {self.quality_threshold:.3f}")
-
-        self.quality_threshold = max(0.4, min(0.75, self.quality_threshold))
-
-
-# Keep all your other classes unchanged...
-# (PolicyMemoryManager, CNN, Verifier, Agent, etc.)
-
-
-class PolicyMemoryManager:
-    """🧠 Your original policy memory manager - UNCHANGED."""
-
-    def __init__(self, performance_drop_threshold=0.05, averaging_weight=0.7):
-        self.performance_drop_threshold = performance_drop_threshold
-        self.averaging_weight = averaging_weight
-
-        self.peak_win_rate = 0.0
-        self.peak_checkpoint_state = None
-        self.episodes_since_peak = 0
-        self.performance_drop_detected = False
-
-        self.peak_lr = None
-        self.lr_reduction_factor = 0.5
-        self.min_lr = 1e-7
-
-        self.averaging_performed = 0
-        self.last_averaging_episode = -1
-
-    def update_performance(
-        self, current_win_rate, current_episode, model_state_dict, current_lr
-    ):
-        performance_improved = False
-        performance_drop = False
-
-        if current_win_rate > self.peak_win_rate:
-            self.peak_win_rate = current_win_rate
-            self.peak_checkpoint_state = copy.deepcopy(model_state_dict)
-            self.peak_lr = current_lr
-            self.episodes_since_peak = 0
-            self.performance_drop_detected = False
-            performance_improved = True
-        else:
-            self.episodes_since_peak += 1
-
-            if (
-                current_win_rate < self.peak_win_rate - self.performance_drop_threshold
-                and not self.performance_drop_detected
-                and self.episodes_since_peak > 10
-            ):
-                self.performance_drop_detected = True
-                performance_drop = True
-
-        return performance_improved, performance_drop
-
-    def should_perform_averaging(self, current_episode):
-        return (
-            self.performance_drop_detected
-            and self.peak_checkpoint_state is not None
-            and current_episode - self.last_averaging_episode > 5
-        )
-
-    def perform_checkpoint_averaging(self, current_model):
-        if self.peak_checkpoint_state is None:
-            return False
-
-        try:
-            current_state = current_model.state_dict()
-            averaged_state = {}
-
-            for name, param in current_state.items():
-                if name in self.peak_checkpoint_state:
-                    peak_param = self.peak_checkpoint_state[name]
-                    peak_param = peak_param.to(param.device)
-                    averaged_state[name] = (
-                        self.averaging_weight * peak_param
-                        + (1 - self.averaging_weight) * param
-                    )
-                else:
-                    averaged_state[name] = param
-
-            current_model.load_state_dict(averaged_state)
-
-            self.averaging_performed += 1
-            self.last_averaging_episode = self.episodes_since_peak
-            self.performance_drop_detected = False
-
-            return True
-
-        except Exception as e:
-            return False
-
-    def should_reduce_lr(self):
-        return self.performance_drop_detected and self.peak_lr is not None
-
-    def get_reduced_lr(self, current_lr):
-        new_lr = max(current_lr * self.lr_reduction_factor, self.min_lr)
-        return new_lr
-
-    def get_stats(self):
-        return {
-            "peak_win_rate": self.peak_win_rate,
-            "episodes_since_peak": self.episodes_since_peak,
-            "performance_drop_detected": self.performance_drop_detected,
-            "averaging_performed": self.averaging_performed,
-            "has_peak_checkpoint": self.peak_checkpoint_state is not None,
-            "peak_lr": self.peak_lr,
-        }
-
-
-class EnhancedFixedEnergyBasedStreetFighterCNN(nn.Module):
-    """🛡️ Your original CNN - UNCHANGED."""
+class EnergyBasedTransformerCNN(nn.Module):
+    """🧠 CNN feature extractor for visual input."""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
 
         visual_space = observation_space["visual_obs"]
-        vector_space = observation_space["vector_obs"]
         n_input_channels = visual_space.shape[0]
-        seq_length, vector_feature_count = vector_space.shape
 
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(32),
-            nn.Dropout2d(0.15),
+            nn.Dropout2d(0.1),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(64),
-            nn.Dropout2d(0.15),
+            nn.Dropout2d(0.1),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
-            nn.Dropout2d(0.1),
-            nn.AdaptiveAvgPool2d((3, 4)),
+            nn.AdaptiveAvgPool2d((4, 5)),
             nn.Flatten(),
-        )
-
-        with torch.no_grad():
-            dummy_visual = torch.zeros(
-                1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
-            )
-            visual_output_size = self.visual_cnn(dummy_visual).shape[1]
-
-        self.vector_embed = nn.Linear(vector_feature_count, 64)
-        self.vector_norm = nn.LayerNorm(64)
-        self.vector_dropout = nn.Dropout(0.2)
-        self.vector_gru = nn.GRU(64, 64, batch_first=True, dropout=0.15)
-        self.vector_final = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.15),
-        )
-
-        fusion_input_size = visual_output_size + 32
-        self.fusion = nn.Sequential(
-            nn.Linear(fusion_input_size, 512),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(512),
-            nn.Dropout(0.2),
-            nn.Linear(512, features_dim),
+            nn.Linear(128 * 4 * 5, features_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
         )
@@ -946,650 +583,371 @@ class EnhancedFixedEnergyBasedStreetFighterCNN(nn.Module):
         elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.GRU):
-            for name, param in m.named_parameters():
-                if "weight" in name:
-                    nn.init.xavier_uniform_(param, gain=0.3)
-                elif "bias" in name:
-                    nn.init.constant_(param, 0)
 
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
-        visual_obs = observations["visual_obs"]
-        vector_obs = observations["vector_obs"]
-        device = next(self.parameters()).device
-
-        visual_obs = visual_obs.float().to(device)
-        vector_obs = vector_obs.float().to(device)
-
-        visual_nan_mask = ~torch.isfinite(visual_obs)
-        vector_nan_mask = ~torch.isfinite(vector_obs)
-
-        if torch.any(visual_nan_mask):
-            visual_obs = torch.where(
-                visual_nan_mask, torch.zeros_like(visual_obs), visual_obs
-            )
-
-        if torch.any(vector_nan_mask):
-            vector_obs = torch.where(
-                vector_nan_mask, torch.zeros_like(vector_obs), vector_obs
-            )
-
-        visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
-        vector_obs = torch.clamp(vector_obs, -8.0, 8.0)
-
-        visual_features = self.visual_cnn(visual_obs)
-
-        if torch.any(torch.abs(visual_features) > 50.0):
-            visual_features = torch.clamp(visual_features, -50.0, 50.0)
-
-        batch_size, seq_len, feature_dim = vector_obs.shape
-        vector_embedded = self.vector_embed(vector_obs)
-        vector_embedded = self.vector_norm(vector_embedded)
-        vector_embedded = self.vector_dropout(vector_embedded)
-
-        gru_output, _ = self.vector_gru(vector_embedded)
-        vector_features = gru_output[:, -1, :]
-        vector_features = self.vector_final(vector_features)
-
-        combined_features = torch.cat([visual_features, vector_features], dim=1)
-        output = self.fusion(combined_features)
-
-        if torch.any(~torch.isfinite(output)):
-            output = torch.where(
-                ~torch.isfinite(output), torch.zeros_like(output), output
-            )
-
-        output = torch.clamp(output, -15.0, 15.0)
-
-        return output
+    def forward(self, visual_obs: torch.Tensor) -> torch.Tensor:
+        visual_obs = visual_obs.float() / 255.0
+        visual_obs = torch.clamp(visual_obs, 0.0, 1.0)
+        return self.visual_cnn(visual_obs)
 
 
-class EnhancedFixedEnergyBasedStreetFighterVerifier(nn.Module):
-    """🛡️ Your original verifier - UNCHANGED."""
+class EnergyBasedTransformer(nn.Module):
+    """🚀 Energy-Based Transformer for action prediction."""
 
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        action_space: spaces.Space,
-        features_dim: int = 256,
-    ):
+    def __init__(self, observation_space: spaces.Dict, action_space: spaces.Space):
         super().__init__()
 
         self.observation_space = observation_space
         self.action_space = action_space
-        self.features_dim = features_dim
-        self.action_dim = action_space.n if hasattr(action_space, "n") else 56
+        self.action_dim = action_space.n
 
-        self.features_extractor = EnhancedFixedEnergyBasedStreetFighterCNN(
-            observation_space, features_dim
+        # Visual feature extractor
+        self.visual_encoder = EnergyBasedTransformerCNN(
+            observation_space, TRANSFORMER_DIM
         )
 
-        self.action_embed = nn.Sequential(
-            nn.Linear(self.action_dim, 64),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(64),
-            nn.Dropout(0.15),
+        # Sequence encoder
+        sequence_space = observation_space["sequence_obs"]
+        seq_length, seq_features = sequence_space.shape
+
+        self.sequence_embedding = nn.Linear(seq_features, TRANSFORMER_DIM)
+        self.positional_encoding = nn.Parameter(
+            torch.randn(seq_length, TRANSFORMER_DIM)
         )
 
+        # Transformer layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=TRANSFORMER_DIM,
+            nhead=TRANSFORMER_HEADS,
+            dim_feedforward=TRANSFORMER_DIM * 4,
+            dropout=0.1,
+            activation="relu",
+            batch_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, num_layers=TRANSFORMER_LAYERS
+        )
+
+        # Action embedding for energy calculation
+        self.action_embedding = nn.Embedding(self.action_dim, TRANSFORMER_DIM)
+
+        # Energy network
         self.energy_net = nn.Sequential(
-            nn.Linear(features_dim + 64, 256),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(256),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(128),
-            nn.Dropout(0.15),
-            nn.Linear(128, 64),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(64),
+            nn.Linear(TRANSFORMER_DIM * 2, TRANSFORMER_DIM),
+            nn.ReLU(),
+            nn.LayerNorm(TRANSFORMER_DIM),
             nn.Dropout(0.1),
-            nn.Linear(64, 1),
+            nn.Linear(TRANSFORMER_DIM, TRANSFORMER_DIM // 2),
+            nn.ReLU(),
+            nn.LayerNorm(TRANSFORMER_DIM // 2),
+            nn.Dropout(0.1),
+            nn.Linear(TRANSFORMER_DIM // 2, 1),
         )
-
-        self.energy_scale = 0.6
-        self.energy_clamp_min = -6.0
-        self.energy_clamp_max = 6.0
 
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, mean=0.0, std=0.005)
+            nn.init.xavier_uniform_(m.weight, gain=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Embedding):
+            nn.init.normal_(m.weight, mean=0, std=0.02)
 
     def forward(
-        self, context: torch.Tensor, candidate_action: torch.Tensor
+        self, observations: Dict[str, torch.Tensor], actions: torch.Tensor = None
     ) -> torch.Tensor:
+        """
+        Forward pass for energy calculation.
+        If actions is None, returns context features for all actions.
+        If actions is provided, returns energy for those specific actions.
+        """
         device = next(self.parameters()).device
 
-        if isinstance(context, dict):
-            context_features = self.features_extractor(context)
+        visual_obs = observations["visual_obs"].to(device)
+        sequence_obs = observations["sequence_obs"].to(device)
+
+        batch_size = visual_obs.shape[0]
+
+        # Visual encoding
+        visual_features = self.visual_encoder(visual_obs)  # [batch, transformer_dim]
+
+        # Sequence encoding
+        seq_embedded = self.sequence_embedding(
+            sequence_obs
+        )  # [batch, seq_len, transformer_dim]
+        seq_embedded = seq_embedded + self.positional_encoding.unsqueeze(0)
+
+        # Transformer encoding
+        context_features = self.transformer(
+            seq_embedded
+        )  # [batch, seq_len, transformer_dim]
+        context_features = context_features.mean(
+            dim=1
+        )  # [batch, transformer_dim] - global average pooling
+
+        # Combine visual and sequential context
+        combined_context = (
+            visual_features + context_features
+        )  # [batch, transformer_dim]
+
+        if actions is None:
+            # Return context for all possible actions
+            return combined_context
         else:
-            context_features = context
+            # Calculate energy for specific actions
+            if actions.dtype != torch.long:
+                actions = actions.long()
 
-        context_features = context_features.to(device)
-        candidate_action = candidate_action.to(device)
+            action_features = self.action_embedding(actions)  # [batch, transformer_dim]
 
-        if torch.any(~torch.isfinite(context_features)):
-            context_features = torch.where(
-                ~torch.isfinite(context_features),
-                torch.zeros_like(context_features),
-                context_features,
-            )
+            # Combine context and action
+            energy_input = torch.cat(
+                [combined_context, action_features], dim=-1
+            )  # [batch, transformer_dim * 2]
 
-        if torch.any(~torch.isfinite(candidate_action)):
-            candidate_action = torch.where(
-                ~torch.isfinite(candidate_action),
-                torch.zeros_like(candidate_action),
-                candidate_action,
-            )
+            # Calculate energy
+            energy = self.energy_net(energy_input)  # [batch, 1]
 
-        context_features = torch.clamp(context_features, -15.0, 15.0)
-        candidate_action = torch.clamp(candidate_action, 0.0, 1.0)
+            return energy.squeeze(-1)
 
-        action_embedded = self.action_embed(candidate_action)
-
-        if torch.any(~torch.isfinite(action_embedded)):
-            action_embedded = torch.where(
-                ~torch.isfinite(action_embedded),
-                torch.zeros_like(action_embedded),
-                action_embedded,
-            )
-
-        combined_input = torch.cat([context_features, action_embedded], dim=-1)
-
-        raw_energy = self.energy_net(combined_input)
-
-        energy = raw_energy * self.energy_scale
-        energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
-
-        if torch.any(~torch.isfinite(energy)):
-            energy = torch.where(
-                ~torch.isfinite(energy), torch.zeros_like(energy), energy
-            )
-
-        return energy
-
-    def get_energy_stats(self):
-        return {
-            "energy_mean": 0.0,
-            "energy_std": 0.0,
-            "nan_count": 0,
-            "explosion_count": 0,
-        }
-
-
-class EnhancedFixedStabilizedEnergyBasedAgent:
-    """🛡️ Your original agent - UNCHANGED."""
-
-    def __init__(
+    def predict_action(
         self,
-        verifier: EnhancedFixedEnergyBasedStreetFighterVerifier,
-        thinking_steps: int = 3,
-        thinking_lr: float = 0.06,
-        noise_scale: float = 0.02,
+        observations: Dict[str, torch.Tensor],
+        temperature=1.0,
+        deterministic=False,
     ):
-        self.verifier = verifier
-        self.initial_thinking_steps = thinking_steps
-        self.current_thinking_steps = thinking_steps
-        self.initial_thinking_lr = thinking_lr
-        self.current_thinking_lr = thinking_lr
-        self.noise_scale = noise_scale
-        self.action_dim = verifier.action_dim
+        """Predict action using energy-based sampling."""
+        device = next(self.parameters()).device
+        batch_size = observations["visual_obs"].shape[0]
 
-        self.gradient_clip = 0.3
-        self.early_stop_patience = 2
-        self.min_energy_improvement = 8e-4
+        # Get context features
+        context = self.forward(observations, actions=None)
 
-        self.max_thinking_steps = 5
-        self.min_thinking_steps = 1
+        # Calculate energies for all actions
+        all_actions = (
+            torch.arange(self.action_dim, device=device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
+        context_expanded = context.unsqueeze(1).expand(-1, self.action_dim, -1)
 
-        self.thinking_stats = {
-            "total_predictions": 0,
-            "avg_thinking_steps": 0.0,
-            "avg_energy_improvement": 0.0,
-            "early_stops": 0,
-            "energy_explosions": 0,
-            "gradient_explosions": 0,
-            "successful_optimizations": 0,
-            "failed_optimizations": 0,
-        }
+        energies = []
+        for i in range(self.action_dim):
+            action_batch = all_actions[:, i]
+            energy = self.forward(observations, actions=action_batch)
+            energies.append(energy)
 
-        self.recent_performance = deque(maxlen=100)
-
-    def predict(
-        self, observations: Dict[str, torch.Tensor], deterministic: bool = False
-    ) -> Tuple[int, Dict]:
-        device = next(self.verifier.parameters()).device
-
-        obs_device = {}
-        for key, value in observations.items():
-            if isinstance(value, torch.Tensor):
-                obs_device[key] = value.to(device)
-            else:
-                obs_device[key] = torch.from_numpy(value).to(device)
-
-        if len(obs_device["visual_obs"].shape) == 3:
-            for key in obs_device:
-                obs_device[key] = obs_device[key].unsqueeze(0)
-
-        batch_size = obs_device["visual_obs"].shape[0]
+        energies = torch.stack(energies, dim=1)  # [batch, action_dim]
 
         if deterministic:
-            candidate_action = (
-                torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
-            )
+            # Choose action with lowest energy
+            actions = torch.argmin(energies, dim=1)
+            return actions
         else:
-            candidate_action = (
-                torch.randn(batch_size, self.action_dim, device=device)
-                * self.noise_scale
-            )
-            candidate_action = F.softmax(candidate_action, dim=-1)
+            # Sample using Boltzmann distribution
+            probs = F.softmax(-energies / temperature, dim=1)
+            actions = torch.multinomial(probs, 1).squeeze(-1)
+            return actions
 
-        candidate_action.requires_grad_(True)
 
-        energy_history = []
-        steps_taken = 0
-        early_stopped = False
-        energy_explosion = False
-        gradient_explosion = False
-        optimization_successful = False
+class QualityBasedExperienceBuffer:
+    """🎯 Experience buffer for energy-based transformer training."""
 
-        with torch.no_grad():
-            try:
-                initial_energy = self.verifier(obs_device, candidate_action)
-                energy_history.append(initial_energy.mean().item())
-            except Exception as e:
-                return 0, {"error": "initial_energy_failed"}
+    def __init__(self, capacity=30000, quality_threshold=0.3):
+        self.capacity = capacity
+        self.quality_threshold = quality_threshold
 
-        for step in range(self.current_thinking_steps):
-            try:
-                energy = self.verifier(obs_device, candidate_action)
+        self.good_experiences = deque(maxlen=capacity // 2)
+        self.bad_experiences = deque(maxlen=capacity // 2)
 
-                if torch.any(torch.abs(energy) > 8.0):
-                    energy_explosion = True
-                    break
+        self.quality_scores = deque(maxlen=1000)
+        self.total_added = 0
 
-                gradients = torch.autograd.grad(
-                    outputs=energy.sum(),
-                    inputs=candidate_action,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
+        print(f"🎯 Quality-Based Experience Buffer initialized")
+        print(f"   - Quality threshold: {quality_threshold}")
 
-                gradient_norm = torch.norm(gradients).item()
+    def add_experience(self, experience, reward, reward_breakdown, quality_score):
+        """Add experience with quality scoring."""
+        self.total_added += 1
+        self.quality_scores.append(quality_score)
 
-                if gradient_norm > self.gradient_clip:
-                    gradient_explosion = True
-                    gradients = gradients * (self.gradient_clip / gradient_norm)
+        if quality_score >= self.quality_threshold:
+            self.good_experiences.append(experience)
+        else:
+            self.bad_experiences.append(experience)
 
-                if torch.any(~torch.isfinite(gradients)):
-                    break
+    def sample_balanced_batch(self, batch_size):
+        """Sample balanced batch of good and bad experiences."""
+        if (
+            len(self.good_experiences) < batch_size // 4
+            or len(self.bad_experiences) < batch_size // 4
+        ):
+            return None, None
 
-                with torch.no_grad():
-                    candidate_action = (
-                        candidate_action - self.current_thinking_lr * gradients
-                    )
-                    candidate_action = F.softmax(candidate_action, dim=-1)
-                    candidate_action.requires_grad_(True)
+        good_count = batch_size // 2
+        bad_count = batch_size // 2
 
-                with torch.no_grad():
-                    new_energy = self.verifier(obs_device, candidate_action)
-                    energy_history.append(new_energy.mean().item())
-
-                if len(energy_history) >= self.early_stop_patience + 1:
-                    recent_improvement = (
-                        energy_history[-self.early_stop_patience - 1]
-                        - energy_history[-1]
-                    )
-                    if abs(recent_improvement) < self.min_energy_improvement:
-                        early_stopped = True
-                        break
-
-                steps_taken += 1
-
-            except Exception as e:
-                break
-
-        if len(energy_history) > 1:
-            total_improvement = abs(energy_history[0] - energy_history[-1])
-            optimization_successful = (
-                total_improvement > self.min_energy_improvement
-                and not energy_explosion
-                and not gradient_explosion
-            )
-
-        with torch.no_grad():
-            try:
-                final_action_probs = F.softmax(candidate_action, dim=-1)
-                final_action_probs = final_action_probs + 1e-8
-                final_action_probs = final_action_probs / final_action_probs.sum(
-                    dim=-1, keepdim=True
-                )
-
-                if deterministic:
-                    action_idx = torch.argmax(final_action_probs, dim=-1)
-                else:
-                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
-            except Exception as e:
-                return 0, {"error": "action_selection_failed"}
-
-        self.thinking_stats["total_predictions"] += 1
-        self.thinking_stats["avg_thinking_steps"] = (
-            self.thinking_stats["avg_thinking_steps"] * 0.9 + steps_taken * 0.1
+        good_indices = np.random.choice(
+            len(self.good_experiences), good_count, replace=False
         )
+        good_batch = [self.good_experiences[i] for i in good_indices]
 
-        if len(energy_history) > 1:
-            energy_improvement = abs(energy_history[0] - energy_history[-1])
-            self.thinking_stats["avg_energy_improvement"] = (
-                self.thinking_stats["avg_energy_improvement"] * 0.9
-                + energy_improvement * 0.1
-            )
+        bad_indices = np.random.choice(
+            len(self.bad_experiences), bad_count, replace=False
+        )
+        bad_batch = [self.bad_experiences[i] for i in bad_indices]
 
-        if early_stopped:
-            self.thinking_stats["early_stops"] += 1
-        if energy_explosion:
-            self.thinking_stats["energy_explosions"] += 1
-        if gradient_explosion:
-            self.thinking_stats["gradient_explosions"] += 1
-        if optimization_successful:
-            self.thinking_stats["successful_optimizations"] += 1
+        return good_batch, bad_batch
+
+    def get_stats(self):
+        """Get buffer statistics."""
+        total_size = len(self.good_experiences) + len(self.bad_experiences)
+
+        if len(self.quality_scores) > 0:
+            avg_quality = np.mean(list(self.quality_scores))
         else:
-            self.thinking_stats["failed_optimizations"] += 1
+            avg_quality = 0.0
 
-        self.recent_performance.append(1.0 if optimization_successful else 0.0)
-
-        thinking_info = {
-            "energy_history": energy_history,
-            "steps_taken": steps_taken,
-            "early_stopped": early_stopped,
-            "energy_explosion": energy_explosion,
-            "gradient_explosion": gradient_explosion,
-            "optimization_successful": optimization_successful,
-            "energy_improvement": (
-                abs(energy_history[0] - energy_history[-1])
-                if len(energy_history) > 1
-                else 0.0
-            ),
-            "final_energy": energy_history[-1] if energy_history else 0.0,
-            "current_thinking_steps": self.current_thinking_steps,
-            "current_thinking_lr": self.current_thinking_lr,
+        return {
+            "total_size": total_size,
+            "good_count": len(self.good_experiences),
+            "bad_count": len(self.bad_experiences),
+            "good_ratio": len(self.good_experiences) / max(1, total_size),
+            "quality_threshold": self.quality_threshold,
+            "avg_quality_score": avg_quality,
+            "total_added": self.total_added,
         }
 
-        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
 
-    def get_thinking_stats(self) -> Dict:
-        stats = self.thinking_stats.copy()
-        if stats["total_predictions"] > 0:
-            stats["success_rate"] = safe_divide(
-                stats["successful_optimizations"], stats["total_predictions"], 0.0
-            )
-            stats["early_stop_rate"] = safe_divide(
-                stats["early_stops"], stats["total_predictions"], 0.0
-            )
-            stats["explosion_rate"] = safe_divide(
-                stats["energy_explosions"] + stats["gradient_explosions"],
-                stats["total_predictions"],
-                0.0,
-            )
-        return stats
+class CheckpointManager:
+    """💾 Checkpoint manager."""
 
-
-class EnhancedEnergyStabilityManager:
-    """🛡️ Your original stability manager - UNCHANGED."""
-
-    def __init__(self, initial_lr=3e-5, thinking_lr=0.06, policy_memory_manager=None):
-        self.initial_lr = initial_lr
-        self.current_lr = initial_lr
-        self.thinking_lr = thinking_lr
-        self.current_thinking_lr = thinking_lr
-        self.policy_memory_manager = policy_memory_manager
-
-        self.win_rate_window = deque(maxlen=25)
-        self.energy_quality_window = deque(maxlen=25)
-        self.energy_separation_window = deque(maxlen=25)
-
-        self.min_win_rate = 0.35
-        self.min_energy_quality = 2.5
-        self.min_energy_separation = 0.015
-        self.max_early_stop_rate = 0.75
-
-        self.lr_decay_factor = 0.85
-        self.lr_recovery_factor = 1.02
-        self.max_lr_reductions = 2
-        self.lr_reductions = 0
-
-        self.last_reset_episode = 0
-        self.consecutive_poor_episodes = 0
-        self.best_model_state = None
-        self.best_win_rate = 0.0
-        self.emergency_mode = False
-
-    def update_metrics(
-        self, win_rate, energy_quality, energy_separation, early_stop_rate
-    ):
-        self.win_rate_window.append(win_rate)
-        self.energy_quality_window.append(energy_quality)
-        self.energy_separation_window.append(energy_separation)
-
-        avg_win_rate = safe_mean(list(self.win_rate_window), 0.5)
-        avg_energy_quality = safe_mean(list(self.energy_quality_window), 10.0)
-        avg_energy_separation = safe_mean(list(self.energy_separation_window), 0.1)
-
-        collapse_indicators = 0
-
-        if avg_win_rate < self.min_win_rate:
-            collapse_indicators += 1
-
-        if avg_energy_quality < self.min_energy_quality:
-            collapse_indicators += 1
-
-        if abs(avg_energy_separation) < self.min_energy_separation:
-            collapse_indicators += 1
-
-        if early_stop_rate > self.max_early_stop_rate:
-            collapse_indicators += 1
-
-        if collapse_indicators >= 2:
-            self.consecutive_poor_episodes += 1
-            if self.consecutive_poor_episodes >= 2:
-                return self._trigger_emergency_protocol()
-        else:
-            self.consecutive_poor_episodes = 0
-            self.emergency_mode = False
-
-        return False
-
-    def _trigger_emergency_protocol(self):
-        emergency_triggered = False
-
-        if not self.emergency_mode:
-            if (
-                self.policy_memory_manager
-                and self.policy_memory_manager.should_perform_averaging(0)
-            ):
-                emergency_triggered = True
-
-            if self.lr_reductions < self.max_lr_reductions:
-                self.current_lr *= self.lr_decay_factor
-                self.current_thinking_lr *= self.lr_decay_factor
-                self.lr_reductions += 1
-                emergency_triggered = True
-
-            self.emergency_mode = True
-            self.consecutive_poor_episodes = 0
-
-        return emergency_triggered
-
-    def get_current_lrs(self):
-        return self.current_lr, self.current_thinking_lr
-
-
-class EnhancedCheckpointManager:
-    """💾 Your original checkpoint manager - UNCHANGED."""
-
-    def __init__(self, checkpoint_dir="checkpoints_enhanced"):
+    def __init__(self, checkpoint_dir="checkpoints"):
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(exist_ok=True)
-
         self.best_checkpoint_path = None
         self.best_win_rate = 0.0
-        self.emergency_checkpoint_path = None
 
-        self.peak_checkpoint_path = None
-        self.averaging_checkpoints = []
-
-    def save_checkpoint(
-        self,
-        verifier,
-        agent,
-        episode,
-        win_rate,
-        energy_quality,
-        is_emergency=False,
-        is_peak=False,
-        policy_memory_stats=None,
-    ):
+    def save_checkpoint(self, model, episode, win_rate, loss=0.0):
+        """Save model checkpoint."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if is_emergency:
-            filename = f"emergency_ep{episode}_{timestamp}.pt"
-        elif is_peak:
-            filename = f"peak_ep{episode}_wr{win_rate:.3f}_{timestamp}.pt"
-        else:
-            filename = f"checkpoint_ep{episode}_wr{win_rate:.3f}_eq{energy_quality:.1f}_{timestamp}.pt"
-
+        filename = (
+            f"transformer_ep{episode}_wr{win_rate:.3f}_loss{loss:.3f}_{timestamp}.pt"
+        )
         checkpoint_path = self.checkpoint_dir / filename
 
         checkpoint_data = {
             "episode": episode,
             "win_rate": win_rate,
-            "energy_quality": energy_quality,
-            "verifier_state_dict": verifier.state_dict(),
-            "agent_thinking_stats": agent.get_thinking_stats(),
-            "agent_current_thinking_steps": agent.current_thinking_steps,
-            "agent_current_thinking_lr": agent.current_thinking_lr,
-            "energy_scale": verifier.energy_scale,
+            "loss": loss,
+            "model_state_dict": model.state_dict(),
             "timestamp": timestamp,
-            "is_emergency": is_emergency,
-            "is_peak": is_peak,
-            "policy_memory_stats": policy_memory_stats or {},
         }
 
         try:
             torch.save(checkpoint_data, checkpoint_path)
 
-            if is_emergency:
-                self.emergency_checkpoint_path = checkpoint_path
-            elif is_peak:
-                self.peak_checkpoint_path = checkpoint_path
-            elif win_rate > self.best_win_rate:
+            if win_rate > self.best_win_rate:
                 self.best_checkpoint_path = checkpoint_path
                 self.best_win_rate = win_rate
 
             return checkpoint_path
-
         except Exception as e:
+            print(f"Failed to save checkpoint: {e}")
             return None
 
-    def load_checkpoint(self, checkpoint_path, verifier, agent):
+    def load_checkpoint(self, checkpoint_path, model):
+        """Load model checkpoint."""
         try:
             checkpoint_data = torch.load(
                 checkpoint_path, map_location="cpu", weights_only=False
             )
-
-            verifier.load_state_dict(checkpoint_data["verifier_state_dict"])
-
-            agent.current_thinking_steps = checkpoint_data.get(
-                "agent_current_thinking_steps", agent.initial_thinking_steps
-            )
-            agent.current_thinking_lr = checkpoint_data.get(
-                "agent_current_thinking_lr", agent.initial_thinking_lr
-            )
-
-            if "energy_scale" in checkpoint_data:
-                verifier.energy_scale = checkpoint_data["energy_scale"]
-
+            model.load_state_dict(checkpoint_data["model_state_dict"])
             return checkpoint_data
-
         except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
             return None
 
 
 # Utility functions
-def verify_fixed_energy_flow(verifier, observation_space, action_space):
-    """Verify energy flow works correctly."""
-    try:
-        visual_obs = torch.zeros(1, 3, SCREEN_HEIGHT, SCREEN_WIDTH)
-        vector_obs = torch.zeros(1, 5, VECTOR_FEATURE_DIM)
-        dummy_obs = {"visual_obs": visual_obs, "vector_obs": vector_obs}
-        dummy_action = torch.ones(1, action_space.n) / action_space.n
-
-        energy = verifier(dummy_obs, dummy_action)
-
-        print(f"   ✅ Energy calculation successful")
-        print(f"   - Energy shape: {energy.shape}")
-        print(f"   - Energy value: {energy.item():.4f}")
-
-        return True
-
-    except Exception as e:
-        print(f"   ❌ Energy flow verification failed: {e}")
-        return False
-
-
-def make_fixed_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
+def make_env(
+    game="StreetFighterIISpecialChampionEdition-Genesis",
+    state="ken_bison_12.state",
+    render=False,
 ):
-    """Create Street Fighter environment with MINIMAL changes."""
+    """Create Street Fighter environment."""
     try:
         env = retro.make(
-            game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
+            game=game,
+            state=state,
+            use_restricted_actions=retro.Actions.DISCRETE,
+            render_mode="human" if render else None,
         )
-        env = StreetFighterVisionWrapper(env)  # Only timeout fix added
-
-        print(f"   ✅ Environment created (minimal changes)")
+        env = StreetFighterTransformerWrapper(env)
+        print(f"✅ Environment created successfully (render: {render})")
         return env
-
     except Exception as e:
-        print(f"   ❌ Environment creation failed: {e}")
+        print(f"❌ Environment creation failed: {e}")
         raise
+
+
+def verify_transformer_flow(model, observation_space, action_space):
+    """Verify transformer model works correctly."""
+    try:
+        device = next(model.parameters()).device
+
+        # Create dummy observations
+        visual_obs = torch.zeros(1, 3, SCREEN_HEIGHT, SCREEN_WIDTH, device=device)
+        sequence_obs = torch.zeros(1, 10, 5, device=device)
+        dummy_obs = {"visual_obs": visual_obs, "sequence_obs": sequence_obs}
+
+        # Test context extraction
+        context = model.forward(dummy_obs, actions=None)
+        print(f"✅ Context extraction successful, shape: {context.shape}")
+
+        # Test energy calculation
+        dummy_action = torch.tensor([0], device=device)
+        energy = model.forward(dummy_obs, actions=dummy_action)
+        print(f"✅ Energy calculation successful, energy: {energy.item():.4f}")
+
+        # Test action prediction
+        action = model.predict_action(dummy_obs, deterministic=True)
+        print(f"✅ Action prediction successful, action: {action.item()}")
+
+        return True
+    except Exception as e:
+        print(f"❌ Transformer flow verification failed: {e}")
+        return False
 
 
 # Export components
 __all__ = [
-    "StreetFighterVisionWrapper",
-    "EnhancedFixedEnergyBasedStreetFighterCNN",
-    "EnhancedFixedEnergyBasedStreetFighterVerifier",
-    "EnhancedFixedStabilizedEnergyBasedAgent",
-    "SimplifiedFeatureTracker",
+    "StreetFighterTransformerWrapper",
+    "EnergyBasedTransformerCNN",
+    "EnergyBasedTransformer",
+    "TransformerFeatureTracker",
     "StreetFighterDiscreteActions",
     "IntelligentRewardCalculator",
-    "EnhancedQualityBasedExperienceBuffer",
-    "GoldenExperienceBuffer",
-    "PolicyMemoryManager",
-    "EnhancedEnergyStabilityManager",
-    "EnhancedCheckpointManager",
-    "verify_fixed_energy_flow",
-    "make_fixed_env",
+    "QualityBasedExperienceBuffer",
+    "CheckpointManager",
+    "make_env",
+    "verify_transformer_flow",
     "safe_divide",
     "safe_std",
     "safe_mean",
     "sanitize_array",
     "ensure_scalar",
-    "safe_comparison",
-    "ensure_feature_dimension",
-    "VECTOR_FEATURE_DIM",
     "MAX_FIGHT_STEPS",
+    "TRANSFORMER_DIM",
+    "TRANSFORMER_HEADS",
+    "TRANSFORMER_LAYERS",
 ]
 
-print(f"🥊 MINIMAL FIX - Complete wrapper.py loaded successfully!")
-print(f"   - MAIN FIX: Quality threshold lowered from 0.6 to 0.3")
-print(f"   - ONLY other change: Added {MAX_FIGHT_STEPS} step timeout")
-print(f"   - Your original health detection: KEPT UNCHANGED")
-print(f"🎯 Ready for learning with FIXED quality threshold!")
+print(f"🚀 Energy-Based Transformer wrapper loaded successfully!")
+print(f"   - Transformer architecture ready")
+print(f"   - Single log folder: logs/")
+print(f"   - Single checkpoint folder: checkpoints/")
+print(f"🎯 Ready for energy-based transformer training!")
