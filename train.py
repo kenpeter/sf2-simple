@@ -41,8 +41,9 @@ class EnergyBasedTransformerTrainer:
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Initialize environment
+        # Initialize environment with render flag
         print(f"🎮 Initializing environment...")
+        print(f"   - Render enabled: {args.render}")
         self.env = make_env(render=args.render)
 
         # Initialize energy-based transformer
@@ -667,11 +668,21 @@ def main():
     parser.add_argument(
         "--load-checkpoint", type=str, default=None, help="Path to checkpoint to load"
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume from checkpoint (alias for --load-checkpoint)",
+    )
 
     # Rendering arguments
     parser.add_argument("--render", action="store_true", help="Render the environment")
 
     args = parser.parse_args()
+
+    # Handle resume alias
+    if args.resume and not args.load_checkpoint:
+        args.load_checkpoint = args.resume
 
     # Print configuration
     print(f"🚀 Energy-Based Transformer Training Configuration:")
@@ -683,6 +694,8 @@ def main():
     print(f"   Temperature: {args.temperature}")
     print(f"   Target Win Rate: {args.target_win_rate:.1%}")
     print(f"   Max Fight Steps: {MAX_FIGHT_STEPS}")
+    print(f"   Render: {args.render}")
+    print(f"   Resume from: {args.load_checkpoint}")
 
     # Initialize and run trainer
     try:

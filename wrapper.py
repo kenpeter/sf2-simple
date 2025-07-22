@@ -408,8 +408,10 @@ class StreetFighterDiscreteActions:
 class StreetFighterTransformerWrapper(gym.Wrapper):
     """🥊 Street Fighter wrapper for Energy-Based Transformers."""
 
-    def __init__(self, env):
+    def __init__(self, env, render=False):
         super().__init__(env)
+
+        self.render_enabled = render
 
         self.reward_calculator = IntelligentRewardCalculator()
         self.feature_tracker = TransformerFeatureTracker()
@@ -437,7 +439,7 @@ class StreetFighterTransformerWrapper(gym.Wrapper):
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
-        print(f"🥊 StreetFighterTransformerWrapper initialized")
+        print(f"🥊 StreetFighterTransformerWrapper initialized (render: {render})")
 
     def reset(self, **kwargs):
         """Reset environment."""
@@ -463,6 +465,13 @@ class StreetFighterTransformerWrapper(gym.Wrapper):
         button_combination = self.action_mapper.get_action(action)
         retro_action = self._convert_to_retro_action(button_combination)
         obs, reward, done, truncated, info = self.env.step(retro_action)
+
+        # Render if enabled
+        if self.render_enabled:
+            try:
+                self.env.render()
+            except:
+                pass  # Ignore render errors
 
         player_health, opponent_health = self._extract_health(info)
 
@@ -886,7 +895,7 @@ def make_env(
             use_restricted_actions=retro.Actions.DISCRETE,
             render_mode="human" if render else None,
         )
-        env = StreetFighterTransformerWrapper(env)
+        env = StreetFighterTransformerWrapper(env, render=render)
         print(f"✅ Environment created successfully (render: {render})")
         return env
     except Exception as e:
