@@ -798,41 +798,41 @@ class QualityBasedExperienceBuffer:
                 )
 
     def calculate_experience_quality(self, reward, reward_breakdown, episode_stats):
-        """Calculate quality score for experience - FIXED LOGIC to ensure good/bad split."""
-        base_quality = 0.2  # Lower base quality
+        """Calculate quality score for experience - BALANCED to get both good and bad."""
+        base_quality = 0.3  # Higher base quality to ensure some good experiences
 
-        # Reward component (more sensitive)
-        reward_component = min(max(reward, -2.0), 3.0) * 0.15
+        # Reward component (more generous)
+        reward_component = min(max(reward, -2.0), 3.0) * 0.1
 
-        # Win/loss component (most important) - FIXED
+        # Win/loss component (most important)
         if "round_won" in reward_breakdown:
-            win_component = 0.5  # Strong positive signal
+            win_component = 0.4  # Strong positive signal
         elif "round_lost" in reward_breakdown:
-            win_component = -0.4  # Strong negative signal
+            win_component = -0.2  # Moderate negative signal
         else:
             win_component = 0.0
 
-        # Health advantage component
-        health_component = reward_breakdown.get("health_advantage", 0.0) * 0.1
+        # Health advantage component (more generous)
+        health_component = reward_breakdown.get("health_advantage", 0.0) * 0.15
 
-        # Damage dealing component
-        damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.2)
+        # Damage dealing component (more generous)
+        damage_component = min(reward_breakdown.get("damage_dealt", 0.0), 0.25)
 
-        # Damage taken penalty - FIXED
+        # Damage taken penalty (less harsh)
         damage_taken_penalty = (
-            reward_breakdown.get("damage_taken", 0.0) * 0.3
-        )  # This is already negative
+            reward_breakdown.get("damage_taken", 0.0) * 0.1
+        )  # Less penalty
 
         # Episode performance component
         if episode_stats:
-            episode_component = 0.15 if episode_stats.get("won", False) else -0.15
+            episode_component = 0.1 if episode_stats.get("won", False) else -0.05
         else:
             episode_component = 0.0
 
-        # Add step penalty to create more bad experiences
+        # Step penalty (much less harsh)
         step_penalty = (
-            reward_breakdown.get("step_penalty", 0.0) * 2.0
-        )  # Amplify step penalty
+            reward_breakdown.get("step_penalty", 0.0) * 0.5
+        )  # Reduced from 2.0
 
         quality_score = (
             base_quality
@@ -845,22 +845,21 @@ class QualityBasedExperienceBuffer:
             + step_penalty
         )
 
-        # Ensure we get both good and bad experiences - FIXED RANGE
+        # Ensure we get both good and bad experiences
         quality_score = max(0.0, min(1.0, quality_score))
 
-        # Force some experiences to be bad if we have too many good ones
-        if hasattr(self, "_force_bad_counter"):
-            self._force_bad_counter += 1
+        # Add some randomness to ensure variety
+        if hasattr(self, "_random_adjustment_counter"):
+            self._random_adjustment_counter += 1
         else:
-            self._force_bad_counter = 1
+            self._random_adjustment_counter = 1
 
-        # Every 10th experience is forced to be bad if quality is borderline
-        if (
-            self._force_bad_counter % 10 == 0
-            and quality_score > 0.25
-            and quality_score < 0.35
-        ):
-            quality_score = 0.25  # Force it to be bad
+        # Every 5th experience gets a small random boost to create variety
+        if self._random_adjustment_counter % 5 == 0:
+            import random
+
+            quality_score += random.uniform(-0.1, 0.1)
+            quality_score = max(0.0, min(1.0, quality_score))
 
         # Debug quality calculation
         if hasattr(self, "_quality_debug_count"):
@@ -868,8 +867,9 @@ class QualityBasedExperienceBuffer:
         else:
             self._quality_debug_count = 1
 
-        if self._quality_debug_count % 200 == 0:
+        if self._quality_debug_count % 500 == 0:
             print(f"🔍 Quality Debug #{self._quality_debug_count}: {quality_score:.3f}")
+            print(f"   Reward breakdown: {reward_breakdown}")
             print(
                 f"   Components: base={base_quality}, reward={reward_component:.3f}, win={win_component:.3f}"
             )
@@ -877,6 +877,9 @@ class QualityBasedExperienceBuffer:
                 f"   health={health_component:.3f}, damage={damage_component:.3f}, taken={damage_taken_penalty:.3f}"
             )
             print(f"   episode={episode_component:.3f}, step={step_penalty:.3f}")
+            print(
+                f"   Threshold: {self.quality_threshold}, Above: {'YES' if quality_score >= self.quality_threshold else 'NO'}"
+            )
 
         return quality_score
 

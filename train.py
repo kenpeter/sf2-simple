@@ -597,6 +597,9 @@ def main():
         "--eval-frequency", type=int, default=5, help="Evaluate every N episodes"
     )
     parser.add_argument(
+        "--eval-freq", type=int, default=None, help="Alias for --eval-frequency"
+    )
+    parser.add_argument(
         "--checkpoint-frequency",
         type=int,
         default=25,
@@ -639,8 +642,8 @@ def main():
     parser.add_argument(
         "--quality-threshold",
         type=float,
-        default=0.3,
-        help="Quality threshold for experiences",
+        default=0.25,
+        help="Quality threshold for experiences (lowered for better balance)",
     )
 
     # Evaluation arguments
@@ -673,9 +676,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle resume alias
+    # Handle aliases
     if args.resume and not args.load_checkpoint:
         args.load_checkpoint = args.resume
+    if args.eval_freq and not args.eval_frequency:
+        args.eval_frequency = args.eval_freq
 
     # Print configuration
     print(f"🚀 Energy-Based Transformer Training Configuration:")
