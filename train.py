@@ -45,6 +45,9 @@ class EBTEnhancedTrainer:
 
         # Initialize environment (render is handled internally by the environment)
         print(f"🎮 Initializing EBT-enhanced environment...")
+        # Note: To prevent slow auto-rendering, you might need to modify wrapper.py
+        # to pass render_mode=None to retro.make if your retro version supports it.
+        # This trainer will handle periodic rendering via the --render flag.
         self.env = make_ebt_enhanced_env()
 
         # Initialize EBT-enhanced verifier and agent
@@ -263,6 +266,10 @@ class EBTEnhancedTrainer:
 
             # Execute action
             next_obs, reward, done, truncated, info = self.env.step(action)
+
+            # --- CHANGE: Add periodic rendering to improve performance ---
+            if self.args.render and episode_steps % 10 == 0:
+                self.env.render()
 
             # Update EBT sequence tracker with energy score
             if hasattr(self.env, "feature_tracker") and thinking_info:
@@ -898,15 +905,13 @@ class EBTEnhancedTrainer:
             ebt_success_rate = episode_stats.get("ebt_success_rate", 1.0)
             self.ebt_performance_history.append(ebt_success_rate)
 
-            # Training step if we have enough experiences
-            if (
-                len(self.experience_buffer.good_experiences)
-                >= self.args.batch_size // 2
-            ):
-                train_stats = self.train_step()
-                if train_stats:
-                    recent_losses.append(train_stats.get("contrastive_loss", 0.0))
+            # --- CHANGE: Always attempt a training step to kickstart learning ---
+            # The train_step method itself will return None if there's not enough data.
+            train_stats = self.train_step()
+            if train_stats:
+                recent_losses.append(train_stats.get("contrastive_loss", 0.0))
             else:
+                # To avoid errors later, ensure train_stats is a dict
                 train_stats = {}
 
             # Periodic evaluation and policy memory operations
@@ -916,17 +921,13 @@ class EBTEnhancedTrainer:
                 self.win_rate_history.append(performance_stats["win_rate"])
 
                 # Calculate energy quality metrics
-                if train_stats:
-                    energy_separation = train_stats.get("energy_separation", 0.0)
-                    energy_quality = abs(energy_separation) * 10.0
-                else:
-                    energy_separation = 0.0
-                    energy_quality = 0.0
+                energy_separation = train_stats.get("energy_separation", 0.0)
+                energy_quality = abs(energy_separation) * 10.0
                 self.energy_quality_history.append(energy_quality)
 
                 # Policy memory operations with EBT awareness
                 policy_memory_action = self.handle_policy_memory_operations(
-                    performance_stats, train_stats or {}
+                    performance_stats, train_stats
                 )
 
                 # Enhanced stability manager with EBT metrics
@@ -1138,11 +1139,11 @@ def parse_arguments():
         default=100,
         help="Checkpoint saving frequency",
     )
+    # --- CHANGE: Updated render flag help text ---
     parser.add_argument(
-        "--render", action="store_true", help="Enable environment rendering"
-    )
-    parser.add_argument(
-        "--no_render", action="store_true", help="Disable environment rendering"
+        "--render",
+        action="store_true",
+        help="Enable environment rendering (every 10 steps)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
@@ -1206,10 +1207,11 @@ def parse_arguments():
         default=2000,
         help="Golden buffer capacity",
     )
+    # --- CHANGE: Lowered default quality threshold to kickstart learning ---
     parser.add_argument(
         "--quality_threshold",
         type=float,
-        default=0.6,
+        default=0.55,
         help="Experience quality threshold",
     )
     parser.add_argument(
@@ -1331,8 +1333,9 @@ def main():
     # Enhanced configuration display
     print(f"\n🚀 EBT-ENHANCED TRAINING CONFIGURATION:")
     print(f"   🎮 Environment: Street Fighter (Retro)")
+    # --- CHANGE: Simplified and corrected rendering status message ---
     print(
-        f"   🎥 Rendering: {'REQUESTED' if args.render and not args.no_render else 'DISABLED'}"
+        f"   🎥 Rendering: {'ENABLED (every 10 steps)' if args.render else 'DISABLED'}"
     )
     print(f"   📝 Note: Rendering is controlled by environment implementation")
     print(f"   🎲 Random Seed: {args.seed}")
