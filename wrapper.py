@@ -2194,16 +2194,22 @@ def verify_ebt_energy_flow(verifier, observation_space, action_space):
 
 
 def make_ebt_enhanced_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
+    game="StreetFighterIISpecialChampionEdition-Genesis",
+    state="ken_bison_12.state",
+    render_mode=None,  # <<< FIX: Added the render_mode argument
 ):
     """Create EBT-enhanced Street Fighter environment."""
     try:
+        # Pass the render_mode argument down to the core retro.make function
         env = retro.make(
-            game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
+            game=game,
+            state=state,
+            use_restricted_actions=retro.Actions.DISCRETE,
+            render_mode=render_mode,  # <<< FIX: Use the argument here
         )
         env = StreetFighterVisionWrapper(env)
 
-        print(f"   ✅ EBT-Enhanced environment created")
+        print(f"   ✅ EBT-Enhanced environment created (Render Mode: {render_mode})")
         return env
 
     except Exception as e:
