@@ -1121,7 +1121,7 @@ def parse_arguments():
 
     # Environment and basic training parameters
     parser.add_argument(
-        "--max_episodes", type=int, default=10000, help="Maximum training episodes"
+        "--max_episodes", type=int, default=1000, help="Maximum training episodes"
     )
     parser.add_argument(
         "--max_episode_steps",
