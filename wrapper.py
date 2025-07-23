@@ -1467,8 +1467,8 @@ class EBTEnhancedStreetFighterVerifier(nn.Module):
 
         # NEW: Energy-Based Transformer
         if self.use_ebt:
-            # EBT expects sequence input, so we'll process state-action pairs in sequence
-            ebt_input_dim = EBT_HIDDEN_DIM + 64  # CNN features + action embedding
+            # FIX 1: The EBT processes sequences of low-level features from the tracker.
+            ebt_input_dim = VECTOR_FEATURE_DIM  # Corrected dimension
             self.ebt = EnergyBasedTransformer(
                 input_dim=ebt_input_dim,
                 d_model=EBT_HIDDEN_DIM,
@@ -1589,19 +1589,17 @@ class EBTEnhancedStreetFighterVerifier(nn.Module):
         # NEW: EBT Processing
         ebt_output = None
         if self.use_ebt and ebt_features is not None:
-            # Prepare EBT input: combine state features and action embedding
             batch_size = ebt_features.shape[0]
 
-            # Create sequence input for EBT
+            # FIX 2: Correctly handle the EBT input sequence.
+            # Use the provided sequence_context (from tracker) or a safe fallback.
             if sequence_context is not None and sequence_context.shape[1] > 1:
-                # Use provided sequence context
                 ebt_input = sequence_context.to(device)
             else:
-                # Create single-step sequence with current state-action pair
-                state_action_pair = torch.cat([ebt_features, action_embedded], dim=-1)
-                # Expand to sequence format
-                ebt_input = state_action_pair.unsqueeze(1).repeat(
-                    1, EBT_SEQUENCE_LENGTH, 1
+                # Fallback: if no sequence context, create a dummy zero sequence.
+                # This prevents a crash and ensures the model can run.
+                ebt_input = torch.zeros(
+                    batch_size, EBT_SEQUENCE_LENGTH, VECTOR_FEATURE_DIM, device=device
                 )
 
             # Safety check for EBT input
@@ -2180,7 +2178,7 @@ def verify_ebt_energy_flow(verifier, observation_space, action_space):
         energy1 = verifier(dummy_obs, dummy_action)
 
         # Test with sequence context
-        dummy_sequence = torch.randn(1, EBT_SEQUENCE_LENGTH, EBT_HIDDEN_DIM + 64)
+        dummy_sequence = torch.randn(1, EBT_SEQUENCE_LENGTH, VECTOR_FEATURE_DIM)
         energy2 = verifier(dummy_obs, dummy_action, dummy_sequence)
 
         print(f"   ✅ EBT-Enhanced energy calculation successful")

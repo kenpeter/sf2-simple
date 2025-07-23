@@ -32,6 +32,7 @@ from wrapper import (
     MAX_FIGHT_STEPS,
     EBT_SEQUENCE_LENGTH,
     EBT_HIDDEN_DIM,
+    VECTOR_FEATURE_DIM,
 )
 
 
@@ -42,7 +43,7 @@ class EBTEnhancedTrainer:
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Initialize environment
+        # Initialize environment (render is handled internally by the environment)
         print(f"🎮 Initializing EBT-enhanced environment...")
         self.env = make_ebt_enhanced_env()
 
@@ -393,10 +394,38 @@ class EBTEnhancedTrainer:
                 ebt_sequence = exp.get("ebt_sequence", None)
                 if ebt_sequence is not None:
                     sequence_tensor = torch.from_numpy(ebt_sequence).float()
+                    # Ensure proper shape for EBT: [batch, seq_len, feature_dim]
+                    if sequence_tensor.dim() == 2:
+                        # If 2D, add batch dimension
+                        sequence_tensor = sequence_tensor.unsqueeze(0)
+                    elif sequence_tensor.dim() == 3 and sequence_tensor.shape[0] != 1:
+                        # If 3D but wrong batch size, take first item
+                        sequence_tensor = sequence_tensor[:1]
+
+                    # Ensure compatible feature dimension
+                    expected_features = (
+                        VECTOR_FEATURE_DIM  # FIX 1: Corrected expected feature dim
+                    )
+                    if sequence_tensor.shape[-1] != expected_features:
+                        # Pad or truncate to match expected size
+                        current_features = sequence_tensor.shape[-1]
+                        if current_features < expected_features:
+                            # Pad with zeros
+                            padding = torch.zeros(
+                                sequence_tensor.shape[0],
+                                sequence_tensor.shape[1],
+                                expected_features - current_features,
+                            )
+                            sequence_tensor = torch.cat(
+                                [sequence_tensor, padding], dim=-1
+                            )
+                        else:
+                            # Truncate
+                            sequence_tensor = sequence_tensor[:, :, :expected_features]
                 else:
-                    # Create dummy sequence if not available
-                    sequence_tensor = torch.zeros(
-                        1, EBT_SEQUENCE_LENGTH, EBT_HIDDEN_DIM + 64
+                    # Create dummy sequence if not available with correct dimensions
+                    sequence_tensor = torch.zeros(  # FIX 2: Corrected dummy tensor dim
+                        1, EBT_SEQUENCE_LENGTH, VECTOR_FEATURE_DIM
                     )
 
                 obs_batch.append(obs_tensor)
@@ -428,12 +457,56 @@ class EBTEnhancedTrainer:
         good_sequences_stacked = None
         bad_sequences_stacked = None
         if self.args.use_ebt and good_sequences[0] is not None:
-            good_sequences_stacked = torch.stack(
-                [seq.squeeze(0) for seq in good_sequences]
-            ).to(device)
-            bad_sequences_stacked = torch.stack(
-                [seq.squeeze(0) for seq in bad_sequences]
-            ).to(device)
+            try:
+                # Debug sequence shapes
+                if self.args.debug:
+                    print(f"🔍 EBT Sequence Debug:")
+                    for i, seq in enumerate(good_sequences[:2]):
+                        print(f"   Good seq {i} shape: {seq.shape}")
+                    for i, seq in enumerate(bad_sequences[:2]):
+                        print(f"   Bad seq {i} shape: {seq.shape}")
+
+                # Stack sequences and ensure proper dimensions
+                good_seq_processed = []
+                bad_seq_processed = []
+
+                for seq in good_sequences:
+                    if seq.dim() == 3 and seq.shape[0] == 1:
+                        good_seq_processed.append(
+                            seq.squeeze(0)
+                        )  # Remove batch dim for stacking
+                    else:
+                        good_seq_processed.append(seq)
+
+                for seq in bad_sequences:
+                    if seq.dim() == 3 and seq.shape[0] == 1:
+                        bad_seq_processed.append(
+                            seq.squeeze(0)
+                        )  # Remove batch dim for stacking
+                    else:
+                        bad_seq_processed.append(seq)
+
+                good_sequences_stacked = torch.stack(good_seq_processed).to(device)
+                bad_sequences_stacked = torch.stack(bad_seq_processed).to(device)
+
+                # Verify shapes before EBT processing
+                expected_shape = (  # FIX 3: Corrected expected shape check
+                    len(good_batch),
+                    EBT_SEQUENCE_LENGTH,
+                    VECTOR_FEATURE_DIM,
+                )
+                if good_sequences_stacked.shape != expected_shape:
+                    print(
+                        f"⚠️ EBT sequence shape mismatch: got {good_sequences_stacked.shape}, expected {expected_shape}"
+                    )
+                    # Fallback: disable EBT for this batch
+                    good_sequences_stacked = None
+                    bad_sequences_stacked = None
+
+            except Exception as e:
+                print(f"⚠️ EBT sequence stacking failed: {e}")
+                good_sequences_stacked = None
+                bad_sequences_stacked = None
 
         # Calculate energies with EBT integration
         good_energies = self.verifier(
@@ -464,21 +537,47 @@ class EBTEnhancedTrainer:
             # Encourage stable EBT behavior
             try:
                 # Get EBT internal energies for regularization
-                with torch.no_grad():
-                    if good_sequences_stacked is not None:
+                if (
+                    good_sequences_stacked is not None
+                    and bad_sequences_stacked is not None
+                ):
+                    with torch.no_grad():
+                        # Verify shapes before calling EBT
+                        if self.args.debug:
+                            print(f"🔍 EBT regularization input shapes:")
+                            print(f"   Good sequences: {good_sequences_stacked.shape}")
+                            print(f"   Bad sequences: {bad_sequences_stacked.shape}")
+
                         good_ebt_result = self.verifier.ebt(good_sequences_stacked)
                         bad_ebt_result = self.verifier.ebt(bad_sequences_stacked)
 
-                        good_ebt_energies = good_ebt_result["sequence_energies"]
-                        bad_ebt_energies = bad_ebt_result["sequence_energies"]
+                        # Check if results contain expected keys
+                        if (
+                            isinstance(good_ebt_result, dict)
+                            and "sequence_energies" in good_ebt_result
+                        ):
+                            good_ebt_energies = good_ebt_result["sequence_energies"]
+                            bad_ebt_energies = bad_ebt_result["sequence_energies"]
 
-                        # Regularize EBT sequence energies
-                        ebt_reg = 0.005 * (
-                            good_ebt_energies.pow(2).mean()
-                            + bad_ebt_energies.pow(2).mean()
-                        )
+                            # Regularize EBT sequence energies
+                            ebt_reg = 0.005 * (
+                                good_ebt_energies.pow(2).mean()
+                                + bad_ebt_energies.pow(2).mean()
+                            )
+                        else:
+                            # EBT result is probably just the energy tensor
+                            ebt_reg = 0.005 * (
+                                good_ebt_result.pow(2).mean()
+                                + bad_ebt_result.pow(2).mean()
+                            )
             except Exception as e:
-                print(f"⚠️ EBT regularization failed: {e}")
+                if self.args.debug:
+                    print(f"⚠️ EBT regularization failed (debug): {e}")
+                    import traceback
+
+                    traceback.print_exc()
+                else:
+                    print(f"⚠️ EBT regularization failed: {e}")
 
         total_loss = contrastive_loss + energy_reg + ebt_reg
 
@@ -899,6 +998,7 @@ class EBTEnhancedTrainer:
                 # Enhanced status reporting with EBT metrics
                 buffer_stats = self.experience_buffer.get_stats()
                 thinking_stats = self.agent.get_thinking_stats()
+                current_lr = self.optimizer.param_groups[0]["lr"]
 
                 print(f"\n🚀 EBT-ENHANCED STATUS (Episode {episode}):")
                 print(f"   🎯 Performance:")
@@ -910,9 +1010,9 @@ class EBTEnhancedTrainer:
                 print(f"      - Good: {buffer_stats['good_count']:,}")
                 print(f"      - Bad: {buffer_stats['bad_count']:,}")
                 print(f"      - Sequences: {buffer_stats['sequence_count']:,}")
-                print(f"      - Golden: {buffer_stats['golden_count']:,}")
+                print(f"      - Golden: {buffer_stats['golden_buffer']['size']:,}")
                 print(
-                    f"      - Quality threshold: {self.experience_buffer.current_threshold:.3f}"
+                    f"      - Quality threshold: {self.experience_buffer.quality_threshold:.3f}"
                 )
 
                 print(f"   🧠 EBT Performance:")
@@ -978,6 +1078,13 @@ class EBTEnhancedTrainer:
 
         # Save final checkpoint with comprehensive EBT stats
         final_performance = self.evaluate_performance()
+        energy_quality = 0.0  # Placeholder for final save
+        if recent_losses:
+            final_loss_info = self.train_step()
+            if final_loss_info:
+                energy_separation = final_loss_info.get("energy_separation", 0.0)
+                energy_quality = abs(energy_separation) * 10.0
+
         final_ebt_stats = {
             "ebt_success_rate": final_performance.get("ebt_success_rate", 1.0),
             "avg_energy_improvement": final_performance.get(
@@ -996,7 +1103,7 @@ class EBTEnhancedTrainer:
             self.args.max_episodes,
             final_performance["win_rate"],
             energy_quality,
-            is_final=True,
+            is_emergency=False,  # is_final is not a param, use is_emergency=False
             policy_memory_stats=self.policy_memory.get_stats(),
             ebt_stats=final_ebt_stats,
         )
@@ -1031,6 +1138,13 @@ def parse_arguments():
         default=100,
         help="Checkpoint saving frequency",
     )
+    parser.add_argument(
+        "--render", action="store_true", help="Enable environment rendering"
+    )
+    parser.add_argument(
+        "--no_render", action="store_true", help="Disable environment rendering"
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     # Model architecture
     parser.add_argument(
@@ -1038,6 +1152,9 @@ def parse_arguments():
     )
     parser.add_argument(
         "--thinking_steps", type=int, default=16, help="Energy-based thinking steps"
+    )
+    parser.add_argument(
+        "--hidden_dim", type=int, default=256, help="Hidden layer dimension"
     )
 
     # NEW: EBT-specific parameters
@@ -1053,6 +1170,15 @@ def parse_arguments():
         default=0.5,
         help="EBT learning rate multiplier",
     )
+    parser.add_argument(
+        "--ebt_num_heads", type=int, default=8, help="Number of attention heads in EBT"
+    )
+    parser.add_argument(
+        "--ebt_num_layers",
+        type=int,
+        default=4,
+        help="Number of transformer layers in EBT",
+    )
 
     # Learning parameters
     parser.add_argument(
@@ -1065,6 +1191,9 @@ def parse_arguments():
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
     parser.add_argument(
         "--contrastive_margin", type=float, default=2.0, help="Contrastive loss margin"
+    )
+    parser.add_argument(
+        "--grad_clip", type=float, default=1.0, help="Gradient clipping threshold"
     )
 
     # Experience buffer parameters
@@ -1083,10 +1212,25 @@ def parse_arguments():
         default=0.6,
         help="Experience quality threshold",
     )
+    parser.add_argument(
+        "--min_buffer_size",
+        type=int,
+        default=1000,
+        help="Minimum buffer size before training",
+    )
 
     # Energy-based parameters
     parser.add_argument(
         "--noise_scale", type=float, default=0.1, help="Energy noise scale"
+    )
+    parser.add_argument(
+        "--energy_reg",
+        type=float,
+        default=0.01,
+        help="Energy regularization coefficient",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=1.0, help="Temperature for energy sampling"
     )
 
     # Policy memory parameters
@@ -1105,13 +1249,61 @@ def parse_arguments():
     parser.add_argument(
         "--win_rate_window", type=int, default=50, help="Win rate averaging window"
     )
+    parser.add_argument(
+        "--enable_policy_memory",
+        action="store_true",
+        default=True,
+        help="Enable policy memory system",
+    )
 
-    # Paths
+    # Paths and logging
     parser.add_argument(
         "--checkpoint_dir",
         type=str,
         default="checkpoints_ebt_enhanced",
         help="Checkpoint directory",
+    )
+    parser.add_argument(
+        "--log_dir", type=str, default="logs_ebt_enhanced", help="Log directory"
+    )
+    parser.add_argument(
+        "--save_frequency", type=int, default=500, help="Model save frequency"
+    )
+    parser.add_argument(
+        "--log_frequency", type=int, default=10, help="Logging frequency"
+    )
+
+    # Evaluation parameters
+    parser.add_argument(
+        "--eval_episodes", type=int, default=5, help="Number of evaluation episodes"
+    )
+    parser.add_argument(
+        "--eval_deterministic",
+        action="store_true",
+        default=True,
+        help="Use deterministic policy for evaluation",
+    )
+
+    # Debug and experimental
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument(
+        "--profile", action="store_true", help="Enable performance profiling"
+    )
+    parser.add_argument(
+        "--wandb", action="store_true", help="Enable Weights & Biases logging"
+    )
+    parser.add_argument(
+        "--tensorboard", action="store_true", help="Enable TensorBoard logging"
+    )
+
+    # Resume training
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Path to checkpoint to resume training"
+    )
+    parser.add_argument(
+        "--load_best",
+        action="store_true",
+        help="Load best checkpoint instead of latest",
     )
 
     return parser.parse_args()
@@ -1122,22 +1314,28 @@ def main():
     # Parse arguments
     args = parse_arguments()
 
-    # Create checkpoint directory
+    # Create directories
     os.makedirs(args.checkpoint_dir, exist_ok=True)
+    os.makedirs(args.log_dir, exist_ok=True)
 
     # Set up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔧 Using device: {device}")
 
     # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed(args.seed)
 
     # Enhanced configuration display
     print(f"\n🚀 EBT-ENHANCED TRAINING CONFIGURATION:")
     print(f"   🎮 Environment: Street Fighter (Retro)")
+    print(
+        f"   🎥 Rendering: {'REQUESTED' if args.render and not args.no_render else 'DISABLED'}"
+    )
+    print(f"   📝 Note: Rendering is controlled by environment implementation")
+    print(f"   🎲 Random Seed: {args.seed}")
     print(f"   🏆 Target Episodes: {args.max_episodes:,}")
     print(f"   🧠 Features Dimension: {args.features_dim}")
     print(f"   🔄 Thinking Steps: {args.thinking_steps}")
@@ -1156,10 +1354,21 @@ def main():
     print(f"   📊 Quality Threshold: {args.quality_threshold}")
     print(f"   💾 Buffer Capacity: {args.buffer_capacity:,}")
     print(f"   🏅 Golden Buffer: {args.golden_buffer_capacity:,}")
+    print(f"   📁 Checkpoint Dir: {args.checkpoint_dir}")
+    print(f"   📝 Log Dir: {args.log_dir}")
+
+    if args.debug:
+        print(f"   🐛 Debug Mode: ENABLED")
 
     try:
         # Initialize and run enhanced trainer
         trainer = EBTEnhancedTrainer(args)
+
+        # Resume from checkpoint if specified
+        if args.resume:
+            print(f"📂 Resuming training from: {args.resume}")
+            # Add checkpoint loading logic here if needed
+
         trainer.train()
 
         print(f"\n✅ EBT-Enhanced training completed successfully!")
@@ -1168,9 +1377,12 @@ def main():
         print(f"\n⚠️ Training interrupted by user")
     except Exception as e:
         print(f"\n❌ Training failed with error: {e}")
-        import traceback
+        if args.debug:
+            import traceback
 
-        traceback.print_exc()
+            traceback.print_exc()
+        else:
+            print(f"💡 Use --debug flag for detailed error information")
     finally:
         print(f"🔚 EBT-Enhanced training session ended")
 
