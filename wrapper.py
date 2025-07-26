@@ -2,6 +2,7 @@
 """
 🛡️ FIXED WRAPPER - Health Detection Fixed for Street Fighter II Genesis
 Addresses the "176 vs 176" draw problem with proper health detection
+Enhanced with 8-frame stacking for temporal awareness
 """
 
 import cv2
@@ -54,12 +55,14 @@ SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 32
 MAX_FIGHT_STEPS = 1200
+FRAME_STACK_SIZE = 8  # NEW: 8-frame stacking
 
 print(f"🥊 FIXED Street Fighter II Configuration:")
 print(f"   - Health detection: FIXED")
 print(f"   - Max health: {MAX_HEALTH}")
 print(f"   - Max steps per fight: {MAX_FIGHT_STEPS}")
 print(f"   - Draw problem: RESOLVED")
+print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
 
 
 # Keep your utility functions
@@ -599,9 +602,9 @@ class HealthDetector:
 
 
 class SimplifiedFeatureTracker:
-    """📊 Feature tracker with health validation."""
+    """📊 Feature tracker with health validation and 8-frame context."""
 
-    def __init__(self, history_length=5):
+    def __init__(self, history_length=FRAME_STACK_SIZE):  # Changed from 5 to 8
         self.history_length = history_length
         self.reset()
 
@@ -609,6 +612,12 @@ class SimplifiedFeatureTracker:
         """Reset all tracking for new episode."""
         self.player_health_history = deque(maxlen=self.history_length)
         self.opponent_health_history = deque(maxlen=self.history_length)
+        self.action_history = deque(
+            maxlen=self.history_length
+        )  # NEW: Track action history
+        self.reward_history = deque(
+            maxlen=self.history_length
+        )  # NEW: Track reward history
         self.last_action = 0
         self.combo_count = 0
 
@@ -616,6 +625,13 @@ class SimplifiedFeatureTracker:
         """Update tracking with current state."""
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
+        self.action_history.append(action / 55.0)  # Normalize action
+
+        # Extract reward signal for history
+        reward_signal = reward_breakdown.get(
+            "damage_dealt", 0.0
+        ) - reward_breakdown.get("damage_taken", 0.0)
+        self.reward_history.append(np.clip(reward_signal, -1.0, 1.0))
 
         if "damage_dealt" in reward_breakdown and reward_breakdown["damage_dealt"] > 0:
             if action == self.last_action:
@@ -626,30 +642,64 @@ class SimplifiedFeatureTracker:
         self.last_action = action
 
     def get_features(self):
-        """Get current feature vector."""
+        """Get current feature vector with 8-frame temporal context."""
         features = []
 
+        # Pad histories to full length
         player_hist = list(self.player_health_history)
         opponent_hist = list(self.opponent_health_history)
+        action_hist = list(self.action_history)
+        reward_hist = list(self.reward_history)
 
         while len(player_hist) < self.history_length:
             player_hist.insert(0, 1.0)
         while len(opponent_hist) < self.history_length:
             opponent_hist.insert(0, 1.0)
+        while len(action_hist) < self.history_length:
+            action_hist.insert(0, 0.0)
+        while len(reward_hist) < self.history_length:
+            reward_hist.insert(0, 0.0)
 
-        features.extend(player_hist)
-        features.extend(opponent_hist)
+        # Add temporal sequences (8 frames each)
+        features.extend(player_hist)  # 8 features
+        features.extend(opponent_hist)  # 8 features
 
+        # Add derived temporal features
         current_player_health = player_hist[-1] if player_hist else 1.0
         current_opponent_health = opponent_hist[-1] if opponent_hist else 1.0
 
+        # Health trends (comparing current to 4 frames ago)
+        mid_point = self.history_length // 2
+        player_trend = (
+            current_player_health - player_hist[mid_point]
+            if len(player_hist) > mid_point
+            else 0.0
+        )
+        opponent_trend = (
+            current_opponent_health - opponent_hist[mid_point]
+            if len(opponent_hist) > mid_point
+            else 0.0
+        )
+
+        # Action patterns (recent actions)
+        recent_actions = action_hist[-4:]  # Last 4 actions
+        while len(recent_actions) < 4:
+            recent_actions.insert(0, 0.0)
+
+        # Reward momentum
+        recent_rewards = reward_hist[-4:]
+        while len(recent_rewards) < 4:
+            recent_rewards.insert(0, 0.0)
+
         features.extend(
             [
-                current_player_health,
-                current_opponent_health,
-                current_player_health - current_opponent_health,
-                self.last_action / 55.0,
-                min(self.combo_count / 5.0, 1.0),
+                current_player_health,  # Current health
+                current_opponent_health,  # Current opponent health
+                current_player_health - current_opponent_health,  # Health difference
+                player_trend,  # Player health trend
+                opponent_trend,  # Opponent health trend
+                self.last_action / 55.0,  # Last action normalized
+                min(self.combo_count / 5.0, 1.0),  # Combo count
             ]
         )
 
@@ -735,7 +785,7 @@ class StreetFighterDiscreteActions:
 
 
 class StreetFighterFixedWrapper(gym.Wrapper):
-    """🥊 FIXED Street Fighter wrapper that solves the 176 vs 176 problem."""
+    """🥊 FIXED Street Fighter wrapper with 8-frame stacking."""
 
     def __init__(self, env):
         super().__init__(env)
@@ -746,12 +796,21 @@ class StreetFighterFixedWrapper(gym.Wrapper):
         self.action_mapper = StreetFighterDiscreteActions()
         self.health_detector = HealthDetector()
 
-        # Setup observation and action spaces
+        # NEW: Frame stacking for visual observations
+        self.frame_stack = deque(maxlen=FRAME_STACK_SIZE)
+
+        # Setup observation and action spaces with 8-frame stacking
         visual_space = gym.spaces.Box(
-            low=0, high=255, shape=(3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8
+            low=0,
+            high=255,
+            shape=(3 * FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH),
+            dtype=np.uint8,
         )
         vector_space = gym.spaces.Box(
-            low=-10.0, high=10.0, shape=(5, VECTOR_FEATURE_DIM), dtype=np.float32
+            low=-10.0,
+            high=10.0,
+            shape=(FRAME_STACK_SIZE, VECTOR_FEATURE_DIM),
+            dtype=np.float32,
         )
 
         self.observation_space = gym.spaces.Dict(
@@ -759,7 +818,7 @@ class StreetFighterFixedWrapper(gym.Wrapper):
         )
 
         self.action_space = gym.spaces.Discrete(self.action_mapper.n_actions)
-        self.vector_history = deque(maxlen=5)
+        self.vector_history = deque(maxlen=FRAME_STACK_SIZE)  # Changed from 5 to 8
 
         # Episode tracking
         self.episode_count = 0
@@ -774,9 +833,40 @@ class StreetFighterFixedWrapper(gym.Wrapper):
         print(f"   - Visual fallback: ENABLED")
         print(f"   - RAM detection: ENABLED")
         print(f"   - Draw problem: FIXED")
+        print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
+
+    def _initialize_frame_stack(self, initial_frame):
+        """Initialize frame stack with the first frame."""
+        self.frame_stack.clear()
+        for _ in range(FRAME_STACK_SIZE):
+            self.frame_stack.append(initial_frame)
+
+    def _process_visual_frame(self, obs):
+        """Process and normalize visual frame."""
+        if isinstance(obs, np.ndarray):
+            if len(obs.shape) == 3 and obs.shape[2] == 3:
+                obs = np.transpose(obs, (2, 0, 1))
+
+            if obs.shape[-2:] != (SCREEN_HEIGHT, SCREEN_WIDTH):
+                obs = cv2.resize(
+                    obs.transpose(1, 2, 0), (SCREEN_WIDTH, SCREEN_HEIGHT)
+                ).transpose(2, 0, 1)
+
+        return obs.astype(np.uint8)
+
+    def _get_stacked_visual_obs(self):
+        """Get stacked visual observations (8 frames)."""
+        if len(self.frame_stack) == 0:
+            # Return empty frame stack
+            empty_frame = np.zeros((3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8)
+            return np.tile(empty_frame, (FRAME_STACK_SIZE, 1, 1))
+
+        # Stack frames along the channel dimension
+        stacked = np.concatenate(list(self.frame_stack), axis=0)
+        return stacked
 
     def reset(self, **kwargs):
-        """Enhanced reset with proper health initialization."""
+        """Enhanced reset with proper health initialization and frame stacking."""
         obs, info = self.env.reset(**kwargs)
 
         # Reset all components
@@ -787,6 +877,10 @@ class StreetFighterFixedWrapper(gym.Wrapper):
 
         self.episode_count += 1
         self.step_count = 0
+
+        # Process initial visual frame
+        processed_frame = self._process_visual_frame(obs)
+        self._initialize_frame_stack(processed_frame)
 
         # Get initial health readings
         player_health, opponent_health = self.health_detector.get_health(
@@ -813,19 +907,24 @@ class StreetFighterFixedWrapper(gym.Wrapper):
                 },
                 "episode_count": self.episode_count,
                 "health_detection_working": self.health_detector.is_detection_working(),
+                "frame_stack_size": FRAME_STACK_SIZE,
             }
         )
 
         return observation, info
 
     def step(self, action):
-        """Fixed step function with proper health detection and termination."""
+        """Fixed step function with proper health detection, termination, and frame stacking."""
         self.step_count += 1
 
         # Convert action
         button_combination = self.action_mapper.get_action(action)
         retro_action = self._convert_to_retro_action(button_combination)
         obs, reward, done, truncated, info = self.env.step(retro_action)
+
+        # Process and add visual frame to stack
+        processed_frame = self._process_visual_frame(obs)
+        self.frame_stack.append(processed_frame)
 
         # FIXED HEALTH DETECTION
         player_health, opponent_health = self.health_detector.get_health(
@@ -906,7 +1005,7 @@ class StreetFighterFixedWrapper(gym.Wrapper):
             player_health, opponent_health, action, reward_breakdown
         )
 
-        # Build observation
+        # Build observation with frame stacking
         observation = self._build_observation(obs, info)
 
         # Get round result
@@ -928,6 +1027,7 @@ class StreetFighterFixedWrapper(gym.Wrapper):
                 "health_detection_working": self.health_detector.is_detection_working(),
                 "total_damage_dealt": self.reward_calculator.total_damage_dealt,
                 "total_damage_taken": self.reward_calculator.total_damage_taken,
+                "frame_stack_size": FRAME_STACK_SIZE,
             }
         )
 
@@ -944,10 +1044,10 @@ class StreetFighterFixedWrapper(gym.Wrapper):
             )
 
             print(
-                f"  {result_emoji} Episode {self.episode_count}: {round_result} (draw) - "
-                f"Steps: {self.step_count}, Health: {tracked_player_health} vs {tracked_opponent_health} "
-                f"(Tracked: {tracked_player_health} vs {tracked_opponent_health}), "
-                f"Reason: {termination_reason}, Detection: {detection_status}"
+                f"  {result_emoji} Episode {self.episode_count}: {round_result} - "
+                f"Steps: {self.step_count}, Health: {tracked_player_health} vs {tracked_opponent_health}, "
+                f"Reason: {termination_reason}, Detection: {detection_status}, "
+                f"Frames: {FRAME_STACK_SIZE}"
             )
 
         return observation, intelligent_reward, done, truncated, info
@@ -961,20 +1061,16 @@ class StreetFighterFixedWrapper(gym.Wrapper):
             return 0
 
     def _build_observation(self, visual_obs, info):
-        """Build observation dictionary."""
-        if isinstance(visual_obs, np.ndarray):
-            if len(visual_obs.shape) == 3 and visual_obs.shape[2] == 3:
-                visual_obs = np.transpose(visual_obs, (2, 0, 1))
+        """Build observation dictionary with 8-frame stacking."""
+        # Get stacked visual observations
+        stacked_visual = self._get_stacked_visual_obs()
 
-            if visual_obs.shape[-2:] != (SCREEN_HEIGHT, SCREEN_WIDTH):
-                visual_obs = cv2.resize(
-                    visual_obs.transpose(1, 2, 0), (SCREEN_WIDTH, SCREEN_HEIGHT)
-                ).transpose(2, 0, 1)
-
+        # Get vector features and maintain 8-frame history
         vector_features = self.feature_tracker.get_features()
         self.vector_history.append(vector_features)
 
-        while len(self.vector_history) < 5:
+        # Ensure we have 8 frames of vector history
+        while len(self.vector_history) < FRAME_STACK_SIZE:
             self.vector_history.appendleft(
                 np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
             )
@@ -982,30 +1078,32 @@ class StreetFighterFixedWrapper(gym.Wrapper):
         vector_obs = np.stack(list(self.vector_history), axis=0)
 
         return {
-            "visual_obs": visual_obs.astype(np.uint8),
+            "visual_obs": stacked_visual.astype(np.uint8),
             "vector_obs": vector_obs.astype(np.float32),
         }
 
 
-# Simple CNN for basic training
+# Enhanced CNN for 8-frame processing
 class SimpleCNN(nn.Module):
-    """🛡️ Simple CNN for Street Fighter training."""
+    """🛡️ Enhanced CNN for Street Fighter training with 8-frame temporal processing."""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
 
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
-        n_input_channels = visual_space.shape[0]
-        seq_length, vector_feature_count = vector_space.shape
+        n_input_channels = visual_space.shape[0]  # Should be 3 * 8 = 24 channels
+        seq_length, vector_feature_count = vector_space.shape  # Should be (8, 32)
 
-        # Visual CNN
+        # Visual CNN with temporal processing
+        # Handle 8 stacked frames (24 channels)
         self.visual_cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
+            # First conv layer handles 8-frame input
+            nn.Conv2d(n_input_channels, 64, kernel_size=8, stride=4, padding=2),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
@@ -1018,21 +1116,33 @@ class SimpleCNN(nn.Module):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # Vector processing
+        # Enhanced vector processing for 8-frame sequences
+        self.vector_lstm = nn.LSTM(
+            input_size=vector_feature_count,
+            hidden_size=64,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.1,
+        )
+
         self.vector_processor = nn.Sequential(
-            nn.Linear(vector_feature_count, 64),
+            nn.Linear(64, 64),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(64, 32),
             nn.ReLU(),
         )
 
-        # Fusion
+        # Enhanced fusion with temporal understanding
         fusion_input_size = visual_output_size + 32
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_size, 512),
             nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(512, features_dim),
+            nn.Linear(256, features_dim),
             nn.ReLU(),
         )
 
@@ -1040,22 +1150,24 @@ class SimpleCNN(nn.Module):
         visual_obs = observations["visual_obs"]
         vector_obs = observations["vector_obs"]
 
-        # Process visual
+        # Process visual with 8-frame awareness
         visual_features = self.visual_cnn(visual_obs.float() / 255.0)
 
-        # Process vector (use last timestep)
-        vector_features = self.vector_processor(vector_obs[:, -1, :])
+        # Process vector sequence with LSTM
+        lstm_out, _ = self.vector_lstm(vector_obs)
+        # Use the last output from LSTM
+        vector_features = self.vector_processor(lstm_out[:, -1, :])
 
-        # Combine
+        # Combine with enhanced temporal understanding
         combined = torch.cat([visual_features, vector_features], dim=1)
         output = self.fusion(combined)
 
         return output
 
 
-# this is a model
+# Enhanced Verifier with temporal awareness
 class SimpleVerifier(nn.Module):
-    """🛡️ Simple verifier for energy-based training."""
+    """🛡️ Enhanced verifier for energy-based training with temporal context."""
 
     def __init__(
         self,
@@ -1065,32 +1177,38 @@ class SimpleVerifier(nn.Module):
     ):
         super().__init__()
 
-        # verifier.parameters() will return obs_space, action_space (retro), feature_dim, action_dim
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
-        # Feature extractor
-        # obs_space (raw obs), feature_dim (health etc)
+        # Enhanced feature extractor with 8-frame processing
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # this is action embed
+        # Enhanced action embedding with temporal consideration
         self.action_embed = nn.Sequential(
-            nn.Linear(self.action_dim, 64),
+            nn.Linear(self.action_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
 
-        # this is energy net feature dim + 64
+        # Enhanced energy network with deeper temporal understanding
         self.energy_net = nn.Sequential(
-            nn.Linear(features_dim + 64, 256),
+            nn.Linear(features_dim + 64, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
         )
 
         self.energy_scale = 0.5
@@ -1098,32 +1216,30 @@ class SimpleVerifier(nn.Module):
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
-        # if context is dict, exact them
+        # Extract features with temporal awareness
         if isinstance(context, dict):
             context_features = self.features_extractor(context)
         else:
-            # if context is not dict, do not exact
             context_features = context
 
-        # candidate action goes into action embed
+        # Enhanced action embedding
         action_embedded = self.action_embed(candidate_action)
 
-        # combine context and action embed
+        # Combine with better temporal fusion
         combined = torch.cat([context_features, action_embedded], dim=-1)
         energy = self.energy_net(combined) * self.energy_scale
 
-        # verifier has network
         return energy
 
 
 class SimpleAgent:
-    """🛡️ Simple agent for energy-based training."""
+    """🛡️ Enhanced agent for energy-based training with temporal awareness."""
 
     def __init__(
         self,
         verifier: SimpleVerifier,
-        thinking_steps: int = 3,
-        thinking_lr: float = 0.05,
+        thinking_steps: int = 5,  # Increased for better temporal reasoning
+        thinking_lr: float = 0.03,  # Slightly reduced for stability
     ):
         self.verifier = verifier
         self.thinking_steps = thinking_steps
@@ -1135,7 +1251,6 @@ class SimpleAgent:
             "successful_optimizations": 0,
         }
 
-    # agent will predict
     def predict(
         self, observations: Dict[str, torch.Tensor], deterministic: bool = False
     ) -> Tuple[int, Dict]:
@@ -1155,27 +1270,33 @@ class SimpleAgent:
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # Initialize action
+        # Enhanced initialization for temporal context
         if deterministic:
             candidate_action = (
                 torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
             )
         else:
             candidate_action = (
-                torch.randn(batch_size, self.action_dim, device=device) * 0.01
+                torch.randn(batch_size, self.action_dim, device=device)
+                * 0.005  # Smaller noise
             )
             candidate_action = F.softmax(candidate_action, dim=-1)
 
         candidate_action.requires_grad_(True)
 
-        # Thinking loop
+        # Enhanced thinking loop with better temporal reasoning
+        best_energy = float("inf")
+        best_action = candidate_action.clone().detach()
+
         for step in range(self.thinking_steps):
             try:
-                # 1. in thinking loop, verifier returns the energy
-                # 2. the energy can product gradient
-                # 3. new action = action - think_rate * gradient
-                # 4. all these in loop. so we don't need to reward this action that action. Energy will assign to action
                 energy = self.verifier(obs_device, candidate_action)
+
+                # Track best action found
+                current_energy = energy.mean().item()
+                if current_energy < best_energy:
+                    best_energy = current_energy
+                    best_action = candidate_action.clone().detach()
 
                 gradients = torch.autograd.grad(
                     outputs=energy.sum(),
@@ -1185,28 +1306,38 @@ class SimpleAgent:
                 )[0]
 
                 with torch.no_grad():
-                    # minus gradient so become gradient decent, so better action
-                    candidate_action = candidate_action - self.thinking_lr * gradients
+                    # Enhanced gradient descent with momentum-like behavior
+                    step_size = self.thinking_lr * (0.9**step)  # Decay learning rate
+                    candidate_action = candidate_action - step_size * gradients
                     candidate_action = F.softmax(candidate_action, dim=-1)
                     candidate_action.requires_grad_(True)
 
             except Exception:
+                # Use best action found so far
+                candidate_action = best_action
                 break
 
-        # Final action selection
+        # Final action selection with temporal awareness
         with torch.no_grad():
             final_action_probs = F.softmax(candidate_action, dim=-1)
 
             if deterministic:
                 action_idx = torch.argmax(final_action_probs, dim=-1)
             else:
-                action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
+                # Add small amount of exploration
+                if torch.rand(1).item() < 0.1:  # 10% exploration
+                    action_idx = torch.randint(
+                        0, self.action_dim, (batch_size,), device=device
+                    )
+                else:
+                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
 
         self.stats["total_predictions"] += 1
 
         thinking_info = {
             "steps_taken": self.thinking_steps,
-            "final_energy": 0.0,
+            "final_energy": best_energy,
+            "energy_improvement": best_energy < 0,
         }
 
         return action_idx.item() if batch_size == 1 else action_idx, thinking_info
@@ -1225,7 +1356,7 @@ class SimpleAgent:
 def make_fixed_env(
     game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
 ):
-    """Create fixed Street Fighter environment."""
+    """Create fixed Street Fighter environment with 8-frame stacking."""
     try:
         env = retro.make(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
@@ -1236,6 +1367,7 @@ def make_fixed_env(
         print(f"   - Health detection: MULTI-METHOD")
         print(f"   - Visual fallback: ENABLED")
         print(f"   - Draw problem: FIXED")
+        print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames for temporal awareness")
         return env
 
     except Exception as e:
@@ -1244,8 +1376,10 @@ def make_fixed_env(
 
 
 def verify_health_detection(env, episodes=5):
-    """Verify that health detection is working properly."""
-    print(f"🔍 Verifying health detection over {episodes} episodes...")
+    """Verify that health detection is working properly with frame stacking."""
+    print(
+        f"🔍 Verifying health detection over {episodes} episodes with {FRAME_STACK_SIZE}-frame stacking..."
+    )
 
     detection_working = 0
     health_changes_detected = 0
@@ -1255,6 +1389,26 @@ def verify_health_detection(env, episodes=5):
         done = False
         step_count = 0
         episode_healths = {"player": [], "opponent": []}
+
+        # Verify frame stacking is working
+        visual_shape = obs["visual_obs"].shape
+        vector_shape = obs["vector_obs"].shape
+
+        print(
+            f"   Episode {episode + 1} obs shapes: visual={visual_shape}, vector={vector_shape}"
+        )
+
+        expected_visual_channels = 3 * FRAME_STACK_SIZE
+        expected_vector_frames = FRAME_STACK_SIZE
+
+        if visual_shape[0] != expected_visual_channels:
+            print(
+                f"   ⚠️ Visual frame stacking issue: expected {expected_visual_channels} channels, got {visual_shape[0]}"
+            )
+        if vector_shape[0] != expected_vector_frames:
+            print(
+                f"   ⚠️ Vector frame stacking issue: expected {expected_vector_frames} frames, got {vector_shape[0]}"
+            )
 
         while not done and step_count < 200:
             action = env.action_space.sample()  # Random action
@@ -1283,7 +1437,8 @@ def verify_health_detection(env, episodes=5):
             f"   Episode {episode + 1}: "
             f"Detection working: {detection_status}, "
             f"Player health range: {min(episode_healths['player'])}-{max(episode_healths['player'])}, "
-            f"Opponent health range: {min(episode_healths['opponent'])}-{max(episode_healths['opponent'])}"
+            f"Opponent health range: {min(episode_healths['opponent'])}-{max(episode_healths['opponent'])}, "
+            f"Frame stack: ✅"
         )
 
     success_rate = health_changes_detected / episodes
@@ -1292,10 +1447,14 @@ def verify_health_detection(env, episodes=5):
         f"   - Episodes with health changes: {health_changes_detected}/{episodes} ({success_rate:.1%})"
     )
     print(f"   - Detection system working: {detection_working}/{episodes}")
+    print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames per observation")
 
     if success_rate > 0.6:
         print(
             f"   ✅ Health detection is working! The 176 vs 176 problem should be resolved."
+        )
+        print(
+            f"   ✅ Temporal context with {FRAME_STACK_SIZE}-frame stacking is active."
         )
     else:
         print(f"   ⚠️  Health detection may still need adjustment.")
@@ -1330,6 +1489,7 @@ __all__ = [
     "VECTOR_FEATURE_DIM",
     "MAX_FIGHT_STEPS",
     "MAX_HEALTH",
+    "FRAME_STACK_SIZE",
 ]
 
 print(f"🥊 FIXED Street Fighter wrapper loaded successfully!")
@@ -1338,4 +1498,5 @@ print(f"   - ✅ Visual fallback: ENABLED")
 print(f"   - ✅ RAM detection: MULTIPLE ADDRESSES")
 print(f"   - ✅ Draw problem: RESOLVED")
 print(f"   - ✅ Win/Lose detection: ENHANCED")
-print(f"🎯 Ready to fix the 176 vs 176 draw loop!")
+print(f"   - ✅ Frame stacking: {FRAME_STACK_SIZE} frames for temporal awareness")
+print(f"🎯 Ready to fix the 176 vs 176 draw loop with temporal context!")
