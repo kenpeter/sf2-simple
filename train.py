@@ -1,4 +1,103 @@
-#!/usr/bin/env python3
+def run_enhanced_episode(self):
+    """Enhanced episode running with detailed win/lose tracking."""
+    obs, info = self.env.reset()
+    done = False
+    truncated = False
+
+    episode_reward = 0.0
+    episode_steps = 0
+    episode_experiences = []
+
+    # Episode-level tracking
+    damage_dealt_total = 0.0
+    damage_taken_total = 0.0
+    round_won = False
+    round_lost = False
+    round_draw = False
+    termination_reason = "ongoing"
+    victory_type = "none"
+    defeat_type = "none"
+
+    # Enhanced tracking for transformer analysis
+    transformer_energy_total = 0.0
+
+    while not done and not truncated and episode_steps < self.args.max_episode_steps:
+        # Enhanced agent prediction with transformer awareness
+        action, thinking_info = self.agent.predict(obs, deterministic=False)
+
+        # Analyze attention patterns
+        self.analyze_attention_patterns(thinking_info)
+
+        # Execute action (FAST - no changes to game speed)
+        next_obs, reward, done, truncated, info = self.env.step(action)
+
+        episode_reward += reward
+        episode_steps += 1
+        self.total_steps += 1
+
+        # Track round result from info
+        if info.get("round_ended", False):
+            termination_reason = info.get("termination_reason", "unknown")
+            round_result = info.get("round_result", "ONGOING")
+            victory_type = info.get("victory_type", "none")
+            defeat_type = info.get("defeat_type", "none")
+
+            if round_result == "WIN":
+                round_won = True
+                round_lost = False
+                round_draw = False
+            elif round_result == "LOSE":
+                round_won = False
+                round_lost = True
+                round_draw = False
+            elif round_result == "DRAW":
+                round_won = False
+                round_lost = False
+                round_draw = True
+
+        # Track episode stats
+        reward_breakdown = info.get("reward_breakdown", {})
+        damage_dealt_total += reward_breakdown.get("damage_dealt", 0.0)
+        damage_taken_total += abs(reward_breakdown.get("damage_taken", 0.0))
+
+        # Legacy round_won detection for compatibility
+        if "round_won" in reward_breakdown:
+            round_won = True
+
+        # Enhanced tracking
+        if "avg_transformer_energy" in thinking_info:
+            transformer_energy_total += abs(thinking_info["avg_transformer_energy"])
+
+        # Calculate enhanced experience quality
+        episode_stats = {
+            "won": round_won,
+            "damage_ratio": safe_divide(
+                damage_dealt_total, damage_taken_total + 1e-6, 1.0
+            ),
+        }
+        quality_score = self.calculate_enhanced_experience_quality(
+            reward, reward_breakdown, episode_stats
+        )
+
+        # Store enhanced experience
+        experience = {
+            "obs": obs,
+            "action": action,
+            "reward": reward,
+            "next_obs": next_obs,
+            "done": done,
+            "thinking_info": thinking_info,
+            "episode": self.episode,
+            "step": episode_steps,
+            "transformer_energy": thinking_info.get("avg_transformer_energy", 0.0),
+        }
+
+        episode_experiences.append((experience, quality_score))
+        obs = next_obs
+
+    # Update win/lose statistics#!/usr/bin/env python3
+
+
 """
 🛡️ ENHANCED TRAINING - Energy-Based Transformers + Current Energy Thinking
 Keeps your original training logic and adds EBT architecture for enhanced learning
@@ -110,12 +209,31 @@ class EnhancedEBTTrainer:
         self.total_steps = 0
         self.best_win_rate = 0.0
 
-        # Enhanced performance tracking
+        # Enhanced performance tracking with detailed win/lose stats
         self.win_rate_history = deque(maxlen=args.win_rate_window)
         self.energy_quality_history = deque(maxlen=50)
         self.transformer_energy_history = deque(maxlen=50)
         self.attention_analysis = deque(maxlen=20)
         self.last_checkpoint_episode = 0
+
+        # NEW: Detailed win/lose tracking
+        self.wins = 0
+        self.losses = 0
+        self.draws = 0
+        self.recent_results = deque(maxlen=20)  # Track last 20 results
+        self.win_types = {
+            "knockout": 0,
+            "technical": 0,
+            "decision": 0,
+            "health_advantage": 0,
+        }
+        self.lose_types = {
+            "knockout": 0,
+            "technical": 0,
+            "decision": 0,
+            "health_disadvantage": 0,
+        }
+        self.termination_reasons = deque(maxlen=50)
 
         # Enhanced logging
         self.setup_logging()
@@ -126,6 +244,7 @@ class EnhancedEBTTrainer:
         print(f"   - Quality threshold: {args.quality_threshold} (FIXED)")
         print(f"   - Transformer layers: Energy-Based attention")
         print(f"   - Fast game UI: MAINTAINED")
+        print(f"   - Win/Lose tracking: ENABLED")
 
     def setup_logging(self):
         """Setup enhanced logging system."""
@@ -301,9 +420,31 @@ class EnhancedEBTTrainer:
             episode_experiences.append((experience, quality_score))
             obs = next_obs
 
+        # Update win/lose statistics
+        if round_won:
+            self.wins += 1
+            self.recent_results.append("WIN")
+            if victory_type in self.win_types:
+                self.win_types[victory_type] += 1
+        elif round_lost:
+            self.losses += 1
+            self.recent_results.append("LOSE")
+            if defeat_type in self.lose_types:
+                self.lose_types[defeat_type] += 1
+        elif round_draw:
+            self.draws += 1
+            self.recent_results.append("DRAW")
+        else:
+            self.recent_results.append("UNKNOWN")
+
+        # Track termination reason
+        self.termination_reasons.append(termination_reason)
+
         # Episode completed - process experiences
         episode_stats_final = {
             "won": round_won,
+            "lost": round_lost,
+            "draw": round_draw,
             "damage_ratio": safe_divide(
                 damage_dealt_total, damage_taken_total + 1e-6, 1.0
             ),
@@ -313,6 +454,8 @@ class EnhancedEBTTrainer:
                 transformer_energy_total, episode_steps, 0.0
             ),
             "termination_reason": termination_reason,
+            "victory_type": victory_type,
+            "defeat_type": defeat_type,
         }
 
         # Add experiences to buffer
@@ -323,6 +466,49 @@ class EnhancedEBTTrainer:
             )
 
         return episode_stats_final
+
+    def get_win_lose_stats(self):
+        """Get detailed win/lose statistics."""
+        total_games = self.wins + self.losses + self.draws
+
+        if total_games == 0:
+            return {
+                "total_games": 0,
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+                "win_rate": 0.0,
+                "recent_win_rate": 0.0,
+                "win_types": self.win_types.copy(),
+                "lose_types": self.lose_types.copy(),
+                "recent_results": list(self.recent_results),
+                "recent_terminations": {},
+            }
+
+        # Calculate recent win rate (last 10 games)
+        recent_wins = sum(
+            1 for result in list(self.recent_results)[-10:] if result == "WIN"
+        )
+        recent_games = min(len(self.recent_results), 10)
+        recent_win_rate = recent_wins / recent_games if recent_games > 0 else 0.0
+
+        # Recent termination reasons
+        recent_terminations = {}
+        for reason in list(self.termination_reasons)[-10:]:
+            recent_terminations[reason] = recent_terminations.get(reason, 0) + 1
+
+        return {
+            "total_games": total_games,
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "win_rate": self.wins / total_games,
+            "recent_win_rate": recent_win_rate,
+            "win_types": self.win_types.copy(),
+            "lose_types": self.lose_types.copy(),
+            "recent_results": list(self.recent_results),
+            "recent_terminations": recent_terminations,
+        }
 
     def calculate_enhanced_contrastive_loss(self, good_batch, bad_batch, margin=2.0):
         """Enhanced contrastive loss with transformer awareness."""
@@ -759,9 +945,10 @@ class EnhancedEBTTrainer:
                 # Adjust experience buffer threshold
                 self.experience_buffer.adjust_threshold(episode_number=episode)
 
-                # Enhanced analysis and logging
+                # Enhanced analysis and logging with detailed win/lose stats
                 buffer_stats = self.experience_buffer.get_stats()
                 performance_trends = self.analyze_enhanced_performance_trends()
+                win_lose_stats = self.get_win_lose_stats()
 
                 print(f"\n🎯 ENHANCED STATUS (Episode {episode}):")
                 print(f"   - Good experiences: {buffer_stats['good_count']:,}")
@@ -769,19 +956,47 @@ class EnhancedEBTTrainer:
                 print(
                     f"   - Quality threshold: {buffer_stats['quality_threshold']:.3f}"
                 )
-                print(f"   - Win rate: {performance_stats['win_rate']:.1%}")
+
+                # Detailed win/lose statistics
+                print(f"\n🏆 WIN/LOSE STATISTICS:")
+                print(f"   - Total games: {win_lose_stats['total_games']}")
+                print(
+                    f"   - Wins: {win_lose_stats['wins']} | Losses: {win_lose_stats['losses']} | Draws: {win_lose_stats['draws']}"
+                )
+                print(f"   - Overall win rate: {win_lose_stats['win_rate']:.1%}")
+                print(
+                    f"   - Recent win rate (last 10): {win_lose_stats['recent_win_rate']:.1%}"
+                )
+
+                # Win/lose type breakdown
+                if win_lose_stats["wins"] > 0:
+                    print(f"   - Win types: {dict(win_lose_stats['win_types'])}")
+                if win_lose_stats["losses"] > 0:
+                    print(f"   - Lose types: {dict(win_lose_stats['lose_types'])}")
+
+                # Recent results pattern
+                recent_results_str = "".join(
+                    [
+                        (
+                            "🏆"
+                            if r == "WIN"
+                            else "💀" if r == "LOSE" else "🤝" if r == "DRAW" else "❓"
+                        )
+                        for r in win_lose_stats["recent_results"][-10:]
+                    ]
+                )
+                print(f"   - Recent pattern: {recent_results_str}")
+
+                # Recent termination reasons
+                if win_lose_stats["recent_terminations"]:
+                    print(
+                        f"   - Recent terminations: {dict(win_lose_stats['recent_terminations'])}"
+                    )
+
+                print(f"\n🧠 TRANSFORMER STATUS:")
                 print(
                     f"   - Avg transformer energy: {performance_stats.get('avg_transformer_energy', 0.0):.3f}"
                 )
-
-                # Show recent termination reasons
-                recent_episodes = list(episode_rewards)[-5:] if episode_rewards else []
-                if hasattr(self, "recent_termination_reasons"):
-                    recent_reasons = list(self.recent_termination_reasons)[-5:]
-                    reason_counts = {}
-                    for reason in recent_reasons:
-                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
-                    print(f"   - Recent terminations: {dict(reason_counts)}")
 
                 if performance_trends:
                     print(
@@ -794,37 +1009,51 @@ class EnhancedEBTTrainer:
                 # Enhanced success checking
                 if buffer_stats["good_count"] > 0:
                     print(
-                        f"   ✅ ENHANCED LEARNING: Both EBT and quality fixes working!"
+                        f"\n✅ ENHANCED LEARNING: Both EBT and quality fixes working!"
                     )
                 else:
-                    print(f"   ❌ ISSUE: Quality threshold still needs adjustment")
+                    print(f"\n❌ ISSUE: Quality threshold still needs adjustment")
 
-                # Log enhanced metrics
+                # Show if single-round logic is working
+                if "round_2_prevention" in win_lose_stats.get(
+                    "recent_terminations", {}
+                ):
+                    print(
+                        f"⚠️  WARNING: Round 2 prevention activated {win_lose_stats['recent_terminations']['round_2_prevention']} times"
+                    )
+                else:
+                    print(f"✅ SINGLE-ROUND: No round 2 detection in recent games")
+
+                # Log enhanced metrics with win/lose details
                 thinking_stats = self.agent.get_thinking_stats()
                 self.logger.info(
-                    f"Ep {episode}: WinRate={performance_stats['win_rate']:.3f}, "
+                    f"Ep {episode}: "
+                    f"Wins={win_lose_stats['wins']}, "
+                    f"Losses={win_lose_stats['losses']}, "
+                    f"WinRate={win_lose_stats['win_rate']:.3f}, "
+                    f"RecentWinRate={win_lose_stats['recent_win_rate']:.3f}, "
                     f"Good={buffer_stats['good_count']}, "
                     f"TransformerEnergy={performance_stats.get('avg_transformer_energy', 0.0):.3f}, "
                     f"ThinkingSuccess={thinking_stats.get('success_rate', 0.0):.3f}, "
                     f"TransformerUsage={thinking_stats.get('transformer_energy_usage', 0.0):.3f}, "
-                    f"Termination={episode_stats.get('termination_reason', 'unknown')}"
+                    f"LastTermination={episode_stats.get('termination_reason', 'unknown')}"
                 )
 
                 # Enhanced training info display
                 if train_stats:
                     print(
-                        f"   🧠 Training: Energy sep={train_stats.get('energy_separation', 0.0):.3f}, "
+                        f"\n🧠 Training: Energy sep={train_stats.get('energy_separation', 0.0):.3f}, "
                         f"Transformer reg={train_stats.get('transformer_reg', 0.0):.4f}"
                     )
 
-            # Track termination reasons for analysis
+            # Track termination reasons for analysis (moved outside eval check)
             if not hasattr(self, "recent_termination_reasons"):
                 self.recent_termination_reasons = deque(maxlen=20)
             self.recent_termination_reasons.append(
                 episode_stats.get("termination_reason", "unknown")
             )
 
-            # Early stopping check
+            # Early stopping check with win rate
             if len(self.win_rate_history) >= 20:
                 recent_win_rate = safe_mean(list(self.win_rate_history)[-10:], 0.0)
                 if recent_win_rate >= self.args.target_win_rate:
@@ -836,14 +1065,29 @@ class EnhancedEBTTrainer:
         # Training completed
         final_performance = self.evaluate_performance()
         final_trends = self.analyze_enhanced_performance_trends()
+        final_win_lose_stats = self.get_win_lose_stats()
 
         print(f"\n🏁 ENHANCED EBT Training Completed!")
         print(f"   - Total episodes: {self.episode + 1}")
-        print(f"   - Final win rate: {final_performance['win_rate']:.1%}")
+        print(f"   - Final evaluation win rate: {final_performance['win_rate']:.1%}")
         print(f"   - Best win rate: {self.best_win_rate:.1%}")
         print(
             f"   - Avg transformer energy: {final_performance.get('avg_transformer_energy', 0.0):.3f}"
         )
+
+        # Show final detailed win/lose stats
+        print(f"\n🏆 FINAL WIN/LOSE STATISTICS:")
+        print(f"   - Total training games: {final_win_lose_stats['total_games']}")
+        print(
+            f"   - Final record: {final_win_lose_stats['wins']}W - {final_win_lose_stats['losses']}L - {final_win_lose_stats['draws']}D"
+        )
+        print(f"   - Overall training win rate: {final_win_lose_stats['win_rate']:.1%}")
+        print(f"   - Recent win rate: {final_win_lose_stats['recent_win_rate']:.1%}")
+
+        if final_win_lose_stats["wins"] > 0:
+            print(f"   - Victory methods: {dict(final_win_lose_stats['win_types'])}")
+        if final_win_lose_stats["losses"] > 0:
+            print(f"   - Defeat methods: {dict(final_win_lose_stats['lose_types'])}")
 
         # Show enhanced final stats
         final_buffer_stats = self.experience_buffer.get_stats()
@@ -868,10 +1112,40 @@ class EnhancedEBTTrainer:
                 f"   - Final attention complexity: {final_trends.get('attention_complexity', 0.0):.3f}"
             )
 
-        if final_buffer_stats["good_count"] > 100:
-            print(f"   ✅ SUCCESS: Enhanced EBT training worked excellently!")
+        # Final termination analysis
+        if self.termination_reasons:
+            termination_counts = {}
+            for reason in self.termination_reasons:
+                termination_counts[reason] = termination_counts.get(reason, 0) + 1
+            print(f"   - Termination breakdown: {dict(termination_counts)}")
+
+            if "round_2_prevention" in termination_counts:
+                print(
+                    f"   ⚠️  Round 2 prevention triggered {termination_counts['round_2_prevention']} times"
+                )
+            else:
+                print(f"   ✅ Perfect single-round operation - no round 2 detected!")
+
+        # Success assessment
+        if (
+            final_buffer_stats["good_count"] > 100
+            and final_win_lose_stats["win_rate"] > 0.3
+        ):
+            print(f"\n🎉 SUCCESS: Enhanced EBT training worked excellently!")
+            print(f"   - Quality threshold fix: ✅ Working")
+            print(f"   - Single-round logic: ✅ Working")
+            print(f"   - Transformer learning: ✅ Working")
+            print(
+                f"   - Win rate improvement: ✅ {final_win_lose_stats['win_rate']:.1%}"
+            )
         else:
-            print(f"   ❌ ISSUE: Need further quality threshold tuning")
+            print(f"\n🔧 NEEDS TUNING: Some components need adjustment")
+            if final_buffer_stats["good_count"] <= 100:
+                print(f"   - Quality threshold: ❌ Too few good experiences")
+            if final_win_lose_stats["win_rate"] <= 0.3:
+                print(
+                    f"   - Win rate: ❌ Still learning ({final_win_lose_stats['win_rate']:.1%})"
+                )
 
         # Save enhanced final checkpoint
         self.checkpoint_manager.save_checkpoint(

@@ -239,7 +239,7 @@ def safe_comparison(value1, value2, operator="==", default=False):
 
 # Keep your original classes but add Energy-Based Transformer components
 class IntelligentRewardCalculator:
-    """🎯 Your original reward calculator - UNCHANGED."""
+    """🎯 Enhanced reward calculator with clear win/lose tracking."""
 
     def __init__(self):
         self.previous_opponent_health = MAX_HEALTH
@@ -252,9 +252,10 @@ class IntelligentRewardCalculator:
 
         self.round_won = False
         self.round_lost = False
+        self.round_draw = False
 
     def calculate_reward(self, player_health, opponent_health, done, info):
-        """Your original reward calculation - UNCHANGED."""
+        """Enhanced reward calculation with clear win/lose detection."""
         reward = 0.0
         reward_breakdown = {}
 
@@ -279,22 +280,105 @@ class IntelligentRewardCalculator:
             reward += damage_penalty
             reward_breakdown["damage_taken"] = damage_penalty
 
+        # Enhanced win/lose detection
         if done:
-            if player_health > opponent_health:
+            termination_reason = info.get("termination_reason", "unknown")
+
+            if termination_reason == "opponent_ko":
+                # Clear win - opponent knocked out
                 win_bonus = self.winning_bonus
                 reward += win_bonus
                 reward_breakdown["round_won"] = win_bonus
+                reward_breakdown["victory_type"] = "knockout"
                 self.round_won = True
-            elif opponent_health > player_health:
+                self.round_lost = False
+                self.round_draw = False
+
+            elif termination_reason == "player_ko":
+                # Clear loss - player knocked out
                 loss_penalty = -1.0
                 reward += loss_penalty
                 reward_breakdown["round_lost"] = loss_penalty
+                reward_breakdown["defeat_type"] = "knockout"
+                self.round_won = False
                 self.round_lost = True
+                self.round_draw = False
+
+            elif termination_reason == "technical_ko":
+                # Technical KO based on health difference
+                if player_health > opponent_health:
+                    win_bonus = self.winning_bonus * 0.8  # Slightly less than knockout
+                    reward += win_bonus
+                    reward_breakdown["round_won"] = win_bonus
+                    reward_breakdown["victory_type"] = "technical"
+                    self.round_won = True
+                    self.round_lost = False
+                    self.round_draw = False
+                else:
+                    loss_penalty = -0.8
+                    reward += loss_penalty
+                    reward_breakdown["round_lost"] = loss_penalty
+                    reward_breakdown["defeat_type"] = "technical"
+                    self.round_won = False
+                    self.round_lost = True
+                    self.round_draw = False
+
+            elif termination_reason == "timeout":
+                # Time expired - judge by health
+                if player_health > opponent_health:
+                    win_bonus = self.winning_bonus * 0.6  # Less than KO
+                    reward += win_bonus
+                    reward_breakdown["round_won"] = win_bonus
+                    reward_breakdown["victory_type"] = "decision"
+                    self.round_won = True
+                    self.round_lost = False
+                    self.round_draw = False
+                elif opponent_health > player_health:
+                    loss_penalty = -0.6
+                    reward += loss_penalty
+                    reward_breakdown["round_lost"] = loss_penalty
+                    reward_breakdown["defeat_type"] = "decision"
+                    self.round_won = False
+                    self.round_lost = True
+                    self.round_draw = False
+                else:
+                    # True draw - equal health at timeout
+                    draw_penalty = -0.3
+                    reward += draw_penalty
+                    reward_breakdown["draw"] = draw_penalty
+                    reward_breakdown["result_type"] = "draw"
+                    self.round_won = False
+                    self.round_lost = False
+                    self.round_draw = True
+
             else:
-                draw_penalty = -0.3
-                reward += draw_penalty
-                reward_breakdown["draw"] = draw_penalty
+                # Default case - determine by health
+                if player_health > opponent_health:
+                    win_bonus = self.winning_bonus * 0.5
+                    reward += win_bonus
+                    reward_breakdown["round_won"] = win_bonus
+                    reward_breakdown["victory_type"] = "health_advantage"
+                    self.round_won = True
+                    self.round_lost = False
+                    self.round_draw = False
+                elif opponent_health > player_health:
+                    loss_penalty = -0.5
+                    reward += loss_penalty
+                    reward_breakdown["round_lost"] = loss_penalty
+                    reward_breakdown["defeat_type"] = "health_disadvantage"
+                    self.round_won = False
+                    self.round_lost = True
+                    self.round_draw = False
+                else:
+                    draw_penalty = -0.3
+                    reward += draw_penalty
+                    reward_breakdown["draw"] = draw_penalty
+                    reward_breakdown["result_type"] = "equal_health"
+                    self.round_won = False
+                    self.round_lost = False
+                    self.round_draw = True
         else:
+            # Ongoing round - health advantage bonus
             health_diff = (player_health - opponent_health) / MAX_HEALTH
             if abs(health_diff) > 0.1:
                 advantage_bonus = health_diff * self.health_advantage_bonus
@@ -310,6 +394,17 @@ class IntelligentRewardCalculator:
 
         return reward, reward_breakdown
 
+    def get_round_result(self):
+        """Get clear round result for logging."""
+        if self.round_won:
+            return "WIN"
+        elif self.round_lost:
+            return "LOSE"
+        elif self.round_draw:
+            return "DRAW"
+        else:
+            return "ONGOING"
+
     def reset(self):
         """Reset for new episode."""
         self.previous_opponent_health = MAX_HEALTH
@@ -317,6 +412,7 @@ class IntelligentRewardCalculator:
         self.match_started = False
         self.round_won = False
         self.round_lost = False
+        self.round_draw = False
 
 
 class SimplifiedFeatureTracker:
@@ -532,7 +628,7 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         return observation, info
 
     def step(self, action):
-        """Enhanced step with proper single-round termination."""
+        """Enhanced step with detailed win/lose tracking."""
         self.step_count += 1
 
         button_combination = self.action_mapper.get_action(action)
@@ -543,61 +639,85 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         # ENHANCED SINGLE-ROUND LOGIC: Multiple termination conditions
         round_ended = False
+        termination_reason = "ongoing"
 
         # 1. Health-based termination (KO)
-        if (self.previous_player_health > 0 and player_health <= 0) or (
-            self.previous_opponent_health > 0 and opponent_health <= 0
-        ):
+        if self.previous_player_health > 0 and player_health <= 0:
             round_ended = True
+            termination_reason = "player_ko"
+        elif self.previous_opponent_health > 0 and opponent_health <= 0:
+            round_ended = True
+            termination_reason = "opponent_ko"
 
         # 2. Check for round completion via game state
-        # Look for "PERFECT", "YOU WIN", "YOU LOSE" text patterns in info
-        game_messages = info.get("game_over_message", "")
-        round_complete_indicators = ["PERFECT", "YOU WIN", "YOU LOSE", "K.O.", "WINS"]
-        if any(
-            indicator in str(game_messages).upper()
-            for indicator in round_complete_indicators
-        ):
-            round_ended = True
+        if not round_ended:
+            game_messages = info.get("game_over_message", "")
+            round_complete_indicators = [
+                "PERFECT",
+                "YOU WIN",
+                "YOU LOSE",
+                "K.O.",
+                "WINS",
+            ]
+            if any(
+                indicator in str(game_messages).upper()
+                for indicator in round_complete_indicators
+            ):
+                round_ended = True
+                if (
+                    "YOU WIN" in str(game_messages).upper()
+                    or "PERFECT" in str(game_messages).upper()
+                ):
+                    termination_reason = "opponent_ko"
+                elif "YOU LOSE" in str(game_messages).upper():
+                    termination_reason = "player_ko"
+                else:
+                    termination_reason = "round_complete"
 
-        # 3. Time's up condition (when timer reaches 0, whoever has more health wins)
-        # This prevents going to round 2 when time expires
-        if hasattr(info, "timer") and info.get("timer", 99) <= 0:
+        # 3. Time's up condition
+        if not round_ended and hasattr(info, "timer") and info.get("timer", 99) <= 0:
             round_ended = True
+            termination_reason = "timeout"
 
         # 4. Check raw game state for round completion
-        # Some retro environments expose internal game states
-        if "round_complete" in info and info["round_complete"]:
+        if not round_ended and "round_complete" in info and info["round_complete"]:
             round_ended = True
+            termination_reason = "round_complete"
 
         # 5. Detect if we're entering a new round (prevent round 2)
-        # If round counter changes or we see "ROUND 2" anywhere
-        round_indicators = info.get("round_text", "")
-        if (
-            "ROUND 2" in str(round_indicators).upper()
-            or "ROUND TWO" in str(round_indicators).upper()
-        ):
-            round_ended = True
+        if not round_ended:
+            round_indicators = info.get("round_text", "")
+            if (
+                "ROUND 2" in str(round_indicators).upper()
+                or "ROUND TWO" in str(round_indicators).upper()
+            ):
+                round_ended = True
+                termination_reason = "round_2_prevention"
 
         # 6. Step limit timeout (last resort)
-        if self.step_count >= MAX_FIGHT_STEPS:
+        if not round_ended and self.step_count >= MAX_FIGHT_STEPS:
             round_ended = True
+            termination_reason = "timeout"
 
         # 7. Check for dramatic health difference (technical KO)
-        if (
-            abs(player_health - opponent_health) >= MAX_HEALTH * 0.8
-        ):  # 80% health difference
+        if not round_ended and abs(player_health - opponent_health) >= MAX_HEALTH * 0.8:
             round_ended = True
+            termination_reason = "technical_ko"
 
         # Apply single-round termination
         if round_ended:
             done = True
-            # Force episode to end immediately to prevent round 2
             truncated = True
 
+        # Update previous health values
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
 
+        # Add termination reason to info before reward calculation
+        info["termination_reason"] = termination_reason
+        info["round_ended"] = round_ended
+
+        # Calculate enhanced reward with termination info
         intelligent_reward, reward_breakdown = self.reward_calculator.calculate_reward(
             player_health, opponent_health, done, info
         )
@@ -606,6 +726,9 @@ class StreetFighterVisionWrapper(gym.Wrapper):
             player_health, opponent_health, action, reward_breakdown
         )
         observation = self._build_observation(obs, info)
+
+        # Get round result for logging
+        round_result = self.reward_calculator.get_round_result()
 
         info.update(
             {
@@ -616,11 +739,34 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "episode_count": self.episode_count,
                 "step_count": self.step_count,
                 "round_ended": round_ended,
-                "termination_reason": self._get_termination_reason(
-                    player_health, opponent_health, round_ended
-                ),
+                "termination_reason": termination_reason,
+                "round_result": round_result,
+                "final_health_diff": player_health - opponent_health,
+                "victory_type": reward_breakdown.get("victory_type", "none"),
+                "defeat_type": reward_breakdown.get("defeat_type", "none"),
             }
         )
+
+        # Print immediate round result for debugging
+        if round_ended:
+            result_emoji = (
+                "🏆"
+                if round_result == "WIN"
+                else "💀" if round_result == "LOSE" else "🤝"
+            )
+            victory_detail = ""
+            if "victory_type" in reward_breakdown:
+                victory_detail = f" ({reward_breakdown['victory_type']})"
+            elif "defeat_type" in reward_breakdown:
+                victory_detail = f" ({reward_breakdown['defeat_type']})"
+            elif "result_type" in reward_breakdown:
+                victory_detail = f" ({reward_breakdown['result_type']})"
+
+            print(
+                f"  {result_emoji} Episode {self.episode_count}: {round_result}{victory_detail} "
+                f"- Steps: {self.step_count}, Health: {player_health} vs {opponent_health}, "
+                f"Reason: {termination_reason}"
+            )
 
         return observation, intelligent_reward, done, truncated, info
 
@@ -1013,6 +1159,7 @@ class EnhancedEnergyBasedCNN(nn.Module):
         return output, aggregated_energy
 
 
+# this is our verifier, what are doing with it
 class EnhancedEnergyBasedVerifier(nn.Module):
     """🛡️ Enhanced verifier with Energy-Based Transformer integration."""
 
