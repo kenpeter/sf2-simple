@@ -8,12 +8,12 @@ def run_enhanced_episode(self):
     episode_steps = 0
     episode_experiences = []
 
-    # Episode-level tracking
+    # Episode-level tracking - INITIALIZE ALL VARIABLES
     damage_dealt_total = 0.0
     damage_taken_total = 0.0
     round_won = False
-    round_lost = False
-    round_draw = False
+    round_lost = False  # EXPLICITLY INITIALIZE
+    round_draw = False  # EXPLICITLY INITIALIZE
     termination_reason = "ongoing"
     victory_type = "none"
     defeat_type = "none"
@@ -63,6 +63,12 @@ def run_enhanced_episode(self):
         # Legacy round_won detection for compatibility
         if "round_won" in reward_breakdown:
             round_won = True
+            round_lost = False
+            round_draw = False
+        elif "round_lost" in reward_breakdown:
+            round_won = False
+            round_lost = True
+            round_draw = False
 
         # Enhanced tracking
         if "avg_transformer_energy" in thinking_info:
