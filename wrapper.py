@@ -30,12 +30,14 @@ import copy
 _original_retro_make = retro.make
 
 
+# --- NEW, CORRECTED CODE ---
 def _patched_retro_make(game, state=None, **kwargs):
     if not state:
         state = "ken_bison_12.state"
-    # Remove render_mode if present to avoid conflicts
-    if "render_mode" in kwargs:
-        del kwargs["render_mode"]
+    # Force the render_mode to "rgb_array". This prevents retro from creating
+    # its own window, while still providing the pixel data needed for our
+    # separate rendering thread.
+    kwargs["render_mode"] = "rgb_array"
     return _original_retro_make(game=game, state=state, **kwargs)
 
 
