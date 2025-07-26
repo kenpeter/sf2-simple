@@ -6,7 +6,17 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --max-episodes 20 --eval-frequency 2 --quality-threshold 0.3 --render
+
+
+python train.py \
+    --max_episodes 1000 \
+    --learning_rate 4e-4 \
+    --batch_size 64 \
+    --thinking_steps 3 \
+    --render_mode training \
+    --checkpoint_dir checkpoints/run_low_lr \
+    --log_dir logs/run_low_lr \
+    --seed 123
 
 
 

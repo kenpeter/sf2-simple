@@ -791,17 +791,19 @@ class OptimizedStreetFighterActions:
 
 
 # OPTIMIZED: Vision Wrapper with Performance Enhancements
+# basically this has frame processor + feature tracker
 class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
     """🥊 High-performance wrapper with rendering capability maintained."""
 
-    def __init__(
-        self, env, render_frequency=30
-    ):  # Render every 30 steps for performance
+    def __init__(self, env, render_frequency=30):
+        # render every 30 steps for faster
         super().__init__(env)
 
         self.reward_calculator = OptimizedRewardCalculator()
+        # here is the feature tracker
         self.feature_tracker = EBTEnhancedFeatureTracker()
         self.action_mapper = OptimizedStreetFighterActions()
+        # here is the frame processor
         self.frame_processor = OptimizedFrameProcessor()
 
         self.render_frequency = render_frequency
