@@ -8,10 +8,13 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py --quality-threshold 0.3 --thinking-steps 5 --max-episodes 100 --render
-
-
-
+python train.py \
+    --thinking-steps 5 \
+    --max-episodes 100 \
+    --learning-rate 1e-4 \
+    --thinking-lr 0.02 \
+    --verify-health
+    --render
 
   ta.json 
 {

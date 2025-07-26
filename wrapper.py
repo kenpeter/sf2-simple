@@ -1129,6 +1129,7 @@ class SimpleAgent:
             "successful_optimizations": 0,
         }
 
+    # agent will predict
     def predict(
         self, observations: Dict[str, torch.Tensor], deterministic: bool = False
     ) -> Tuple[int, Dict]:

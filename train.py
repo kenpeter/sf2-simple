@@ -416,10 +416,12 @@ class FixedTrainer:
         loss.backward()
 
         # Gradient clipping
+        # what is inside verifier params
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.verifier.parameters(), max_norm=1.0
         )
 
+        # gradient explode
         if grad_norm > 5.0:
             print(f"⚠️ Large gradient norm detected: {grad_norm:.2f}")
             return None
@@ -447,6 +449,7 @@ class FixedTrainer:
             initial_player_health = info.get("player_health", MAX_HEALTH)
             initial_opponent_health = info.get("opponent_health", MAX_HEALTH)
 
+            # ok, so when eval, agent become deterministic
             while (
                 not done
                 and not truncated
@@ -490,6 +493,7 @@ class FixedTrainer:
             "eval_episodes": eval_episodes,
         }
 
+    # train
     def train(self):
         """Main training loop with draw elimination focus."""
         print(f"🛡️ Starting FIXED Training")
