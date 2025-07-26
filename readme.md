@@ -8,8 +8,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python3 train.py     --max_episodes 1000     --learning_rate 3e-4     --batch_size 64     --thinking_steps 3  
-
+python train.py --quality-threshold 0.3 --thinking-steps 5 --max-episodes 100 --render
 
 
 

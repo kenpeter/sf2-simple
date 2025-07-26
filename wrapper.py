@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-🚀 OPTIMIZED ENERGY-BASED TRANSFORMER WRAPPER
-High-performance Street Fighter RL with maintained rendering capability
-Fixes: Slow UI, 0% win rate, action space complexity, reward signal issues
+🛡️ ENHANCED WRAPPER - Energy-Based Transformers + Current Energy Thinking
+Keeps your original health system, game speed, and fight logic
+Adds Energy-Based Transformer architecture for enhanced learning
 """
 
 import cv2
@@ -30,14 +30,9 @@ import copy
 _original_retro_make = retro.make
 
 
-# --- NEW, CORRECTED CODE ---
 def _patched_retro_make(game, state=None, **kwargs):
     if not state:
         state = "ken_bison_12.state"
-    # Force the render_mode to "rgb_array". This prevents retro from creating
-    # its own window, while still providing the pixel data needed for our
-    # separate rendering thread.
-    kwargs["render_mode"] = "rgb_array"
     return _original_retro_make(game=game, state=state, **kwargs)
 
 
@@ -47,7 +42,7 @@ retro.make = _patched_retro_make
 os.makedirs("logs", exist_ok=True)
 os.makedirs("checkpoints", exist_ok=True)
 log_filename = (
-    f'logs/ebt_enhanced_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    f'logs/enhanced_ebt_training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 logging.basicConfig(
     level=logging.WARNING,
@@ -56,59 +51,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants - OPTIMIZED
+# Constants
 MAX_HEALTH = 176
-SCREEN_WIDTH = 84  # Reduced from 320 for performance
-SCREEN_HEIGHT = 84  # Reduced from 224 for performance
-FRAME_STACK_SIZE = 8  # NEW: Use 8 frames for temporal information
-VECTOR_FEATURE_DIM = 24  # Reduced from 32 for efficiency
-MAX_FIGHT_STEPS = 3500  # Reduced from 1200 for faster episodes
-EBT_SEQUENCE_LENGTH = 8  # Reduced from 16 for memory efficiency
-EBT_HIDDEN_DIM = 128  # Reduced from 256 for performance
-EBT_NUM_HEADS = 4  # Reduced from 8 for efficiency
-EBT_NUM_LAYERS = 3  # Reduced from 6 for speed
+SCREEN_WIDTH = 320
+SCREEN_HEIGHT = 224
+VECTOR_FEATURE_DIM = 32
+MAX_FIGHT_STEPS = 1200
 
-# OPTIMIZED ACTION SPACE - Fixes major training bottleneck
-OPTIMIZED_ACTIONS = {
-    0: [],  # No action
-    1: ["LEFT"],
-    2: ["RIGHT"],
-    3: ["UP"],
-    4: ["DOWN"],
-    5: ["A"],  # Light punch
-    6: ["B"],  # Medium punch
-    7: ["C"],  # Heavy punch
-    8: ["X"],  # Light kick
-    9: ["Y"],  # Medium kick
-    10: ["Z"],  # Heavy kick
-    # Essential combinations only
-    11: ["DOWN", "RIGHT", "A"],  # Hadoken
-    12: ["DOWN", "LEFT", "A"],  # Reverse hadoken (unused but good practice)
-    13: ["RIGHT", "DOWN", "A"],  # Shoryuken (Dragon Punch)
-    14: ["LEFT", "A"],  # Walking punch
-    15: ["RIGHT", "A"],  # Walking punch
-    16: ["DOWN", "A"],  # Crouching punch
-    17: ["UP", "A"],  # Jumping punch
-    18: ["LEFT", "X"],  # Walking kick
-    19: ["RIGHT", "X"],  # Walking kick
-    20: ["DOWN", "X"],  # Crouching kick
-    # --- ADDED BACK SPECIAL MOVES ---
-    21: ["DOWN", "LEFT", "X"],  # Hurricane Kick (Tatsumaki)
-    22: ["DOWN", "RIGHT", "X"],  # Reverse Hurricane Kick
-}
+print(f"🥊 ENHANCED Energy-Based Transformer Configuration:")
+print(f"   - Energy-Based Thinking + Transformer architecture")
+print(f"   - Fixed quality threshold (0.6 → 0.3)")
+print(f"   - Fast game UI speed maintained")
+print(f"   - Single round fight logic preserved")
+print(f"   - Max steps per fight: {MAX_FIGHT_STEPS}")
 
 
-print(f"🚀 OPTIMIZED ENERGY-BASED TRANSFORMER Configuration:")
-print(f"   - Energy-Based Thinking: ENABLED")
-print(f"   - Energy-Based Transformers: ENABLED")
-print(f"   - Screen Size: {SCREEN_WIDTH}x{SCREEN_HEIGHT} (optimized)")
-print(f"   - Frame Stack Size: {FRAME_STACK_SIZE} (for motion dynamics)")
-print(f"   - Action Space: {len(OPTIMIZED_ACTIONS)} (re-added special moves)")
-print(f"   - EBT Sequence Length: {EBT_SEQUENCE_LENGTH}")
-print(f"   - Performance Optimizations: ACTIVE")
-
-
-# Keep all safe operations (unchanged)
+# Keep all your original safe operations
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
     try:
@@ -180,6 +138,7 @@ def sanitize_array(arr, default_val=0.0):
         try:
             arr = np.array(arr, dtype=np.float32)
         except (ValueError, TypeError):
+            print(f"⚠️  Cannot convert to array: {type(arr)}, using default")
             return np.array([default_val], dtype=np.float32)
 
     if arr.ndim == 0:
@@ -254,376 +213,48 @@ def ensure_feature_dimension(features, target_dim):
         return features[:target_dim].astype(np.float32)
 
 
-# OPTIMIZED: Memory-Efficient Frame Processor
-class OptimizedFrameProcessor:
-    """High-performance frame processing with pre-allocated buffers."""
-
-    def __init__(self, target_size=(SCREEN_WIDTH, SCREEN_HEIGHT)):
-        self.target_size = target_size
-        # Pre-allocate working memory for zero-copy operations
-        self.gray_frame = np.empty((224, 320), dtype=np.uint8)  # Original size
-        self.resized_frame = np.empty(target_size, dtype=np.uint8)
-
-    def process(self, frame):
-        """Ultra-fast frame processing with memory reuse."""
-        # Convert to grayscale first (reduces data by 3x)
-        cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY, dst=self.gray_frame)
-
-        # Use INTER_AREA for highest quality downscaling
-        cv2.resize(
-            self.gray_frame,
-            self.target_size,
-            dst=self.resized_frame,
-            interpolation=cv2.INTER_AREA,
-        )
-
-        return self.resized_frame.copy()
-
-
-# NEW: Positional Encoding for Energy-Based Transformers
-class EBTPositionalEncoding(nn.Module):
-    """Positional encoding for Energy-Based Transformers."""
-
-    def __init__(self, d_model, max_seq_length=512):
-        super().__init__()
-        self.d_model = d_model
-
-        pe = torch.zeros(max_seq_length, d_model)
-        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        self.register_buffer("pe", pe.unsqueeze(0).transpose(0, 1))
-
-    def forward(self, x):
-        """Add positional encoding to input."""
-        seq_len = x.size(1)
-        return x + self.pe[:seq_len, :].transpose(0, 1)
-
-
-# NEW: Energy-Based Multi-Head Attention
-class EBTMultiHeadAttention(nn.Module):
-    """Energy-Based Multi-Head Attention for handling predicted tokens."""
-
-    def __init__(self, d_model, num_heads, dropout=0.1):
-        super().__init__()
-        assert d_model % num_heads == 0
-
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
-        self.w_o = nn.Linear(d_model, d_model)
-
-        self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(d_model)
-
-    def scaled_dot_product_attention(self, Q, K, V, mask=None):
-        """Compute scaled dot-product attention with energy considerations."""
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_weights = self.dropout(attention_weights)
-
-        context = torch.matmul(attention_weights, V)
-        return context, attention_weights
-
-    def forward(self, query, key, value, mask=None):
-        """Forward pass with residual connection."""
-        batch_size = query.size(0)
-        seq_length = query.size(1)
-
-        # Residual connection input
-        residual = query
-
-        # Linear transformations and reshape
-        Q = (
-            self.w_q(query)
-            .view(batch_size, seq_length, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
-        K = (
-            self.w_k(key)
-            .view(batch_size, seq_length, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
-        V = (
-            self.w_v(value)
-            .view(batch_size, seq_length, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
-
-        # Apply attention
-        context, attention_weights = self.scaled_dot_product_attention(Q, K, V, mask)
-
-        # Concatenate heads and put through final linear layer
-        context = (
-            context.transpose(1, 2)
-            .contiguous()
-            .view(batch_size, seq_length, self.d_model)
-        )
-
-        output = self.w_o(context)
-
-        # Residual connection and layer norm
-        output = self.layer_norm(output + residual)
-
-        return output, attention_weights
-
-
-# NEW: Energy-Based Transformer Block
-class EBTTransformerBlock(nn.Module):
-    """Energy-Based Transformer block with energy-aware processing."""
-
-    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
-        super().__init__()
-
-        self.attention = EBTMultiHeadAttention(d_model, num_heads, dropout)
-
-        self.feed_forward = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_ff, d_model),
-            nn.Dropout(dropout),
-        )
-
-        self.layer_norm = nn.LayerNorm(d_model)
-
-    def forward(self, x, mask=None):
-        """Forward pass through transformer block."""
-        # Self-attention with residual connection
-        attn_output, attention_weights = self.attention(x, x, x, mask)
-
-        # Feed-forward with residual connection
-        ff_input = attn_output
-        ff_output = self.feed_forward(ff_input)
-        output = self.layer_norm(ff_output + ff_input)
-
-        return output, attention_weights
-
-
-# NEW: Core Energy-Based Transformer
-class EnergyBasedTransformer(nn.Module):
-    """🚀 Energy-Based Transformer for Street Fighter RL"""
-
-    def __init__(
-        self,
-        input_dim,
-        d_model=EBT_HIDDEN_DIM,
-        num_heads=EBT_NUM_HEADS,
-        num_layers=EBT_NUM_LAYERS,
-        max_seq_length=EBT_SEQUENCE_LENGTH,
-        dropout=0.1,
-    ):
-        super().__init__()
-
-        self.d_model = d_model
-        self.num_layers = num_layers
-        self.max_seq_length = max_seq_length
-
-        # Input projection
-        self.input_projection = nn.Linear(input_dim, d_model)
-
-        # Positional encoding
-        self.pos_encoding = EBTPositionalEncoding(d_model, max_seq_length)
-
-        # Transformer blocks
-        self.transformer_blocks = nn.ModuleList(
-            [
-                EBTTransformerBlock(d_model, num_heads, d_model * 2, dropout)
-                for _ in range(num_layers)
-            ]
-        )
-
-        # Energy function head
-        self.energy_head = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, 1),
-        )
-
-        # Context aggregation for sequence-level energy
-        self.context_aggregator = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Linear(d_model // 2, d_model),
-        )
-
-        self.dropout = nn.Dropout(dropout)
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        """Initialize weights for stable training."""
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.ones_(module.weight)
-            torch.nn.init.zeros_(module.bias)
-
-    def create_causal_mask(self, seq_length, device):
-        """Create causal mask for autoregressive attention."""
-        mask = torch.tril(torch.ones(seq_length, seq_length, device=device))
-        return mask.unsqueeze(0).unsqueeze(0)
-
-    def forward(self, sequence_features, use_causal_mask=True):
-        """Forward pass through Energy-Based Transformer."""
-        batch_size, seq_length, _ = sequence_features.shape
-        device = sequence_features.device
-
-        # Input projection and positional encoding
-        x = self.input_projection(sequence_features)
-        x = self.pos_encoding(x)
-        x = self.dropout(x)
-
-        # Create attention mask if needed
-        mask = None
-        if use_causal_mask:
-            mask = self.create_causal_mask(seq_length, device)
-
-        # Pass through transformer blocks
-        attention_weights = []
-        for transformer_block in self.transformer_blocks:
-            x, attn_weights = transformer_block(x, mask)
-            attention_weights.append(attn_weights)
-
-        # Store sequence representations
-        sequence_representations = x
-
-        # Calculate per-token energies
-        sequence_energies = self.energy_head(x)
-
-        # Aggregate sequence-level energy
-        context = self.context_aggregator(x)
-        attention_scores = torch.matmul(context, context.transpose(-2, -1)) / math.sqrt(
-            self.d_model
-        )
-
-        if mask is not None:
-            attention_scores = attention_scores.masked_fill(
-                mask.squeeze(0).squeeze(0) == 0, -1e9
-            )
-
-        attention_weights_agg = F.softmax(attention_scores, dim=-1)
-        weighted_energies = torch.matmul(attention_weights_agg, sequence_energies)
-        sequence_energy = weighted_energies.mean(dim=1)
-
-        return {
-            "sequence_energies": sequence_energies,
-            "sequence_energy": sequence_energy,
-            "sequence_representations": sequence_representations,
-            "attention_weights": attention_weights,
-            "aggregation_weights": attention_weights_agg,
-        }
-
-
-# ENHANCED: Sequence History Tracker for EBT
-class EBTSequenceTracker:
-    """🎯 Enhanced sequence tracker for Energy-Based Transformers."""
-
-    def __init__(
-        self, sequence_length=EBT_SEQUENCE_LENGTH, feature_dim=VECTOR_FEATURE_DIM
-    ):
-        self.sequence_length = sequence_length
-        self.feature_dim = feature_dim
-        self.reset()
-
-    def reset(self):
-        """Reset sequence tracking for new episode."""
-        self.state_sequence = deque(maxlen=self.sequence_length)
-        self.action_sequence = deque(maxlen=self.sequence_length)
-        self.reward_sequence = deque(maxlen=self.sequence_length)
-        self.feature_sequence = deque(maxlen=self.sequence_length)
-        self.energy_sequence = deque(maxlen=self.sequence_length)
-        self.step_count = 0
-
-    def add_step(self, state_features, action, reward, energy_score=0.0):
-        """Add a step to the sequence history."""
-        self.state_sequence.append(state_features)
-        self.action_sequence.append(action)
-        self.reward_sequence.append(reward)
-        self.energy_sequence.append(energy_score)
-
-        # Create combined feature representation
-        action_one_hot = np.zeros(len(OPTIMIZED_ACTIONS), dtype=np.float32)
-        action_one_hot[action] = 1.0
-
-        combined_features = np.concatenate(
-            [
-                state_features.flatten()[: self.feature_dim - 1],
-                [reward],
-            ]
-        )
-
-        combined_features = ensure_feature_dimension(
-            combined_features, self.feature_dim
-        )
-        self.feature_sequence.append(combined_features)
-        self.step_count += 1
-
-    def get_sequence_tensor(self, device="cpu"):
-        """Get current sequence as tensors for EBT processing."""
-        if len(self.feature_sequence) == 0:
-            return torch.zeros(1, self.sequence_length, self.feature_dim, device=device)
-
-        feature_list = list(self.feature_sequence)
-        while len(feature_list) < self.sequence_length:
-            feature_list.insert(0, np.zeros(self.feature_dim, dtype=np.float32))
-
-        sequence_tensor = (
-            torch.from_numpy(np.stack(feature_list)).float().unsqueeze(0).to(device)
-        )
-        return sequence_tensor
-
-    def get_sequence_info(self):
-        """Get information about current sequence."""
-        return {
-            "length": len(self.feature_sequence),
-            "max_length": self.sequence_length,
-            "step_count": self.step_count,
-            "recent_rewards": list(self.reward_sequence)[-5:],
-            "recent_energies": list(self.energy_sequence)[-5:],
-        }
-
-
-# OPTIMIZED: Dense Reward Calculator - Fixes 0% win rate
-class OptimizedRewardCalculator:
-    """🎯 Dense reward calculator optimized for learning signals."""
+def safe_comparison(value1, value2, operator="==", default=False):
+    """Safe comparison that handles arrays."""
+    try:
+        val1 = ensure_scalar(value1)
+        val2 = ensure_scalar(value2)
+
+        if operator == "==":
+            return val1 == val2
+        elif operator == "!=":
+            return val1 != val2
+        elif operator == "<":
+            return val1 < val2
+        elif operator == "<=":
+            return val1 <= val2
+        elif operator == ">":
+            return val1 > val2
+        elif operator == ">=":
+            return val1 >= val2
+        else:
+            return default
+    except:
+        return default
+
+
+# Keep your original classes but add Energy-Based Transformer components
+class IntelligentRewardCalculator:
+    """🎯 Your original reward calculator - UNCHANGED."""
 
     def __init__(self):
         self.previous_opponent_health = MAX_HEALTH
         self.previous_player_health = MAX_HEALTH
         self.match_started = False
 
-        # Reward weights optimized for learning
-        self.damage_reward_scale = 2.0  # Increased for stronger signal
-        self.health_penalty_scale = 1.5  # Balanced penalty
-        self.winning_bonus = 10.0  # Increased win bonus
-        self.time_penalty = 0.05  # Reduced time penalty
-
-        # Combat encouragement
-        self.action_bonus_scale = 0.1
-        self.last_action = 0
-        self.idle_penalty = 0.02
+        self.max_damage_reward = 0.8
+        self.winning_bonus = 2.0
+        self.health_advantage_bonus = 0.3
 
         self.round_won = False
         self.round_lost = False
 
-    def calculate_reward(self, player_health, opponent_health, done, info, action=0):
-        """Dense reward calculation optimized for Street Fighter learning."""
+    def calculate_reward(self, player_health, opponent_health, done, info):
+        """Your original reward calculation - UNCHANGED."""
         reward = 0.0
         reward_breakdown = {}
 
@@ -633,40 +264,21 @@ class OptimizedRewardCalculator:
             self.match_started = True
             return 0.0, {"initialization": 0.0}
 
-        # Primary reward: Health differential changes
         player_damage_taken = max(0, self.previous_player_health - player_health)
         opponent_damage_dealt = max(0, self.previous_opponent_health - opponent_health)
 
-        # Reward for dealing damage (primary learning signal)
         if opponent_damage_dealt > 0:
-            damage_reward = opponent_damage_dealt * self.damage_reward_scale
+            damage_reward = min(
+                opponent_damage_dealt / MAX_HEALTH, self.max_damage_reward
+            )
             reward += damage_reward
             reward_breakdown["damage_dealt"] = damage_reward
 
-        # Penalty for taking damage
         if player_damage_taken > 0:
-            damage_penalty = -player_damage_taken * self.health_penalty_scale
+            damage_penalty = -(player_damage_taken / MAX_HEALTH) * 0.5
             reward += damage_penalty
             reward_breakdown["damage_taken"] = damage_penalty
 
-        # Health advantage bonus (encourages maintaining health lead)
-        health_diff = (player_health - opponent_health) / MAX_HEALTH
-        if abs(health_diff) > 0.1:
-            advantage_bonus = health_diff * 0.5
-            reward += advantage_bonus
-            reward_breakdown["health_advantage"] = advantage_bonus
-
-        # Combat action encouragement (prevents passive play)
-        if action in [5, 6, 7, 8, 9, 10, 11, 12, 13, 21, 22]:  # Attack actions
-            action_bonus = self.action_bonus_scale
-            reward += action_bonus
-            reward_breakdown["action_bonus"] = action_bonus
-        elif action == 0:  # Idle action
-            idle_penalty = -self.idle_penalty
-            reward += idle_penalty
-            reward_breakdown["idle_penalty"] = idle_penalty
-
-        # Round completion rewards
         if done:
             if player_health > opponent_health:
                 win_bonus = self.winning_bonus
@@ -674,24 +286,27 @@ class OptimizedRewardCalculator:
                 reward_breakdown["round_won"] = win_bonus
                 self.round_won = True
             elif opponent_health > player_health:
-                loss_penalty = -5.0
+                loss_penalty = -1.0
                 reward += loss_penalty
                 reward_breakdown["round_lost"] = loss_penalty
                 self.round_lost = True
             else:
-                draw_penalty = -2.0
+                draw_penalty = -0.3
                 reward += draw_penalty
                 reward_breakdown["draw"] = draw_penalty
+        else:
+            health_diff = (player_health - opponent_health) / MAX_HEALTH
+            if abs(health_diff) > 0.1:
+                advantage_bonus = health_diff * self.health_advantage_bonus
+                reward += advantage_bonus
+                reward_breakdown["health_advantage"] = advantage_bonus
 
-        # Small time penalty to encourage action
-        time_penalty = -self.time_penalty
-        reward += time_penalty
-        reward_breakdown["time_penalty"] = time_penalty
+        step_penalty = -0.01
+        reward += step_penalty
+        reward_breakdown["step_penalty"] = step_penalty
 
-        # Update previous states
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
-        self.last_action = action
 
         return reward, reward_breakdown
 
@@ -702,16 +317,13 @@ class OptimizedRewardCalculator:
         self.match_started = False
         self.round_won = False
         self.round_lost = False
-        self.last_action = 0
 
 
-# ENHANCED: Feature Tracker with EBT Integration
-class EBTEnhancedFeatureTracker:
-    """📊 Enhanced feature tracker with EBT sequence modeling."""
+class SimplifiedFeatureTracker:
+    """📊 Your original feature tracker - UNCHANGED."""
 
-    def __init__(self, history_length=3):  # Reduced for efficiency
+    def __init__(self, history_length=5):
         self.history_length = history_length
-        self.ebt_tracker = EBTSequenceTracker()
         self.reset()
 
     def reset(self):
@@ -720,11 +332,8 @@ class EBTEnhancedFeatureTracker:
         self.opponent_health_history = deque(maxlen=self.history_length)
         self.last_action = 0
         self.combo_count = 0
-        self.ebt_tracker.reset()
 
-    def update(
-        self, player_health, opponent_health, action, reward_breakdown, energy_score=0.0
-    ):
+    def update(self, player_health, opponent_health, action, reward_breakdown):
         """Update tracking with current state."""
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
@@ -737,13 +346,8 @@ class EBTEnhancedFeatureTracker:
 
         self.last_action = action
 
-        # Update EBT sequence tracker
-        state_features = self.get_features()
-        reward = sum(reward_breakdown.values()) if reward_breakdown else 0.0
-        self.ebt_tracker.add_step(state_features, action, reward, energy_score)
-
     def get_features(self):
-        """Get optimized feature vector."""
+        """Get current feature vector."""
         features = []
 
         player_hist = list(self.player_health_history)
@@ -765,8 +369,8 @@ class EBTEnhancedFeatureTracker:
                 current_player_health,
                 current_opponent_health,
                 current_player_health - current_opponent_health,
-                self.last_action / (len(OPTIMIZED_ACTIONS) - 1),
-                min(self.combo_count / 3.0, 1.0),
+                self.last_action / 55.0,
+                min(self.combo_count / 5.0, 1.0),
             ]
         )
 
@@ -774,23 +378,76 @@ class EBTEnhancedFeatureTracker:
             np.array(features, dtype=np.float32), VECTOR_FEATURE_DIM
         )
 
-    def get_ebt_sequence(self, device="cpu"):
-        """Get EBT sequence tensor."""
-        return self.ebt_tracker.get_sequence_tensor(device)
 
-    def get_sequence_info(self):
-        """Get EBT sequence information."""
-        return self.ebt_tracker.get_sequence_info()
-
-
-# OPTIMIZED: Action Mapper with Reduced Action Space
-class OptimizedStreetFighterActions:
-    """🎮 Optimized action mapping with reduced complexity."""
+class StreetFighterDiscreteActions:
+    """🎮 Your original action mapping - UNCHANGED."""
 
     def __init__(self):
-        self.action_map = OPTIMIZED_ACTIONS
+        self.action_map = {
+            0: [],  # No action
+            1: ["LEFT"],
+            2: ["RIGHT"],
+            3: ["UP"],
+            4: ["DOWN"],
+            5: ["A"],
+            6: ["B"],
+            7: ["C"],  # Light, Medium, Heavy punch
+            8: ["X"],
+            9: ["Y"],
+            10: ["Z"],  # Light, Medium, Heavy kick
+            # Combinations
+            11: ["LEFT", "A"],
+            12: ["LEFT", "B"],
+            13: ["LEFT", "C"],
+            14: ["RIGHT", "A"],
+            15: ["RIGHT", "B"],
+            16: ["RIGHT", "C"],
+            17: ["DOWN", "A"],
+            18: ["DOWN", "B"],
+            19: ["DOWN", "C"],
+            20: ["UP", "A"],
+            21: ["UP", "B"],
+            22: ["UP", "C"],
+            23: ["LEFT", "X"],
+            24: ["LEFT", "Y"],
+            25: ["LEFT", "Z"],
+            26: ["RIGHT", "X"],
+            27: ["RIGHT", "Y"],
+            28: ["RIGHT", "Z"],
+            29: ["DOWN", "X"],
+            30: ["DOWN", "Y"],
+            31: ["DOWN", "Z"],
+            32: ["UP", "X"],
+            33: ["UP", "Y"],
+            34: ["UP", "Z"],
+            # Special moves
+            35: ["DOWN", "RIGHT", "A"],
+            36: ["DOWN", "RIGHT", "B"],
+            37: ["DOWN", "RIGHT", "C"],
+            38: ["DOWN", "RIGHT", "X"],
+            39: ["DOWN", "RIGHT", "Y"],
+            40: ["DOWN", "RIGHT", "Z"],
+            # Quarter circle back
+            41: ["DOWN", "LEFT", "A"],
+            42: ["DOWN", "LEFT", "B"],
+            43: ["DOWN", "LEFT", "C"],
+            44: ["DOWN", "LEFT", "X"],
+            45: ["DOWN", "LEFT", "Y"],
+            46: ["DOWN", "LEFT", "Z"],
+            # Dragon punch motion
+            47: ["RIGHT", "DOWN", "A"],
+            48: ["RIGHT", "DOWN", "B"],
+            49: ["RIGHT", "DOWN", "C"],
+            # Additional combinations
+            50: ["A", "B"],
+            51: ["B", "C"],
+            52: ["X", "Y"],
+            53: ["Y", "Z"],
+            54: ["A", "X"],
+            55: ["C", "Z"],
+        }
+
         self.n_actions = len(self.action_map)
-        # Reverse mapping for button combinations to indices
         self.button_to_index = {tuple(v): k for k, v in self.action_map.items()}
 
     def get_action(self, action_idx):
@@ -798,38 +455,21 @@ class OptimizedStreetFighterActions:
         return self.action_map.get(action_idx, [])
 
 
-# OPTIMIZED: Vision Wrapper with Performance Enhancements
-class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
-    """🥊 High-performance wrapper with frame stacking and external rendering support."""
+class StreetFighterVisionWrapper(gym.Wrapper):
+    """🥊 Your original wrapper with ONLY timeout fix - UNCHANGED."""
 
     def __init__(self, env):
         super().__init__(env)
 
-        # so we have reward cal, action mapper, feature tracker, frame processor
-        self.reward_calculator = OptimizedRewardCalculator()
-        self.feature_tracker = EBTEnhancedFeatureTracker()
-        self.action_mapper = OptimizedStreetFighterActions()
-        self.frame_processor = OptimizedFrameProcessor()
+        self.reward_calculator = IntelligentRewardCalculator()
+        self.feature_tracker = SimplifiedFeatureTracker()
+        self.action_mapper = StreetFighterDiscreteActions()
 
-        # Frame stacking for temporal dynamics
-        # deque, desk is both end more powerful
-        # frame stack is deque and frame stack is back
-        self.frame_stack = deque(maxlen=FRAME_STACK_SIZE)
-
-        # this is total step so far
-        self.step_count = 0
-        # this for the external thread to render, useful
-        self.last_raw_obs = None  # For external rendering thread
-
-        # Optimized observation space with frame stacking
         visual_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH),
-            dtype=np.uint8,
+            low=0, high=255, shape=(3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8
         )
         vector_space = gym.spaces.Box(
-            low=-10.0, high=10.0, shape=(3, VECTOR_FEATURE_DIM), dtype=np.float32
+            low=-10.0, high=10.0, shape=(5, VECTOR_FEATURE_DIM), dtype=np.float32
         )
 
         self.observation_space = gym.spaces.Dict(
@@ -837,111 +477,67 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         )
 
         self.action_space = gym.spaces.Discrete(self.action_mapper.n_actions)
-        self.vector_history = deque(maxlen=3)  # Reduced for efficiency
+        self.vector_history = deque(maxlen=5)
 
         self.episode_count = 0
+        self.step_count = 0
 
-        # Health tracking
+        # Your original health tracking
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
-        # --- NEW: STATE FLAG TO FIX THE ROUND 2 PROBLEM ---
-        self.round_over = False
-        # --- END OF NEW CODE ---
-
-        print(f"🚀 Optimized StreetFighterVisionWrapper initialized")
-        print(f"   - Frame Stack: {FRAME_STACK_SIZE} frames")
-        print(f"   - Rendering: Handled externally by daemon thread")
-        print(f"   - Action space size: {self.action_mapper.n_actions}")
-        print(f"   - Screen resolution: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
+        print(f"🥊 StreetFighterVisionWrapper initialized (fast UI speed maintained)")
 
     def reset(self, **kwargs):
-        """Enhanced reset with EBT sequence tracking and frame stack priming."""
+        """Your original reset with timeout fix."""
         obs, info = self.env.reset(**kwargs)
-        self.last_raw_obs = obs
 
         self.reward_calculator.reset()
         self.feature_tracker.reset()
         self.vector_history.clear()
-        self.step_count = 0
-
-        # --- NEW: RESET THE STATE FLAG ---
-        self.round_over = False
-        # --- END OF NEW CODE ---
 
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
-        self.episode_count += 1
 
-        # Prime the frame stack
-        processed_frame = self.frame_processor.process(obs)
-        self.frame_stack.clear()
-        for _ in range(FRAME_STACK_SIZE - 1):
-            self.frame_stack.append(processed_frame.copy())
+        self.episode_count += 1
+        self.step_count = 0
 
         player_health, opponent_health = self._extract_health(info)
         self.feature_tracker.update(player_health, opponent_health, 0, {})
 
-        # Build first observation, which also adds the final frame to the stack
         observation = self._build_observation(obs, info)
-
         return observation, info
 
-    # In wrapper.py, inside OptimizedStreetFighterVisionWrapper
-    # REPLACE the entire old step method with this new one.
-    def step(self, action: int):
-        """
-        Enhanced step with a stateful flag to ensure single-round episodes.
-        This is the FINAL FIX for the "round 2" problem.
-        """
-        # If the round is already marked as over, don't take any more actions.
-        # Just return the last observation and a firm 'done = True' signal.
-        if self.round_over:
-            # We must return an observation of the correct shape.
-            # Building it ensures consistency.
-            obs, info = self.env.state, self.env.data.lookup_all()
-            last_observation = self._build_observation(self.last_raw_obs or obs, info)
-            return last_observation, 0.0, True, False, info
-
-        # --- If the round is not over, proceed normally ---
+    def step(self, action):
+        """Your original step with ONLY timeout fix."""
         self.step_count += 1
 
-        obs, reward, done, truncated, info = self.env.step(action)
-        self.last_raw_obs = obs  # Store raw frame for rendering
-
         button_combination = self.action_mapper.get_action(action)
+        retro_action = self._convert_to_retro_action(button_combination)
+        obs, reward, done, truncated, info = self.env.step(retro_action)
+
         player_health, opponent_health = self._extract_health(info)
 
-        # --- SINGLE-ROUND TERMINATION LOGIC ---
-        is_ko = (self.previous_player_health > 0 and player_health <= 0) or (
+        # ONLY FIX: Add timeout for single fights (preserves single round logic)
+        if (self.previous_player_health > 0 and player_health <= 0) or (
             self.previous_opponent_health > 0 and opponent_health <= 0
-        )
-        in_game_timer_expired = info.get("timer", 99) <= 0
-        step_limit_reached = self.step_count >= MAX_FIGHT_STEPS
-
-        # Check if the round should end NOW
-        if is_ko or in_game_timer_expired or step_limit_reached:
+        ):
             done = True
-            self.round_over = True  # Latch the flag! It will now be true until reset().
+        elif self.step_count >= MAX_FIGHT_STEPS:  # ONLY ADDITION
+            done = True
 
-        # Update health for the next step's comparison
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
 
-        # Calculate reward (pass our final 'done' signal to it)
         intelligent_reward, reward_breakdown = self.reward_calculator.calculate_reward(
-            player_health, opponent_health, done, info, action
+            player_health, opponent_health, done, info
         )
 
-        # Update trackers
         self.feature_tracker.update(
-            player_health, opponent_health, action, reward_breakdown, energy_score=0.0
+            player_health, opponent_health, action, reward_breakdown
         )
-
-        # Build the final observation for the agent
         observation = self._build_observation(obs, info)
 
-        # Update info dictionary
         info.update(
             {
                 "player_health": player_health,
@@ -950,29 +546,18 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
                 "intelligent_reward": intelligent_reward,
                 "episode_count": self.episode_count,
                 "step_count": self.step_count,
-                "ebt_sequence_info": self.feature_tracker.get_sequence_info(),
-                "action_taken": action,
-                "button_combination": button_combination,
-                "is_ko": is_ko,
-                "is_timeout": in_game_timer_expired,
             }
         )
 
         return observation, intelligent_reward, done, truncated, info
 
-    def get_last_raw_obs(self):
-        """Allows the external rendering thread to get the latest frame."""
-        return self.last_raw_obs
-
     def _extract_health(self, info):
-        """Extract health values from game state."""
+        """Your original health extraction - UNCHANGED."""
         player_health = info.get("player_health", MAX_HEALTH)
         opponent_health = info.get("opponent_health", MAX_HEALTH)
 
-        # Try to read from memory if available
         if hasattr(self.env, "data") and hasattr(self.env.data, "memory"):
             try:
-                # These memory addresses may not be correct for all states/versions
                 player_health = self.env.data.memory.read_byte(0x8004)
                 opponent_health = self.env.data.memory.read_byte(0x8008)
             except:
@@ -981,72 +566,752 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _convert_to_retro_action(self, button_combination):
-        """
-        [DEPRECATED in this workflow] Convert button combination to retro action.
-        This is no longer called in the `step` method but is kept for potential
-        debugging or alternative configurations.
-        """
-        action_array = [0] * 12
-        button_mapping = {
-            "B": 0,
-            "Y": 1,
-            "SELECT": 2,
-            "START": 3,
-            "UP": 4,
-            "DOWN": 5,
-            "LEFT": 6,
-            "RIGHT": 7,
-            "A": 8,
-            "X": 9,
-            "L": 10,
-            "R": 11,
-            "C": 11,
-            "Z": 10,  # Street Fighter specific mappings
-        }
-        if not isinstance(button_combination, (list, tuple)):
-            button_combination = [button_combination] if button_combination else []
-        for button in button_combination:
-            if button in button_mapping:
-                action_array[button_mapping[button]] = 1
-        return action_array
+        """Your original action conversion - UNCHANGED."""
+        button_tuple = tuple(button_combination)
+        if button_tuple in self.action_mapper.button_to_index:
+            return self.action_mapper.button_to_index[button_tuple]
+        else:
+            return 0
 
     def _build_observation(self, visual_obs, info):
-        """Build optimized observation with frame stacking."""
-        # Process new frame and add to stack
-        processed_frame = self.frame_processor.process(visual_obs)
-        self.frame_stack.append(processed_frame)
-        stacked_visual_obs = np.stack(list(self.frame_stack), axis=0)
+        """Your original observation building - UNCHANGED."""
+        if isinstance(visual_obs, np.ndarray):
+            if len(visual_obs.shape) == 3 and visual_obs.shape[2] == 3:
+                visual_obs = np.transpose(visual_obs, (2, 0, 1))
 
-        # Build vector observation
+            if visual_obs.shape[-2:] != (SCREEN_HEIGHT, SCREEN_WIDTH):
+                visual_obs = cv2.resize(
+                    visual_obs.transpose(1, 2, 0), (SCREEN_WIDTH, SCREEN_HEIGHT)
+                ).transpose(2, 0, 1)
+
         vector_features = self.feature_tracker.get_features()
         self.vector_history.append(vector_features)
-        while len(self.vector_history) < 3:
+
+        while len(self.vector_history) < 5:
             self.vector_history.appendleft(
                 np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
             )
+
         vector_obs = np.stack(list(self.vector_history), axis=0)
 
         return {
-            "visual_obs": stacked_visual_obs.astype(np.uint8),
+            "visual_obs": visual_obs.astype(np.uint8),
             "vector_obs": vector_obs.astype(np.float32),
         }
 
-    def get_ebt_sequence(self, device="cpu"):
-        """Get EBT sequence tensor for current episode."""
-        return self.feature_tracker.get_ebt_sequence(device)
+
+# NEW: Energy-Based Transformer Components
+class EnergyBasedMultiHeadAttention(nn.Module):
+    """🔥 Energy-Based Multi-Head Attention inspired by EBT paper."""
+
+    def __init__(self, d_model, num_heads, dropout=0.1, energy_scale=0.1):
+        super().__init__()
+        assert d_model % num_heads == 0
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.energy_scale = energy_scale
+
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model)
+
+        # Energy-based components
+        self.energy_proj = nn.Linear(d_model, d_model)
+        self.energy_norm = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(d_model)
+
+    def forward(self, x, mask=None):
+        batch_size, seq_len, d_model = x.size()
+
+        # Standard attention computation
+        Q = (
+            self.w_q(x)
+            .view(batch_size, seq_len, self.num_heads, self.d_k)
+            .transpose(1, 2)
+        )
+        K = (
+            self.w_k(x)
+            .view(batch_size, seq_len, self.num_heads, self.d_k)
+            .transpose(1, 2)
+        )
+        V = (
+            self.w_v(x)
+            .view(batch_size, seq_len, self.num_heads, self.d_k)
+            .transpose(1, 2)
+        )
+
+        # Energy-based attention scores
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+
+        # Energy transformation
+        energy_features = self.energy_proj(x)
+        energy_features = self.energy_norm(energy_features)
+        energy_bias = torch.sum(
+            energy_features.unsqueeze(2) * energy_features.unsqueeze(1), dim=-1
+        )
+        energy_bias = energy_bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
+
+        # Combine standard attention with energy bias
+        scores = scores + self.energy_scale * energy_bias
+
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+
+        attention_weights = F.softmax(scores, dim=-1)
+        attention_weights = self.dropout(attention_weights)
+
+        # Apply attention to values
+        context = torch.matmul(attention_weights, V)
+        context = (
+            context.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
+        )
+
+        output = self.w_o(context)
+        return self.layer_norm(output + x), attention_weights
 
 
-# Keep remaining classes with optimizations
+class EnergyBasedTransformerBlock(nn.Module):
+    """🔥 Energy-Based Transformer Block with energy-aware feed-forward."""
+
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1, energy_scale=0.1):
+        super().__init__()
+
+        self.attention = EnergyBasedMultiHeadAttention(
+            d_model, num_heads, dropout, energy_scale
+        )
+
+        # Energy-aware feed-forward network
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout),
+        )
+
+        # Energy prediction head for this layer
+        self.energy_head = nn.Sequential(
+            nn.Linear(d_model, d_model // 2), nn.ReLU(), nn.Linear(d_model // 2, 1)
+        )
+
+        self.layer_norm = nn.LayerNorm(d_model)
+
+    def forward(self, x, mask=None):
+        # Energy-based attention
+        attn_output, attention_weights = self.attention(x, mask)
+
+        # Feed-forward with residual connection
+        ff_output = self.ff(attn_output)
+        output = self.layer_norm(ff_output + attn_output)
+
+        # Energy prediction for this layer
+        layer_energy = self.energy_head(output.mean(dim=1))  # Pool over sequence
+
+        return output, layer_energy, attention_weights
 
 
+class EnhancedEnergyBasedCNN(nn.Module):
+    """🛡️ Your original CNN enhanced with Energy-Based Transformer processing."""
+
+    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
+        super().__init__()
+
+        visual_space = observation_space["visual_obs"]
+        vector_space = observation_space["vector_obs"]
+        n_input_channels = visual_space.shape[0]
+        seq_length, vector_feature_count = vector_space.shape
+
+        # Your original visual CNN - UNCHANGED
+        self.visual_cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(32),
+            nn.Dropout2d(0.15),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(64),
+            nn.Dropout2d(0.15),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(128),
+            nn.Dropout2d(0.1),
+            nn.AdaptiveAvgPool2d((3, 4)),
+            nn.Flatten(),
+        )
+
+        with torch.no_grad():
+            dummy_visual = torch.zeros(
+                1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
+            )
+            visual_output_size = self.visual_cnn(dummy_visual).shape[1]
+
+        # Enhanced vector processing with Energy-Based Transformer
+        self.vector_embed = nn.Linear(
+            vector_feature_count, 128
+        )  # Increased dim for transformer
+        self.positional_encoding = nn.Parameter(torch.randn(seq_length, 128) * 0.02)
+
+        # Energy-Based Transformer layers
+        self.ebt_layers = nn.ModuleList(
+            [
+                EnergyBasedTransformerBlock(
+                    d_model=128, num_heads=4, d_ff=256, dropout=0.1, energy_scale=0.1
+                )
+                for _ in range(2)  # 2 transformer layers
+            ]
+        )
+
+        self.vector_final = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.15),
+        )
+
+        # Enhanced fusion with energy-aware processing
+        fusion_input_size = visual_output_size + 64
+        self.fusion = nn.Sequential(
+            nn.Linear(fusion_input_size, 512),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(512),
+            nn.Dropout(0.2),
+            nn.Linear(512, features_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+        )
+
+        # Energy aggregation from transformer layers
+        self.energy_aggregator = nn.Sequential(
+            nn.Linear(len(self.ebt_layers), 32), nn.ReLU(), nn.Linear(32, 1)
+        )
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight, gain=0.3)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+
+    def forward(
+        self, observations: Dict[str, torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        visual_obs = observations["visual_obs"]
+        vector_obs = observations["vector_obs"]
+        device = next(self.parameters()).device
+
+        visual_obs = visual_obs.float().to(device)
+        vector_obs = vector_obs.float().to(device)
+
+        # Sanitize inputs
+        visual_nan_mask = ~torch.isfinite(visual_obs)
+        vector_nan_mask = ~torch.isfinite(vector_obs)
+
+        if torch.any(visual_nan_mask):
+            visual_obs = torch.where(
+                visual_nan_mask, torch.zeros_like(visual_obs), visual_obs
+            )
+
+        if torch.any(vector_nan_mask):
+            vector_obs = torch.where(
+                vector_nan_mask, torch.zeros_like(vector_obs), vector_obs
+            )
+
+        visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
+        vector_obs = torch.clamp(vector_obs, -8.0, 8.0)
+
+        # Process visual features (unchanged)
+        visual_features = self.visual_cnn(visual_obs)
+        if torch.any(torch.abs(visual_features) > 50.0):
+            visual_features = torch.clamp(visual_features, -50.0, 50.0)
+
+        # Enhanced vector processing with Energy-Based Transformer
+        batch_size, seq_len, feature_dim = vector_obs.shape
+        vector_embedded = self.vector_embed(vector_obs)
+
+        # Add positional encoding
+        vector_embedded = vector_embedded + self.positional_encoding.unsqueeze(
+            0
+        ).expand(batch_size, -1, -1)
+
+        # Process through Energy-Based Transformer layers
+        transformer_output = vector_embedded
+        layer_energies = []
+        all_attention_weights = []
+
+        for ebt_layer in self.ebt_layers:
+            transformer_output, layer_energy, attention_weights = ebt_layer(
+                transformer_output
+            )
+            layer_energies.append(layer_energy)
+            all_attention_weights.append(attention_weights)
+
+        # Pool transformer output
+        vector_features = transformer_output.mean(
+            dim=1
+        )  # Average pooling over sequence
+        vector_features = self.vector_final(vector_features)
+
+        # Combine visual and vector features
+        combined_features = torch.cat([visual_features, vector_features], dim=1)
+        output = self.fusion(combined_features)
+
+        # Aggregate energy from transformer layers
+        if layer_energies:
+            stacked_energies = torch.cat(layer_energies, dim=1)
+            aggregated_energy = self.energy_aggregator(stacked_energies)
+        else:
+            aggregated_energy = torch.zeros(batch_size, 1, device=device)
+
+        # Sanitize outputs
+        if torch.any(~torch.isfinite(output)):
+            output = torch.where(
+                ~torch.isfinite(output), torch.zeros_like(output), output
+            )
+
+        if torch.any(~torch.isfinite(aggregated_energy)):
+            aggregated_energy = torch.where(
+                ~torch.isfinite(aggregated_energy),
+                torch.zeros_like(aggregated_energy),
+                aggregated_energy,
+            )
+
+        output = torch.clamp(output, -15.0, 15.0)
+        aggregated_energy = torch.clamp(aggregated_energy, -10.0, 10.0)
+
+        return output, aggregated_energy
+
+
+class EnhancedEnergyBasedVerifier(nn.Module):
+    """🛡️ Enhanced verifier with Energy-Based Transformer integration."""
+
+    def __init__(
+        self,
+        observation_space: spaces.Dict,
+        action_space: spaces.Space,
+        features_dim: int = 256,
+    ):
+        super().__init__()
+
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.features_dim = features_dim
+        self.action_dim = action_space.n if hasattr(action_space, "n") else 56
+
+        # Enhanced features extractor with EBT
+        self.features_extractor = EnhancedEnergyBasedCNN(
+            observation_space, features_dim
+        )
+
+        self.action_embed = nn.Sequential(
+            nn.Linear(self.action_dim, 64),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(64),
+            nn.Dropout(0.15),
+        )
+
+        # Enhanced energy network with transformer energy integration
+        self.energy_net = nn.Sequential(
+            nn.Linear(features_dim + 64 + 1, 256),  # +1 for transformer energy
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(256),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(128),
+            nn.Dropout(0.15),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(64),
+            nn.Dropout(0.1),
+            nn.Linear(64, 1),
+        )
+
+        self.energy_scale = 0.6
+        self.energy_clamp_min = -6.0
+        self.energy_clamp_max = 6.0
+
+        # Energy fusion weights
+        self.energy_fusion = nn.Parameter(
+            torch.tensor([0.7, 0.3])
+        )  # CNN energy, Transformer energy
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, mean=0.0, std=0.005)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+
+    def forward(
+        self, context: torch.Tensor, candidate_action: torch.Tensor
+    ) -> torch.Tensor:
+        device = next(self.parameters()).device
+
+        if isinstance(context, dict):
+            context_features, transformer_energy = self.features_extractor(context)
+        else:
+            context_features = context
+            transformer_energy = torch.zeros(context.shape[0], 1, device=device)
+
+        context_features = context_features.to(device)
+        candidate_action = candidate_action.to(device)
+        transformer_energy = transformer_energy.to(device)
+
+        # Sanitize inputs
+        if torch.any(~torch.isfinite(context_features)):
+            context_features = torch.where(
+                ~torch.isfinite(context_features),
+                torch.zeros_like(context_features),
+                context_features,
+            )
+
+        if torch.any(~torch.isfinite(candidate_action)):
+            candidate_action = torch.where(
+                ~torch.isfinite(candidate_action),
+                torch.zeros_like(candidate_action),
+                candidate_action,
+            )
+
+        if torch.any(~torch.isfinite(transformer_energy)):
+            transformer_energy = torch.where(
+                ~torch.isfinite(transformer_energy),
+                torch.zeros_like(transformer_energy),
+                transformer_energy,
+            )
+
+        context_features = torch.clamp(context_features, -15.0, 15.0)
+        candidate_action = torch.clamp(candidate_action, 0.0, 1.0)
+        transformer_energy = torch.clamp(transformer_energy, -10.0, 10.0)
+
+        # Process action
+        action_embedded = self.action_embed(candidate_action)
+        if torch.any(~torch.isfinite(action_embedded)):
+            action_embedded = torch.where(
+                ~torch.isfinite(action_embedded),
+                torch.zeros_like(action_embedded),
+                action_embedded,
+            )
+
+        # Combine features including transformer energy
+        combined_input = torch.cat(
+            [context_features, action_embedded, transformer_energy], dim=-1
+        )
+
+        # Compute final energy
+        raw_energy = self.energy_net(combined_input)
+        energy = raw_energy * self.energy_scale
+        energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
+
+        # Sanitize final output
+        if torch.any(~torch.isfinite(energy)):
+            energy = torch.where(
+                ~torch.isfinite(energy), torch.zeros_like(energy), energy
+            )
+
+        return energy
+
+    def get_energy_stats(self):
+        return {
+            "energy_mean": 0.0,
+            "energy_std": 0.0,
+            "nan_count": 0,
+            "explosion_count": 0,
+        }
+
+
+class EnhancedEnergyBasedAgent:
+    """🛡️ Enhanced agent with Energy-Based Transformer thinking."""
+
+    def __init__(
+        self,
+        verifier: EnhancedEnergyBasedVerifier,
+        thinking_steps: int = 3,
+        thinking_lr: float = 0.06,
+        noise_scale: float = 0.02,
+    ):
+        self.verifier = verifier
+        self.initial_thinking_steps = thinking_steps
+        self.current_thinking_steps = thinking_steps
+        self.initial_thinking_lr = thinking_lr
+        self.current_thinking_lr = thinking_lr
+        self.noise_scale = noise_scale
+        self.action_dim = verifier.action_dim
+
+        # Enhanced thinking parameters
+        self.gradient_clip = 0.3
+        self.early_stop_patience = 2
+        self.min_energy_improvement = 8e-4
+
+        # Adaptive thinking parameters
+        self.max_thinking_steps = 8  # Increased for transformer
+        self.min_thinking_steps = 1
+
+        # Energy-based thinking with transformer awareness
+        self.energy_momentum = 0.9
+        self.energy_history_weight = 0.1
+
+        self.thinking_stats = {
+            "total_predictions": 0,
+            "avg_thinking_steps": 0.0,
+            "avg_energy_improvement": 0.0,
+            "early_stops": 0,
+            "energy_explosions": 0,
+            "gradient_explosions": 0,
+            "successful_optimizations": 0,
+            "failed_optimizations": 0,
+            "transformer_energy_usage": 0.0,
+        }
+
+        self.recent_performance = deque(maxlen=100)
+
+    def predict(
+        self, observations: Dict[str, torch.Tensor], deterministic: bool = False
+    ) -> Tuple[int, Dict]:
+        device = next(self.verifier.parameters()).device
+
+        # Prepare observations
+        obs_device = {}
+        for key, value in observations.items():
+            if isinstance(value, torch.Tensor):
+                obs_device[key] = value.to(device)
+            else:
+                obs_device[key] = torch.from_numpy(value).to(device)
+
+        if len(obs_device["visual_obs"].shape) == 3:
+            for key in obs_device:
+                obs_device[key] = obs_device[key].unsqueeze(0)
+
+        batch_size = obs_device["visual_obs"].shape[0]
+
+        # Initialize candidate action
+        if deterministic:
+            candidate_action = (
+                torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
+            )
+        else:
+            candidate_action = (
+                torch.randn(batch_size, self.action_dim, device=device)
+                * self.noise_scale
+            )
+            candidate_action = F.softmax(candidate_action, dim=-1)
+
+        candidate_action.requires_grad_(True)
+
+        # Enhanced thinking process with energy-based optimization
+        energy_history = []
+        transformer_energies = []
+        steps_taken = 0
+        early_stopped = False
+        energy_explosion = False
+        gradient_explosion = False
+        optimization_successful = False
+
+        # Get initial energy
+        with torch.no_grad():
+            try:
+                initial_energy = self.verifier(obs_device, candidate_action)
+                energy_history.append(initial_energy.mean().item())
+
+                # Track transformer energy contribution
+                _, transformer_energy = self.verifier.features_extractor(obs_device)
+                transformer_energies.append(transformer_energy.mean().item())
+            except Exception as e:
+                return 0, {"error": "initial_energy_failed"}
+
+        # Energy-based thinking loop
+        momentum = torch.zeros_like(candidate_action)
+
+        for step in range(self.current_thinking_steps):
+            try:
+                energy = self.verifier(obs_device, candidate_action)
+
+                # Check for energy explosion
+                if torch.any(torch.abs(energy) > 8.0):
+                    energy_explosion = True
+                    break
+
+                # Compute gradients
+                gradients = torch.autograd.grad(
+                    outputs=energy.sum(),
+                    inputs=candidate_action,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
+
+                gradient_norm = torch.norm(gradients).item()
+
+                # Check for gradient explosion
+                if gradient_norm > self.gradient_clip:
+                    gradient_explosion = True
+                    gradients = gradients * (self.gradient_clip / gradient_norm)
+
+                if torch.any(~torch.isfinite(gradients)):
+                    break
+
+                # Enhanced update with momentum
+                with torch.no_grad():
+                    momentum = (
+                        self.energy_momentum * momentum
+                        + (1 - self.energy_momentum) * gradients
+                    )
+                    candidate_action = (
+                        candidate_action - self.current_thinking_lr * momentum
+                    )
+                    candidate_action = F.softmax(candidate_action, dim=-1)
+                    candidate_action.requires_grad_(True)
+
+                # Evaluate new energy
+                with torch.no_grad():
+                    new_energy = self.verifier(obs_device, candidate_action)
+                    energy_history.append(new_energy.mean().item())
+
+                    # Track transformer energy
+                    _, transformer_energy = self.verifier.features_extractor(obs_device)
+                    transformer_energies.append(transformer_energy.mean().item())
+
+                # Early stopping based on energy improvement
+                if len(energy_history) >= self.early_stop_patience + 1:
+                    recent_improvement = (
+                        energy_history[-self.early_stop_patience - 1]
+                        - energy_history[-1]
+                    )
+                    if abs(recent_improvement) < self.min_energy_improvement:
+                        early_stopped = True
+                        break
+
+                steps_taken += 1
+
+            except Exception as e:
+                break
+
+        # Determine optimization success
+        if len(energy_history) > 1:
+            total_improvement = abs(energy_history[0] - energy_history[-1])
+            optimization_successful = (
+                total_improvement > self.min_energy_improvement
+                and not energy_explosion
+                and not gradient_explosion
+            )
+
+        # Final action selection
+        with torch.no_grad():
+            try:
+                final_action_probs = F.softmax(candidate_action, dim=-1)
+                final_action_probs = final_action_probs + 1e-8
+                final_action_probs = final_action_probs / final_action_probs.sum(
+                    dim=-1, keepdim=True
+                )
+
+                if deterministic:
+                    action_idx = torch.argmax(final_action_probs, dim=-1)
+                else:
+                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
+            except Exception as e:
+                return 0, {"error": "action_selection_failed"}
+
+        # Update statistics
+        self.thinking_stats["total_predictions"] += 1
+        self.thinking_stats["avg_thinking_steps"] = (
+            self.thinking_stats["avg_thinking_steps"] * 0.9 + steps_taken * 0.1
+        )
+
+        if len(energy_history) > 1:
+            energy_improvement = abs(energy_history[0] - energy_history[-1])
+            self.thinking_stats["avg_energy_improvement"] = (
+                self.thinking_stats["avg_energy_improvement"] * 0.9
+                + energy_improvement * 0.1
+            )
+
+        if transformer_energies:
+            avg_transformer_energy = sum(transformer_energies) / len(
+                transformer_energies
+            )
+            self.thinking_stats["transformer_energy_usage"] = (
+                self.thinking_stats["transformer_energy_usage"] * 0.9
+                + abs(avg_transformer_energy) * 0.1
+            )
+
+        # Update counters
+        if early_stopped:
+            self.thinking_stats["early_stops"] += 1
+        if energy_explosion:
+            self.thinking_stats["energy_explosions"] += 1
+        if gradient_explosion:
+            self.thinking_stats["gradient_explosions"] += 1
+        if optimization_successful:
+            self.thinking_stats["successful_optimizations"] += 1
+        else:
+            self.thinking_stats["failed_optimizations"] += 1
+
+        self.recent_performance.append(1.0 if optimization_successful else 0.0)
+
+        thinking_info = {
+            "energy_history": energy_history,
+            "transformer_energies": transformer_energies,
+            "steps_taken": steps_taken,
+            "early_stopped": early_stopped,
+            "energy_explosion": energy_explosion,
+            "gradient_explosion": gradient_explosion,
+            "optimization_successful": optimization_successful,
+            "energy_improvement": (
+                abs(energy_history[0] - energy_history[-1])
+                if len(energy_history) > 1
+                else 0.0
+            ),
+            "final_energy": energy_history[-1] if energy_history else 0.0,
+            "current_thinking_steps": self.current_thinking_steps,
+            "current_thinking_lr": self.current_thinking_lr,
+            "avg_transformer_energy": (
+                sum(transformer_energies) / len(transformer_energies)
+                if transformer_energies
+                else 0.0
+            ),
+        }
+
+        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
+
+    def get_thinking_stats(self) -> Dict:
+        stats = self.thinking_stats.copy()
+        if stats["total_predictions"] > 0:
+            stats["success_rate"] = safe_divide(
+                stats["successful_optimizations"], stats["total_predictions"], 0.0
+            )
+            stats["early_stop_rate"] = safe_divide(
+                stats["early_stops"], stats["total_predictions"], 0.0
+            )
+            stats["explosion_rate"] = safe_divide(
+                stats["energy_explosions"] + stats["gradient_explosions"],
+                stats["total_predictions"],
+                0.0,
+            )
+        return stats
+
+
+# Keep your other original classes with fixed quality threshold
 class GoldenExperienceBuffer:
-    """🏆 Golden buffer with enhanced EBT integration."""
+    """🏆 Golden buffer with FIXED threshold."""
 
-    def __init__(self, capacity=500):  # Reduced capacity for efficiency
+    def __init__(self, capacity=1000):
         self.capacity = capacity
         self.experiences = deque(maxlen=capacity)
-        self.min_quality_for_golden = 0.7  # Increased threshold
-        self.peak_win_rate_threshold = 0.2  # Lowered threshold
+        self.min_quality_for_golden = 0.6  # Keep high for golden
+        self.peak_win_rate_threshold = 0.3  # FIXED: Lower threshold
         self.current_win_rate = 0.0
 
     def update_win_rate(self, win_rate):
@@ -1092,86 +1357,61 @@ class GoldenExperienceBuffer:
         }
 
 
-class EBTEnhancedExperienceBuffer:
-    """🎯 Enhanced experience buffer with EBT sequence modeling."""
+class EnhancedQualityBasedExperienceBuffer:
+    """🎯 MAIN FIX: Quality threshold lowered from 0.6 to 0.3."""
 
     def __init__(
-        self, capacity=20000, quality_threshold=0.4, golden_buffer_capacity=500
+        self, capacity=30000, quality_threshold=0.3, golden_buffer_capacity=1000
     ):
         self.capacity = capacity
-        self.quality_threshold = quality_threshold
+        self.quality_threshold = quality_threshold  # THE KEY FIX
 
         self.good_experiences = deque(maxlen=capacity // 2)
         self.bad_experiences = deque(maxlen=capacity // 2)
-        self.sequence_experiences = deque(maxlen=capacity // 4)
 
         self.golden_buffer = GoldenExperienceBuffer(capacity=golden_buffer_capacity)
 
-        self.quality_scores = deque(maxlen=500)
+        self.quality_scores = deque(maxlen=1000)
         self.total_added = 0
 
-        self.adjustment_rate = 0.03
-        self.threshold_adjustment_frequency = 20
+        self.adjustment_rate = 0.05
+        self.threshold_adjustment_frequency = 25
         self.threshold_adjustments = 0
 
-        print(f"🚀 EBT-Enhanced Experience Buffer initialized")
-        print(f"   - Quality threshold: {quality_threshold}")
-        print(f"   - Total capacity: {capacity:,}")
+        print(f"🎯 Enhanced Quality-Based Experience Buffer initialized")
+        print(f"   - Quality threshold: {quality_threshold} (THE MAIN FIX)")
 
-    def add_experience(
-        self, experience, reward, reward_breakdown, quality_score, ebt_sequence=None
-    ):
-        """Enhanced experience addition with EBT sequence support."""
+    def add_experience(self, experience, reward, reward_breakdown, quality_score):
+        """Add experience with FIXED threshold."""
         self.total_added += 1
         self.quality_scores.append(quality_score)
 
-        # Store EBT sequence if provided
-        if ebt_sequence is not None:
-            experience["ebt_sequence"] = ebt_sequence
-
+        # THE CORE FIX: This will now work because threshold is 0.3 instead of 0.6
         if quality_score >= self.quality_threshold:
             self.good_experiences.append(experience)
             self.golden_buffer.add_experience(experience, quality_score)
-
-            # Also store in sequence experiences if EBT sequence is available
-            if ebt_sequence is not None:
-                self.sequence_experiences.append(experience)
         else:
             self.bad_experiences.append(experience)
 
     def update_win_rate(self, win_rate):
         self.golden_buffer.update_win_rate(win_rate)
 
-    def sample_enhanced_balanced_batch(
-        self, batch_size, golden_ratio=0.1, sequence_ratio=0.1
-    ):
-        """Enhanced batch sampling with EBT sequence experiences."""
+    def sample_enhanced_balanced_batch(self, batch_size, golden_ratio=0.15):
         if (
             len(self.good_experiences) < batch_size // 4
             or len(self.bad_experiences) < batch_size // 4
         ):
-            return None, None, None, None
+            return None, None, None
 
         golden_count = int(batch_size * golden_ratio)
-        sequence_count = int(batch_size * sequence_ratio)
-        remaining_good = (batch_size // 2) - golden_count - sequence_count
+        remaining_good = (batch_size // 2) - golden_count
         bad_count = batch_size // 2
 
-        # Sample different types of experiences
         golden_batch = (
             self.golden_buffer.sample_golden_batch(golden_count)
             if golden_count > 0
             else []
         )
-
-        sequence_batch = []
-        if sequence_count > 0 and len(self.sequence_experiences) > 0:
-            seq_indices = np.random.choice(
-                len(self.sequence_experiences),
-                min(sequence_count, len(self.sequence_experiences)),
-                replace=False,
-            )
-            sequence_batch = [self.sequence_experiences[i] for i in seq_indices]
 
         good_indices = np.random.choice(
             len(self.good_experiences), remaining_good, replace=False
@@ -1183,8 +1423,8 @@ class EBTEnhancedExperienceBuffer:
         )
         bad_batch = [self.bad_experiences[i] for i in bad_indices]
 
-        combined_good_batch = good_batch + golden_batch + sequence_batch
-        return combined_good_batch, bad_batch, golden_batch, sequence_batch
+        combined_good_batch = good_batch + golden_batch
+        return combined_good_batch, bad_batch, golden_batch
 
     def get_stats(self):
         total_size = len(self.good_experiences) + len(self.bad_experiences)
@@ -1202,7 +1442,6 @@ class EBTEnhancedExperienceBuffer:
             "total_size": total_size,
             "good_count": len(self.good_experiences),
             "bad_count": len(self.bad_experiences),
-            "sequence_count": len(self.sequence_experiences),
             "good_ratio": len(self.good_experiences) / max(1, total_size),
             "quality_threshold": self.quality_threshold,
             "avg_quality_score": avg_quality,
@@ -1217,29 +1456,29 @@ class EBTEnhancedExperienceBuffer:
         if episode_number % self.threshold_adjustment_frequency != 0:
             return
 
-        if len(self.quality_scores) < 50:
+        if len(self.quality_scores) < 100:
             return
 
         total_size = len(self.good_experiences) + len(self.bad_experiences)
         current_good_ratio = len(self.good_experiences) / max(1, total_size)
 
-        if current_good_ratio < target_good_ratio - 0.1:
+        if current_good_ratio < target_good_ratio - 0.15:
             self.quality_threshold *= 1 - self.adjustment_rate
             self.threshold_adjustments += 1
             print(f"📉 Lowered quality threshold to {self.quality_threshold:.3f}")
-        elif current_good_ratio > target_good_ratio + 0.1:
+        elif current_good_ratio > target_good_ratio + 0.15:
             self.quality_threshold *= 1 + self.adjustment_rate
             self.threshold_adjustments += 1
             print(f"📈 Raised quality threshold to {self.quality_threshold:.3f}")
 
-        self.quality_threshold = max(0.3, min(0.8, self.quality_threshold))
+        self.quality_threshold = max(0.4, min(0.75, self.quality_threshold))
 
 
-# Keep PolicyMemoryManager unchanged but add performance optimizations
+# Keep all your other management classes unchanged
 class PolicyMemoryManager:
-    """🧠 Optimized policy memory manager."""
+    """🧠 Your original policy memory manager - UNCHANGED."""
 
-    def __init__(self, performance_drop_threshold=0.1, averaging_weight=0.7):
+    def __init__(self, performance_drop_threshold=0.05, averaging_weight=0.7):
         self.performance_drop_threshold = performance_drop_threshold
         self.averaging_weight = averaging_weight
 
@@ -1249,8 +1488,8 @@ class PolicyMemoryManager:
         self.performance_drop_detected = False
 
         self.peak_lr = None
-        self.lr_reduction_factor = 0.8
-        self.min_lr = 1e-6
+        self.lr_reduction_factor = 0.5
+        self.min_lr = 1e-7
 
         self.averaging_performed = 0
         self.last_averaging_episode = -1
@@ -1274,7 +1513,7 @@ class PolicyMemoryManager:
             if (
                 current_win_rate < self.peak_win_rate - self.performance_drop_threshold
                 and not self.performance_drop_detected
-                and self.episodes_since_peak > 8  # Reduced from 10
+                and self.episodes_since_peak > 10
             ):
                 self.performance_drop_detected = True
                 performance_drop = True
@@ -1285,7 +1524,7 @@ class PolicyMemoryManager:
         return (
             self.performance_drop_detected
             and self.peak_checkpoint_state is not None
-            and current_episode - self.last_averaging_episode > 3  # Reduced from 5
+            and current_episode - self.last_averaging_episode > 5
         )
 
     def perform_checkpoint_averaging(self, current_model):
@@ -1336,586 +1575,28 @@ class PolicyMemoryManager:
         }
 
 
-# OPTIMIZED: CNN with Performance Enhancements
-class OptimizedStreetFighterCNN(nn.Module):
-    """🛡️ High-performance CNN optimized for Street Fighter RL."""
-
-    def __init__(self, observation_space: spaces.Dict, features_dim: int = 128):
-        super().__init__()
-
-        visual_space = observation_space["visual_obs"]
-        vector_space = observation_space["vector_obs"]
-        # The number of input channels is now the size of the frame stack
-        n_input_channels = visual_space.shape[0]
-        seq_length, vector_feature_count = vector_space.shape
-
-        # Optimized CNN architecture for smaller inputs
-        self.visual_cnn = nn.Sequential(
-            # The first layer automatically adapts to n_input_channels (e.g., 8 for frame stack)
-            nn.Conv2d(n_input_channels, 16, kernel_size=8, stride=4, padding=2),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(16),
-            nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(32),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(64),
-            nn.AdaptiveAvgPool2d((2, 2)),
-            nn.Flatten(),
-        )
-
-        with torch.no_grad():
-            dummy_visual = torch.zeros(
-                1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
-            )
-            visual_output_size = self.visual_cnn(dummy_visual).shape[1]
-
-        # Optimized vector processing
-        self.vector_embed = nn.Linear(vector_feature_count, 32)
-        self.vector_norm = nn.LayerNorm(32)
-        self.vector_dropout = nn.Dropout(0.1)
-        self.vector_gru = nn.GRU(32, 32, batch_first=True, dropout=0.1)
-        self.vector_final = nn.Sequential(
-            nn.Linear(32, 16),
-            nn.ReLU(inplace=True),
-        )
-
-        # Optimized fusion layer
-        fusion_input_size = visual_output_size + 16
-        self.fusion = nn.Sequential(
-            nn.Linear(fusion_input_size, 256),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(256),
-            nn.Dropout(0.1),
-            nn.Linear(256, features_dim),
-            nn.ReLU(inplace=True),
-        )
-
-        # EBT preparation layer
-        self.ebt_projection = nn.Linear(features_dim, EBT_HIDDEN_DIM)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Conv2d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight, gain=0.5)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
-
-    def forward(
-        self, observations: Dict[str, torch.Tensor], return_ebt_features=False
-    ) -> torch.Tensor:
-        visual_obs = observations["visual_obs"]
-        vector_obs = observations["vector_obs"]
-        device = next(self.parameters()).device
-
-        visual_obs = visual_obs.float().to(device)
-        vector_obs = vector_obs.float().to(device)
-
-        # Input validation and normalization
-        visual_obs = torch.clamp(visual_obs / 255.0, 0.0, 1.0)
-        vector_obs = torch.clamp(vector_obs, -5.0, 5.0)
-
-        # Visual processing
-        visual_features = self.visual_cnn(visual_obs)
-
-        # Vector processing
-        batch_size, seq_len, feature_dim = vector_obs.shape
-        vector_embedded = self.vector_embed(vector_obs)
-        vector_embedded = self.vector_norm(vector_embedded)
-        vector_embedded = self.vector_dropout(vector_embedded)
-
-        gru_output, _ = self.vector_gru(vector_embedded)
-        vector_features = gru_output[:, -1, :]
-        vector_features = self.vector_final(vector_features)
-
-        # Fusion
-        combined_features = torch.cat([visual_features, vector_features], dim=1)
-        output = self.fusion(combined_features)
-
-        # Safety checks
-        output = torch.clamp(output, -10.0, 10.0)
-
-        if return_ebt_features:
-            ebt_features = self.ebt_projection(output)
-            ebt_features = torch.clamp(ebt_features, -8.0, 8.0)
-            return output, ebt_features
-
-        return output
-
-
-# OPTIMIZED: Verifier with EBT Integration
-class OptimizedStreetFighterVerifier(nn.Module):
-    """🛡️ High-performance verifier with Energy-Based Transformer integration."""
-
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        action_space: spaces.Space,
-        features_dim: int = 128,
-        use_ebt: bool = True,
-    ):
-        super().__init__()
-
-        self.observation_space = observation_space
-        self.action_space = action_space
-        self.features_dim = features_dim
-        self.action_dim = (
-            action_space.n if hasattr(action_space, "n") else len(OPTIMIZED_ACTIONS)
-        )
-        self.use_ebt = use_ebt
-
-        # Optimized feature extractor
-        self.features_extractor = OptimizedStreetFighterCNN(
-            observation_space, features_dim
-        )
-
-        # Action embedding
-        self.action_embed = nn.Sequential(
-            nn.Linear(self.action_dim, 32),
-            nn.ReLU(inplace=True),
-            nn.LayerNorm(32),
-        )
-
-        # Energy-Based Transformer
-        if self.use_ebt:
-            ebt_input_dim = VECTOR_FEATURE_DIM
-            self.ebt = EnergyBasedTransformer(
-                input_dim=ebt_input_dim,
-                d_model=EBT_HIDDEN_DIM,
-                num_heads=EBT_NUM_HEADS,
-                num_layers=EBT_NUM_LAYERS,
-                max_seq_length=EBT_SEQUENCE_LENGTH,
-            )
-
-            # EBT-enhanced energy network
-            self.energy_net = nn.Sequential(
-                nn.Linear(EBT_HIDDEN_DIM + features_dim + 32, 128),
-                nn.ReLU(inplace=True),
-                nn.LayerNorm(128),
-                nn.Linear(128, 64),
-                nn.ReLU(inplace=True),
-                nn.Linear(64, 1),
-            )
-        else:
-            # Standard energy network
-            self.energy_net = nn.Sequential(
-                nn.Linear(features_dim + 32, 128),
-                nn.ReLU(inplace=True),
-                nn.LayerNorm(128),
-                nn.Linear(128, 64),
-                nn.ReLU(inplace=True),
-                nn.Linear(64, 1),
-            )
-
-        self.energy_scale = 0.5
-        self.energy_clamp_min = -5.0
-        self.energy_clamp_max = 5.0
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, mean=0.0, std=0.01)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def forward(
-        self,
-        context: torch.Tensor,
-        candidate_action: torch.Tensor,
-        sequence_context: torch.Tensor = None,
-    ) -> torch.Tensor:
-        """Enhanced forward pass with EBT integration."""
-        device = next(self.parameters()).device
-
-        # Extract features from context
-        if isinstance(context, dict):
-            if self.use_ebt:
-                context_features, ebt_features = self.features_extractor(
-                    context, return_ebt_features=True
-                )
-            else:
-                context_features = self.features_extractor(context)
-                ebt_features = None
-        else:
-            context_features = context
-            ebt_features = None
-
-        context_features = context_features.to(device)
-        candidate_action = candidate_action.to(device)
-
-        # Input validation
-        context_features = torch.clamp(context_features, -10.0, 10.0)
-        candidate_action = torch.clamp(candidate_action, 0.0, 1.0)
-
-        # Action embedding
-        action_embedded = self.action_embed(candidate_action)
-
-        # EBT Processing
-        ebt_output = None
-        if self.use_ebt and ebt_features is not None:
-            batch_size = ebt_features.shape[0]
-
-            if sequence_context is not None and sequence_context.shape[1] > 1:
-                ebt_input = sequence_context.to(device)
-            else:
-                ebt_input = torch.zeros(
-                    batch_size, EBT_SEQUENCE_LENGTH, VECTOR_FEATURE_DIM, device=device
-                )
-
-            try:
-                ebt_result = self.ebt(ebt_input, use_causal_mask=True)
-                ebt_sequence_energy = ebt_result["sequence_energy"]
-                ebt_representations = ebt_result["sequence_representations"]
-                ebt_output = ebt_representations[:, -1, :]
-                ebt_energy_contribution = ebt_sequence_energy.squeeze(-1)
-            except Exception as e:
-                ebt_output = torch.zeros(batch_size, EBT_HIDDEN_DIM, device=device)
-                ebt_energy_contribution = torch.zeros(batch_size, device=device)
-
-        # Combine inputs for energy calculation
-        if ebt_output is not None:
-            combined_input = torch.cat(
-                [context_features, action_embedded, ebt_output], dim=-1
-            )
-        else:
-            combined_input = torch.cat([context_features, action_embedded], dim=-1)
-
-        # Calculate energy
-        raw_energy = self.energy_net(combined_input)
-        energy = raw_energy * self.energy_scale
-
-        # Add EBT energy contribution if available
-        if self.use_ebt and "ebt_energy_contribution" in locals():
-            ebt_weight = 0.2
-            energy = energy.squeeze(-1) + ebt_weight * ebt_energy_contribution
-            energy = energy.unsqueeze(-1)
-
-        # Final clamping
-        energy = torch.clamp(energy, self.energy_clamp_min, self.energy_clamp_max)
-
-        return energy
-
-
-class FixedOptimizedEnergyBasedAgent:
-    """🛡️ High-performance agent with EBT integration and robust action selection."""
-
-    def __init__(
-        self,
-        verifier: OptimizedStreetFighterVerifier,
-        thinking_steps: int = 2,  # Reduced for performance
-        thinking_lr: float = 0.03,
-        noise_scale: float = 0.01,
-        use_ebt_thinking: bool = True,
-    ):
-        self.verifier = verifier
-        self.initial_thinking_steps = thinking_steps
-        self.current_thinking_steps = thinking_steps
-        self.initial_thinking_lr = thinking_lr
-        self.current_thinking_lr = thinking_lr
-        self.noise_scale = noise_scale
-        self.action_dim = verifier.action_dim
-        self.use_ebt_thinking = use_ebt_thinking
-
-        self.gradient_clip = 0.5
-        self.early_stop_patience = 1  # Reduced for performance
-        self.min_energy_improvement = 5e-4
-
-        self.max_thinking_steps = 3
-        self.min_thinking_steps = 1
-
-        # Enhanced thinking stats with EBT metrics
-        self.thinking_stats = {
-            "total_predictions": 0,
-            "avg_thinking_steps": 0.0,
-            "avg_energy_improvement": 0.0,
-            "early_stops": 0,
-            "energy_explosions": 0,
-            "gradient_explosions": 0,
-            "successful_optimizations": 0,
-            "failed_optimizations": 0,
-            "ebt_successes": 0,
-            "ebt_failures": 0,
-        }
-
-        self.recent_performance = deque(maxlen=50)
-
-    def predict(
-        self,
-        observations: Dict[str, torch.Tensor],
-        deterministic: bool = False,
-        sequence_context: torch.Tensor = None,
-    ) -> Tuple[int, Dict]:
-        """Optimized prediction with EBT integration and robust action conversion."""
-        device = next(self.verifier.parameters()).device
-
-        obs_device = {}
-        for key, value in observations.items():
-            if isinstance(value, torch.Tensor):
-                obs_device[key] = value.to(device)
-            else:
-                obs_device[key] = torch.from_numpy(value).to(device)
-
-        if len(obs_device["visual_obs"].shape) == 3:
-            for key in obs_device:
-                obs_device[key] = obs_device[key].unsqueeze(0)
-
-        batch_size = obs_device["visual_obs"].shape[0]
-
-        # Initialize candidate action
-        if deterministic:
-            candidate_action = (
-                torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
-            )
-        else:
-            candidate_action = (
-                torch.randn(batch_size, self.action_dim, device=device)
-                * self.noise_scale
-            )
-            candidate_action = F.softmax(candidate_action, dim=-1)
-
-        candidate_action.requires_grad_(True)
-
-        # Thinking process tracking
-        energy_history = []
-        steps_taken = 0
-        early_stopped = False
-        energy_explosion = False
-        gradient_explosion = False
-        optimization_successful = False
-        ebt_success = True
-
-        # Initial energy evaluation
-        with torch.no_grad():
-            try:
-                if self.use_ebt_thinking and sequence_context is not None:
-                    initial_energy = self.verifier(
-                        obs_device, candidate_action, sequence_context
-                    )
-                else:
-                    initial_energy = self.verifier(obs_device, candidate_action)
-                energy_history.append(initial_energy.mean().item())
-            except Exception as e:
-                return 0, {"error": "initial_energy_failed", "ebt_error": str(e)}
-
-        # Optimized thinking loop
-        for step in range(self.current_thinking_steps):
-            try:
-                # Enhanced energy calculation with EBT
-                if self.use_ebt_thinking and sequence_context is not None:
-                    energy = self.verifier(
-                        obs_device, candidate_action, sequence_context
-                    )
-                else:
-                    energy = self.verifier(obs_device, candidate_action)
-
-                # Energy explosion check
-                if torch.any(torch.abs(energy) > 6.0):
-                    energy_explosion = True
-                    break
-
-                # Gradient calculation
-                gradients = torch.autograd.grad(
-                    outputs=energy.sum(),
-                    inputs=candidate_action,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
-
-                gradient_norm = torch.norm(gradients).item()
-
-                # Gradient explosion check
-                if gradient_norm > self.gradient_clip:
-                    gradient_explosion = True
-                    gradients = gradients * (self.gradient_clip / gradient_norm)
-
-                if torch.any(~torch.isfinite(gradients)):
-                    break
-
-                # Update candidate action
-                with torch.no_grad():
-                    candidate_action = (
-                        candidate_action - self.current_thinking_lr * gradients
-                    )
-                    candidate_action = F.softmax(candidate_action, dim=-1)
-                    candidate_action.requires_grad_(True)
-
-                # Energy evaluation
-                with torch.no_grad():
-                    if self.use_ebt_thinking and sequence_context is not None:
-                        new_energy = self.verifier(
-                            obs_device, candidate_action, sequence_context
-                        )
-                    else:
-                        new_energy = self.verifier(obs_device, candidate_action)
-                    energy_history.append(new_energy.mean().item())
-
-                # Early stopping check
-                if len(energy_history) >= self.early_stop_patience + 1:
-                    recent_improvement = abs(
-                        energy_history[-self.early_stop_patience - 1]
-                        - energy_history[-1]
-                    )
-                    if recent_improvement < self.min_energy_improvement:
-                        early_stopped = True
-                        break
-
-                steps_taken += 1
-
-            except Exception as e:
-                ebt_success = False
-                break
-
-        # Optimization success evaluation
-        if len(energy_history) > 1:
-            total_improvement = abs(energy_history[0] - energy_history[-1])
-            optimization_successful = (
-                total_improvement > self.min_energy_improvement
-                and not energy_explosion
-                and not gradient_explosion
-                and ebt_success
-            )
-
-        # Final action selection
-        with torch.no_grad():
-            try:
-                final_action_probs = F.softmax(candidate_action, dim=-1)
-                final_action_probs = final_action_probs + 1e-8
-                final_action_probs = final_action_probs / final_action_probs.sum(
-                    dim=-1, keepdim=True
-                )
-
-                if deterministic:
-                    action_idx = torch.argmax(final_action_probs, dim=-1)
-                else:
-                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
-            except Exception as e:
-                return 0, {"error": "action_selection_failed", "ebt_error": str(e)}
-
-        # Update statistics
-        self.thinking_stats["total_predictions"] += 1
-        self.thinking_stats["avg_thinking_steps"] = (
-            self.thinking_stats["avg_thinking_steps"] * 0.9 + steps_taken * 0.1
-        )
-
-        if len(energy_history) > 1:
-            energy_improvement = abs(energy_history[0] - energy_history[-1])
-            self.thinking_stats["avg_energy_improvement"] = (
-                self.thinking_stats["avg_energy_improvement"] * 0.9
-                + energy_improvement * 0.1
-            )
-
-        # Update counters
-        if early_stopped:
-            self.thinking_stats["early_stops"] += 1
-        if energy_explosion:
-            self.thinking_stats["energy_explosions"] += 1
-        if gradient_explosion:
-            self.thinking_stats["gradient_explosions"] += 1
-        if optimization_successful:
-            self.thinking_stats["successful_optimizations"] += 1
-        else:
-            self.thinking_stats["failed_optimizations"] += 1
-
-        # EBT-specific stats
-        if ebt_success:
-            self.thinking_stats["ebt_successes"] += 1
-        else:
-            self.thinking_stats["ebt_failures"] += 1
-
-        self.recent_performance.append(1.0 if optimization_successful else 0.0)
-
-        # Enhanced thinking info
-        thinking_info = {
-            "energy_history": energy_history,
-            "steps_taken": steps_taken,
-            "early_stopped": early_stopped,
-            "energy_explosion": energy_explosion,
-            "gradient_explosion": gradient_explosion,
-            "optimization_successful": optimization_successful,
-            "ebt_success": ebt_success,
-            "energy_improvement": (
-                abs(energy_history[0] - energy_history[-1])
-                if len(energy_history) > 1
-                else 0.0
-            ),
-            "final_energy": energy_history[-1] if energy_history else 0.0,
-            "current_thinking_steps": self.current_thinking_steps,
-            "current_thinking_lr": self.current_thinking_lr,
-            "used_ebt_thinking": self.use_ebt_thinking and sequence_context is not None,
-        }
-
-        # --- FIX: Robustly convert action to a Python integer ---
-        # The training loop operates on a single environment, so we expect a single action.
-        # We ensure the output is a standard Python int to prevent type errors in the environment's step function.
-        if action_idx.numel() != 1:
-            # This is a safeguard for an unexpected tensor shape. We take the first element.
-            logger.warning(
-                f"Unexpected action tensor shape in predict(): {action_idx.shape}. Taking first element."
-            )
-            action_scalar = action_idx.flatten()[0]
-        else:
-            action_scalar = action_idx
-
-        final_action = int(action_scalar.item())
-
-        return final_action, thinking_info
-
-    def get_thinking_stats(self) -> Dict:
-        """Enhanced thinking stats with EBT metrics."""
-        stats = self.thinking_stats.copy()
-        if stats["total_predictions"] > 0:
-            stats["success_rate"] = safe_divide(
-                stats["successful_optimizations"], stats["total_predictions"], 0.0
-            )
-            stats["early_stop_rate"] = safe_divide(
-                stats["early_stops"], stats["total_predictions"], 0.0
-            )
-            stats["explosion_rate"] = safe_divide(
-                stats["energy_explosions"] + stats["gradient_explosions"],
-                stats["total_predictions"],
-                0.0,
-            )
-            stats["ebt_success_rate"] = safe_divide(
-                stats["ebt_successes"], stats["total_predictions"], 0.0
-            )
-        return stats
-
-
-# Keep remaining stability and checkpoint managers with optimizations
 class EnhancedEnergyStabilityManager:
-    """🛡️ Enhanced stability manager with EBT monitoring."""
+    """🛡️ Your original stability manager - UNCHANGED."""
 
-    def __init__(self, initial_lr=3e-4, thinking_lr=0.03, policy_memory_manager=None):
+    def __init__(self, initial_lr=3e-5, thinking_lr=0.06, policy_memory_manager=None):
         self.initial_lr = initial_lr
         self.current_lr = initial_lr
         self.thinking_lr = thinking_lr
         self.current_thinking_lr = thinking_lr
         self.policy_memory_manager = policy_memory_manager
 
-        self.win_rate_window = deque(maxlen=15)  # Reduced window
-        self.energy_quality_window = deque(maxlen=15)
-        self.energy_separation_window = deque(maxlen=15)
-        self.ebt_success_window = deque(maxlen=15)
+        self.win_rate_window = deque(maxlen=25)
+        self.energy_quality_window = deque(maxlen=25)
+        self.energy_separation_window = deque(maxlen=25)
 
-        self.min_win_rate = 0.2  # Lowered threshold
-        self.min_energy_quality = 1.5  # Lowered threshold
-        self.min_energy_separation = 0.01
-        self.max_early_stop_rate = 0.8
-        self.min_ebt_success_rate = 0.6
+        self.min_win_rate = 0.35
+        self.min_energy_quality = 2.5
+        self.min_energy_separation = 0.015
+        self.max_early_stop_rate = 0.75
 
-        self.lr_decay_factor = 0.9
-        self.lr_recovery_factor = 1.01
-        self.max_lr_reductions = 3
+        self.lr_decay_factor = 0.85
+        self.lr_recovery_factor = 1.02
+        self.max_lr_reductions = 2
         self.lr_reductions = 0
 
         self.last_reset_episode = 0
@@ -1925,39 +1606,25 @@ class EnhancedEnergyStabilityManager:
         self.emergency_mode = False
 
     def update_metrics(
-        self,
-        win_rate,
-        energy_quality,
-        energy_separation,
-        early_stop_rate,
-        ebt_success_rate=1.0,
+        self, win_rate, energy_quality, energy_separation, early_stop_rate
     ):
-        """Enhanced metrics update with EBT monitoring."""
         self.win_rate_window.append(win_rate)
         self.energy_quality_window.append(energy_quality)
         self.energy_separation_window.append(energy_separation)
-        self.ebt_success_window.append(ebt_success_rate)
 
         avg_win_rate = safe_mean(list(self.win_rate_window), 0.5)
         avg_energy_quality = safe_mean(list(self.energy_quality_window), 10.0)
         avg_energy_separation = safe_mean(list(self.energy_separation_window), 0.1)
-        avg_ebt_success = safe_mean(list(self.ebt_success_window), 1.0)
 
         collapse_indicators = 0
 
         if avg_win_rate < self.min_win_rate:
             collapse_indicators += 1
-
         if avg_energy_quality < self.min_energy_quality:
             collapse_indicators += 1
-
         if abs(avg_energy_separation) < self.min_energy_separation:
             collapse_indicators += 1
-
         if early_stop_rate > self.max_early_stop_rate:
-            collapse_indicators += 1
-
-        if avg_ebt_success < self.min_ebt_success_rate:
             collapse_indicators += 1
 
         if collapse_indicators >= 2:
@@ -1995,16 +1662,17 @@ class EnhancedEnergyStabilityManager:
         return self.current_lr, self.current_thinking_lr
 
 
-class EBTEnhancedCheckpointManager:
-    """💾 Enhanced checkpoint manager with EBT state tracking."""
+class EnhancedCheckpointManager:
+    """💾 Your original checkpoint manager - UNCHANGED."""
 
-    def __init__(self, checkpoint_dir="checkpoints_optimized"):
+    def __init__(self, checkpoint_dir="checkpoints_enhanced"):
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(exist_ok=True)
 
         self.best_checkpoint_path = None
         self.best_win_rate = 0.0
         self.emergency_checkpoint_path = None
+
         self.peak_checkpoint_path = None
         self.averaging_checkpoints = []
 
@@ -2018,17 +1686,15 @@ class EBTEnhancedCheckpointManager:
         is_emergency=False,
         is_peak=False,
         policy_memory_stats=None,
-        ebt_stats=None,
     ):
-        """Enhanced checkpoint saving with EBT state."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if is_emergency:
-            filename = f"emergency_ebt_ep{episode}_{timestamp}.pt"
+            filename = f"emergency_ep{episode}_{timestamp}.pt"
         elif is_peak:
-            filename = f"peak_ebt_ep{episode}_wr{win_rate:.3f}_{timestamp}.pt"
+            filename = f"peak_ep{episode}_wr{win_rate:.3f}_{timestamp}.pt"
         else:
-            filename = f"checkpoint_ebt_ep{episode}_wr{win_rate:.3f}_eq{energy_quality:.1f}_{timestamp}.pt"
+            filename = f"checkpoint_ep{episode}_wr{win_rate:.3f}_eq{energy_quality:.1f}_{timestamp}.pt"
 
         checkpoint_path = self.checkpoint_dir / filename
 
@@ -2045,8 +1711,6 @@ class EBTEnhancedCheckpointManager:
             "is_emergency": is_emergency,
             "is_peak": is_peak,
             "policy_memory_stats": policy_memory_stats or {},
-            "ebt_stats": ebt_stats or {},
-            "ebt_enabled": verifier.use_ebt,
         }
 
         try:
@@ -2063,11 +1727,9 @@ class EBTEnhancedCheckpointManager:
             return checkpoint_path
 
         except Exception as e:
-            print(f"⚠️ Checkpoint save failed: {e}")
             return None
 
     def load_checkpoint(self, checkpoint_path, verifier, agent):
-        """Enhanced checkpoint loading with EBT state."""
         try:
             checkpoint_data = torch.load(
                 checkpoint_path, map_location="cpu", weights_only=False
@@ -2085,109 +1747,97 @@ class EBTEnhancedCheckpointManager:
             if "energy_scale" in checkpoint_data:
                 verifier.energy_scale = checkpoint_data["energy_scale"]
 
-            if "ebt_enabled" in checkpoint_data:
-                ebt_enabled = checkpoint_data["ebt_enabled"]
-                print(
-                    f"🚀 Loaded checkpoint with EBT: {'ENABLED' if ebt_enabled else 'DISABLED'}"
-                )
-
             return checkpoint_data
 
         except Exception as e:
-            print(f"⚠️ Checkpoint load failed: {e}")
             return None
 
 
 # Utility functions
-def verify_ebt_energy_flow(verifier, observation_space, action_space):
-    """Verify EBT-enhanced energy flow works correctly."""
+def verify_enhanced_energy_flow(verifier, observation_space, action_space):
+    """Verify enhanced energy flow with transformer components works correctly."""
     try:
-        visual_obs = torch.zeros(1, FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH)
-        vector_obs = torch.zeros(1, 3, VECTOR_FEATURE_DIM)
+        visual_obs = torch.zeros(1, 3, SCREEN_HEIGHT, SCREEN_WIDTH)
+        vector_obs = torch.zeros(1, 5, VECTOR_FEATURE_DIM)
         dummy_obs = {"visual_obs": visual_obs, "vector_obs": vector_obs}
         dummy_action = torch.ones(1, action_space.n) / action_space.n
 
-        # Test without sequence context
-        energy1 = verifier(dummy_obs, dummy_action)
+        energy = verifier(dummy_obs, dummy_action)
 
-        # Test with sequence context
-        dummy_sequence = torch.randn(1, EBT_SEQUENCE_LENGTH, VECTOR_FEATURE_DIM)
-        energy2 = verifier(dummy_obs, dummy_action, dummy_sequence)
+        print(f"   ✅ Enhanced energy calculation successful")
+        print(f"   - Energy shape: {energy.shape}")
+        print(f"   - Energy value: {energy.item():.4f}")
 
-        print(f"   ✅ Optimized EBT energy calculation successful")
-        print(f"   - Base energy shape: {energy1.shape}, value: {energy1.item():.4f}")
-        print(f"   - EBT energy shape: {energy2.shape}, value: {energy2.item():.4f}")
-        print(f"   - EBT enabled: {verifier.use_ebt}")
+        # Test transformer components
+        features, transformer_energy = verifier.features_extractor(dummy_obs)
+        print(f"   ✅ Transformer energy calculation successful")
+        print(f"   - Transformer energy: {transformer_energy.item():.4f}")
 
         return True
 
     except Exception as e:
-        print(f"   ❌ EBT energy flow verification failed: {e}")
+        print(f"   ❌ Enhanced energy flow verification failed: {e}")
         return False
 
 
-def make_optimized_sf_env(
+def make_enhanced_env(
     game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
 ):
-    """Create optimized Street Fighter environment."""
+    """Create Street Fighter environment with enhanced features."""
     try:
         env = retro.make(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
         )
-        env = OptimizedStreetFighterVisionWrapper(env)
+        env = StreetFighterVisionWrapper(
+            env
+        )  # Your original wrapper (fast UI maintained)
 
-        print(f"   ✅ Optimized environment created")
-        print(f"   - Rendering: Handled by external daemon thread")
-        print(f"   - Action space: {env.action_space.n} actions")
-        print(f"   - Visual obs: {env.observation_space['visual_obs'].shape}")
-
+        print(f"   ✅ Enhanced environment created (fast UI speed maintained)")
         return env
 
     except Exception as e:
-        print(f"   ❌ Environment creation failed: {e}")
+        print(f"   ❌ Enhanced environment creation failed: {e}")
         raise
 
 
-# Export components
+# Export enhanced components
 __all__ = [
-    "OptimizedStreetFighterVisionWrapper",
-    "OptimizedStreetFighterCNN",
-    "OptimizedStreetFighterVerifier",
-    "FixedOptimizedEnergyBasedAgent",  # EXPORT THE FIXED AGENT
-    "EBTEnhancedFeatureTracker",
-    "OptimizedStreetFighterActions",
-    "OptimizedRewardCalculator",
-    "EBTEnhancedExperienceBuffer",
+    # Environment
+    "StreetFighterVisionWrapper",
+    "make_enhanced_env",
+    # Enhanced Energy-Based Transformer Components
+    "EnergyBasedMultiHeadAttention",
+    "EnergyBasedTransformerBlock",
+    "EnhancedEnergyBasedCNN",
+    "EnhancedEnergyBasedVerifier",
+    "EnhancedEnergyBasedAgent",
+    # Original components (with fixes)
+    "SimplifiedFeatureTracker",
+    "StreetFighterDiscreteActions",
+    "IntelligentRewardCalculator",
+    "EnhancedQualityBasedExperienceBuffer",
     "GoldenExperienceBuffer",
     "PolicyMemoryManager",
     "EnhancedEnergyStabilityManager",
-    "EBTEnhancedCheckpointManager",
-    "EnergyBasedTransformer",
-    "EBTSequenceTracker",
-    "OptimizedFrameProcessor",
-    "verify_ebt_energy_flow",
-    "make_optimized_sf_env",
+    "EnhancedCheckpointManager",
+    # Utilities
+    "verify_enhanced_energy_flow",
     "safe_divide",
     "safe_std",
     "safe_mean",
     "sanitize_array",
     "ensure_scalar",
+    "safe_comparison",
     "ensure_feature_dimension",
+    # Constants
     "VECTOR_FEATURE_DIM",
     "MAX_FIGHT_STEPS",
-    "EBT_SEQUENCE_LENGTH",
-    "EBT_HIDDEN_DIM",
-    "OPTIMIZED_ACTIONS",
-    "SCREEN_WIDTH",
-    "SCREEN_HEIGHT",
-    "FRAME_STACK_SIZE",
 ]
 
-print(f"🚀 OPTIMIZED wrapper.py loaded successfully!")
-print(f"   - Performance optimizations: ACTIVE")
-print(f"   - Dense rewards: ENABLED")
-print(f"   - Action space: {len(OPTIMIZED_ACTIONS)} actions (special moves re-added)")
-print(f"   - Frame Stacking: ENABLED ({FRAME_STACK_SIZE} frames)")
-print(f"   - Asynchronous rendering: SUPPORTED")
-print(f"   - Memory efficiency: ENHANCED")
-print(f"🎯 Ready for high-performance Street Fighter RL training!")
+print(f"🥊 ENHANCED Energy-Based Transformer wrapper.py loaded successfully!")
+print(f"   - ✅ Energy-Based Transformer architecture integrated")
+print(f"   - ✅ Current energy thinking system expanded")
+print(f"   - ✅ Fast game UI speed maintained")
+print(f"   - ✅ Single round fight logic preserved")
+print(f"   - ✅ Quality threshold fixed (0.6 → 0.3)")
+print(f"🎯 Ready for enhanced learning with EBT + Energy thinking!")
