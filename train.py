@@ -222,7 +222,7 @@ class EnhancedEBTTrainer:
                 self.attention_analysis.append(attention_analysis)
 
     def run_enhanced_episode(self):
-        """Enhanced episode running with transformer analysis."""
+        """Enhanced episode running with round termination tracking."""
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -235,10 +235,10 @@ class EnhancedEBTTrainer:
         damage_dealt_total = 0.0
         damage_taken_total = 0.0
         round_won = False
+        termination_reason = "ongoing"
 
         # Enhanced tracking for transformer analysis
         transformer_energy_total = 0.0
-        attention_complexity_total = 0.0
 
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
@@ -255,6 +255,12 @@ class EnhancedEBTTrainer:
             episode_reward += reward
             episode_steps += 1
             self.total_steps += 1
+
+            # Track termination reason
+            if info.get("round_ended", False):
+                termination_reason = info.get("termination_reason", "unknown")
+                if termination_reason in ["player_ko", "opponent_ko", "technical_ko"]:
+                    round_won = termination_reason == "opponent_ko"
 
             # Track episode stats
             reward_breakdown = info.get("reward_breakdown", {})
@@ -306,6 +312,7 @@ class EnhancedEBTTrainer:
             "avg_transformer_energy": safe_divide(
                 transformer_energy_total, episode_steps, 0.0
             ),
+            "termination_reason": termination_reason,
         }
 
         # Add experiences to buffer
@@ -767,6 +774,15 @@ class EnhancedEBTTrainer:
                     f"   - Avg transformer energy: {performance_stats.get('avg_transformer_energy', 0.0):.3f}"
                 )
 
+                # Show recent termination reasons
+                recent_episodes = list(episode_rewards)[-5:] if episode_rewards else []
+                if hasattr(self, "recent_termination_reasons"):
+                    recent_reasons = list(self.recent_termination_reasons)[-5:]
+                    reason_counts = {}
+                    for reason in recent_reasons:
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                    print(f"   - Recent terminations: {dict(reason_counts)}")
+
                 if performance_trends:
                     print(
                         f"   - Transformer trend: {performance_trends.get('transformer_energy_trend', 0.0):.3f}"
@@ -790,7 +806,8 @@ class EnhancedEBTTrainer:
                     f"Good={buffer_stats['good_count']}, "
                     f"TransformerEnergy={performance_stats.get('avg_transformer_energy', 0.0):.3f}, "
                     f"ThinkingSuccess={thinking_stats.get('success_rate', 0.0):.3f}, "
-                    f"TransformerUsage={thinking_stats.get('transformer_energy_usage', 0.0):.3f}"
+                    f"TransformerUsage={thinking_stats.get('transformer_energy_usage', 0.0):.3f}, "
+                    f"Termination={episode_stats.get('termination_reason', 'unknown')}"
                 )
 
                 # Enhanced training info display
@@ -799,6 +816,13 @@ class EnhancedEBTTrainer:
                         f"   🧠 Training: Energy sep={train_stats.get('energy_separation', 0.0):.3f}, "
                         f"Transformer reg={train_stats.get('transformer_reg', 0.0):.4f}"
                     )
+
+            # Track termination reasons for analysis
+            if not hasattr(self, "recent_termination_reasons"):
+                self.recent_termination_reasons = deque(maxlen=20)
+            self.recent_termination_reasons.append(
+                episode_stats.get("termination_reason", "unknown")
+            )
 
             # Early stopping check
             if len(self.win_rate_history) >= 20:

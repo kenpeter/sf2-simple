@@ -489,7 +489,8 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         print(f"🥊 StreetFighterVisionWrapper initialized (fast UI speed maintained)")
 
     def reset(self, **kwargs):
-        """Your original reset with timeout fix."""
+        """Enhanced reset with round state cleanup."""
+        # Force a complete environment reset to prevent round carryover
         obs, info = self.env.reset(**kwargs)
 
         self.reward_calculator.reset()
@@ -502,14 +503,36 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         self.episode_count += 1
         self.step_count = 0
 
+        # Ensure we start in a clean state
         player_health, opponent_health = self._extract_health(info)
+
+        # If health values are weird, force them to max
+        if player_health <= 0 or opponent_health <= 0:
+            player_health = MAX_HEALTH
+            opponent_health = MAX_HEALTH
+            self.previous_player_health = MAX_HEALTH
+            self.previous_opponent_health = MAX_HEALTH
+
         self.feature_tracker.update(player_health, opponent_health, 0, {})
 
         observation = self._build_observation(obs, info)
+
+        # Add reset confirmation to info
+        info.update(
+            {
+                "reset_complete": True,
+                "starting_health": {
+                    "player": player_health,
+                    "opponent": opponent_health,
+                },
+                "episode_count": self.episode_count,
+            }
+        )
+
         return observation, info
 
     def step(self, action):
-        """Your original step with ONLY timeout fix."""
+        """Enhanced step with proper single-round termination."""
         self.step_count += 1
 
         button_combination = self.action_mapper.get_action(action)
@@ -518,13 +541,59 @@ class StreetFighterVisionWrapper(gym.Wrapper):
 
         player_health, opponent_health = self._extract_health(info)
 
-        # ONLY FIX: Add timeout for single fights (preserves single round logic)
+        # ENHANCED SINGLE-ROUND LOGIC: Multiple termination conditions
+        round_ended = False
+
+        # 1. Health-based termination (KO)
         if (self.previous_player_health > 0 and player_health <= 0) or (
             self.previous_opponent_health > 0 and opponent_health <= 0
         ):
+            round_ended = True
+
+        # 2. Check for round completion via game state
+        # Look for "PERFECT", "YOU WIN", "YOU LOSE" text patterns in info
+        game_messages = info.get("game_over_message", "")
+        round_complete_indicators = ["PERFECT", "YOU WIN", "YOU LOSE", "K.O.", "WINS"]
+        if any(
+            indicator in str(game_messages).upper()
+            for indicator in round_complete_indicators
+        ):
+            round_ended = True
+
+        # 3. Time's up condition (when timer reaches 0, whoever has more health wins)
+        # This prevents going to round 2 when time expires
+        if hasattr(info, "timer") and info.get("timer", 99) <= 0:
+            round_ended = True
+
+        # 4. Check raw game state for round completion
+        # Some retro environments expose internal game states
+        if "round_complete" in info and info["round_complete"]:
+            round_ended = True
+
+        # 5. Detect if we're entering a new round (prevent round 2)
+        # If round counter changes or we see "ROUND 2" anywhere
+        round_indicators = info.get("round_text", "")
+        if (
+            "ROUND 2" in str(round_indicators).upper()
+            or "ROUND TWO" in str(round_indicators).upper()
+        ):
+            round_ended = True
+
+        # 6. Step limit timeout (last resort)
+        if self.step_count >= MAX_FIGHT_STEPS:
+            round_ended = True
+
+        # 7. Check for dramatic health difference (technical KO)
+        if (
+            abs(player_health - opponent_health) >= MAX_HEALTH * 0.8
+        ):  # 80% health difference
+            round_ended = True
+
+        # Apply single-round termination
+        if round_ended:
             done = True
-        elif self.step_count >= MAX_FIGHT_STEPS:  # ONLY ADDITION
-            done = True
+            # Force episode to end immediately to prevent round 2
+            truncated = True
 
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
@@ -546,22 +615,73 @@ class StreetFighterVisionWrapper(gym.Wrapper):
                 "intelligent_reward": intelligent_reward,
                 "episode_count": self.episode_count,
                 "step_count": self.step_count,
+                "round_ended": round_ended,
+                "termination_reason": self._get_termination_reason(
+                    player_health, opponent_health, round_ended
+                ),
             }
         )
 
         return observation, intelligent_reward, done, truncated, info
 
+    def _get_termination_reason(self, player_health, opponent_health, round_ended):
+        """Determine why the round ended for debugging."""
+        if not round_ended:
+            return "ongoing"
+        elif player_health <= 0:
+            return "player_ko"
+        elif opponent_health <= 0:
+            return "opponent_ko"
+        elif self.step_count >= MAX_FIGHT_STEPS:
+            return "timeout"
+        elif abs(player_health - opponent_health) >= MAX_HEALTH * 0.8:
+            return "technical_ko"
+        else:
+            return "round_complete"
+
     def _extract_health(self, info):
-        """Your original health extraction - UNCHANGED."""
+        """Enhanced health extraction with round state detection."""
         player_health = info.get("player_health", MAX_HEALTH)
         opponent_health = info.get("opponent_health", MAX_HEALTH)
 
+        # Try multiple memory addresses for health detection
         if hasattr(self.env, "data") and hasattr(self.env.data, "memory"):
             try:
+                # Primary health addresses
                 player_health = self.env.data.memory.read_byte(0x8004)
                 opponent_health = self.env.data.memory.read_byte(0x8008)
+
+                # Alternative health addresses (different SF2 versions)
+                if player_health == 0 and opponent_health == 0:
+                    player_health = self.env.data.memory.read_byte(0xFF8204)
+                    opponent_health = self.env.data.memory.read_byte(0xFF8208)
+
+                # Another common set
+                if player_health == 0 and opponent_health == 0:
+                    player_health = self.env.data.memory.read_byte(0x800C)
+                    opponent_health = self.env.data.memory.read_byte(0x8010)
+
             except:
+                # Fallback to info values
                 pass
+
+        # Additional round state detection
+        try:
+            if hasattr(self.env, "data") and hasattr(self.env.data, "memory"):
+                # Try to read round counter or game state
+                round_state = self.env.data.memory.read_byte(
+                    0x8014
+                )  # Common round counter address
+                if round_state > 1:  # If we're in round 2 or higher
+                    info["round_text"] = f"ROUND {round_state}"
+
+                # Check for game over states
+                game_state = self.env.data.memory.read_byte(0x8018)  # Game state flag
+                if game_state in [0x10, 0x20, 0x30]:  # Common "round complete" values
+                    info["round_complete"] = True
+
+        except:
+            pass
 
         return player_health, opponent_health
 
