@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 84  # Reduced from 320 for performance
 SCREEN_HEIGHT = 84  # Reduced from 224 for performance
+FRAME_STACK_SIZE = 8  # NEW: Use 8 frames for temporal information
 VECTOR_FEATURE_DIM = 24  # Reduced from 32 for efficiency
 MAX_FIGHT_STEPS = 600  # Reduced from 1200 for faster episodes
 EBT_SEQUENCE_LENGTH = 8  # Reduced from 16 for memory efficiency
@@ -79,9 +80,9 @@ OPTIMIZED_ACTIONS = {
     9: ["Y"],  # Medium kick
     10: ["Z"],  # Heavy kick
     # Essential combinations only
-    11: ["DOWN", "RIGHT", "A"],  # Hadoken motion
-    12: ["DOWN", "LEFT", "A"],  # Reverse hadoken
-    13: ["RIGHT", "DOWN", "A"],  # Dragon punch motion
+    11: ["DOWN", "RIGHT", "A"],  # Hadoken
+    12: ["DOWN", "LEFT", "A"],  # Reverse hadoken (unused but good practice)
+    13: ["RIGHT", "DOWN", "A"],  # Shoryuken (Dragon Punch)
     14: ["LEFT", "A"],  # Walking punch
     15: ["RIGHT", "A"],  # Walking punch
     16: ["DOWN", "A"],  # Crouching punch
@@ -89,13 +90,18 @@ OPTIMIZED_ACTIONS = {
     18: ["LEFT", "X"],  # Walking kick
     19: ["RIGHT", "X"],  # Walking kick
     20: ["DOWN", "X"],  # Crouching kick
+    # --- ADDED BACK SPECIAL MOVES ---
+    21: ["DOWN", "LEFT", "X"],  # Hurricane Kick (Tatsumaki)
+    22: ["DOWN", "RIGHT", "X"],  # Reverse Hurricane Kick
 }
+
 
 print(f"🚀 OPTIMIZED ENERGY-BASED TRANSFORMER Configuration:")
 print(f"   - Energy-Based Thinking: ENABLED")
 print(f"   - Energy-Based Transformers: ENABLED")
 print(f"   - Screen Size: {SCREEN_WIDTH}x{SCREEN_HEIGHT} (optimized)")
-print(f"   - Action Space: {len(OPTIMIZED_ACTIONS)} (reduced from 4096)")
+print(f"   - Frame Stack Size: {FRAME_STACK_SIZE} (for motion dynamics)")
+print(f"   - Action Space: {len(OPTIMIZED_ACTIONS)} (re-added special moves)")
 print(f"   - EBT Sequence Length: {EBT_SEQUENCE_LENGTH}")
 print(f"   - Performance Optimizations: ACTIVE")
 
@@ -649,7 +655,7 @@ class OptimizedRewardCalculator:
             reward_breakdown["health_advantage"] = advantage_bonus
 
         # Combat action encouragement (prevents passive play)
-        if action in [5, 6, 7, 8, 9, 10, 11, 12, 13]:  # Attack actions
+        if action in [5, 6, 7, 8, 9, 10, 11, 12, 13, 21, 22]:  # Attack actions
             action_bonus = self.action_bonus_scale
             reward += action_bonus
             reward_breakdown["action_bonus"] = action_bonus
@@ -791,27 +797,34 @@ class OptimizedStreetFighterActions:
 
 
 # OPTIMIZED: Vision Wrapper with Performance Enhancements
-# basically this has frame processor + feature tracker
 class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
-    """🥊 High-performance wrapper with rendering capability maintained."""
+    """🥊 High-performance wrapper with frame stacking and external rendering support."""
 
-    def __init__(self, env, render_frequency=30):
-        # render every 30 steps for faster
+    def __init__(self, env):
         super().__init__(env)
 
+        # so we have reward cal, action mapper, feature tracker, frame processor
         self.reward_calculator = OptimizedRewardCalculator()
-        # here is the feature tracker
         self.feature_tracker = EBTEnhancedFeatureTracker()
         self.action_mapper = OptimizedStreetFighterActions()
-        # here is the frame processor
         self.frame_processor = OptimizedFrameProcessor()
 
-        self.render_frequency = render_frequency
-        self.step_count = 0
+        # Frame stacking for temporal dynamics
+        # deque, desk is both end more powerful
+        # frame stack is deque and frame stack is back
+        self.frame_stack = deque(maxlen=FRAME_STACK_SIZE)
 
-        # Optimized observation space
+        # this is total step so far
+        self.step_count = 0
+        # this for the external thread to render, useful
+        self.last_raw_obs = None  # For external rendering thread
+
+        # Optimized observation space with frame stacking
         visual_space = gym.spaces.Box(
-            low=0, high=255, shape=(1, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8
+            low=0,
+            high=255,
+            shape=(FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH),
+            dtype=np.uint8,
         )
         vector_space = gym.spaces.Box(
             low=-10.0, high=10.0, shape=(3, VECTOR_FEATURE_DIM), dtype=np.float32
@@ -831,55 +844,56 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         self.previous_opponent_health = MAX_HEALTH
 
         print(f"🚀 Optimized StreetFighterVisionWrapper initialized")
-        print(f"   - Render frequency: Every {render_frequency} steps")
+        print(f"   - Frame Stack: {FRAME_STACK_SIZE} frames")
+        print(f"   - Rendering: Handled externally by daemon thread")
         print(f"   - Action space size: {self.action_mapper.n_actions}")
         print(f"   - Screen resolution: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
     def reset(self, **kwargs):
-        """Enhanced reset with EBT sequence tracking."""
+        """Enhanced reset with EBT sequence tracking and frame stack priming."""
         obs, info = self.env.reset(**kwargs)
+        self.last_raw_obs = obs
 
         self.reward_calculator.reset()
         self.feature_tracker.reset()
         self.vector_history.clear()
-
-        # Ensure step_count is properly initialized as integer
         self.step_count = 0
 
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
-
         self.episode_count += 1
+
+        # Prime the frame stack
+        processed_frame = self.frame_processor.process(obs)
+        self.frame_stack.clear()
+        for _ in range(FRAME_STACK_SIZE - 1):
+            self.frame_stack.append(processed_frame.copy())
 
         player_health, opponent_health = self._extract_health(info)
         self.feature_tracker.update(player_health, opponent_health, 0, {})
 
+        # Build first observation, which also adds the final frame to the stack
         observation = self._build_observation(obs, info)
 
         return observation, info
 
-    def step(self, action):
-        """Enhanced step with optimized rendering and dense rewards."""
-        # Ensure step_count is initialized and is an integer
-        if not hasattr(self, "step_count") or not isinstance(self.step_count, int):
-            self.step_count = 0
-
+    # --- START OF FIX ---
+    def step(self, action: int):
+        """
+        Enhanced step with optimized processing and dense rewards.
+        This version passes the integer action directly to the underlying retro env,
+        as it's configured for retro.Actions.DISCRETE.
+        """
         self.step_count += 1
 
-        button_combination = self.action_mapper.get_action(action)
-        retro_action = self._convert_to_retro_action(button_combination)
-        obs, reward, done, truncated, info = self.env.step(retro_action)
+        # The agent provides a single integer action. The retro environment is configured
+        # for `retro.Actions.DISCRETE`, which also expects a single integer.
+        # We pass the action integer directly, and the retro library handles the conversion.
+        obs, reward, done, truncated, info = self.env.step(action)
+        self.last_raw_obs = obs  # Store raw frame for rendering thread
 
-        # Selective rendering for performance
-        if (
-            hasattr(self, "step_count")
-            and isinstance(self.step_count, int)
-            and self.step_count % self.render_frequency == 0
-        ):
-            try:
-                self.env.render()
-            except:
-                pass  # Continue if rendering fails
+        # We still look up the button combination for logging and info purposes.
+        button_combination = self.action_mapper.get_action(action)
 
         player_health, opponent_health = self._extract_health(info)
 
@@ -904,6 +918,7 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
             player_health, opponent_health, action, reward_breakdown, energy_score=0.0
         )
 
+        # Build the full observation for the current step
         observation = self._build_observation(obs, info)
 
         # Enhanced info with performance metrics
@@ -923,6 +938,12 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
 
         return observation, intelligent_reward, done, truncated, info
 
+    # --- END OF FIX ---
+
+    def get_last_raw_obs(self):
+        """Allows the external rendering thread to get the latest frame."""
+        return self.last_raw_obs
+
     def _extract_health(self, info):
         """Extract health values from game state."""
         player_health = info.get("player_health", MAX_HEALTH)
@@ -931,6 +952,7 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         # Try to read from memory if available
         if hasattr(self.env, "data") and hasattr(self.env.data, "memory"):
             try:
+                # These memory addresses may not be correct for all states/versions
                 player_health = self.env.data.memory.read_byte(0x8004)
                 opponent_health = self.env.data.memory.read_byte(0x8008)
             except:
@@ -939,11 +961,12 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         return player_health, opponent_health
 
     def _convert_to_retro_action(self, button_combination):
-        """Convert button combination to retro action."""
-        # Create 12-element binary array for SNES controller
+        """
+        [DEPRECATED in this workflow] Convert button combination to retro action.
+        This is no longer called in the `step` method but is kept for potential
+        debugging or alternative configurations.
+        """
         action_array = [0] * 12
-
-        # Map buttons to SNES controller positions
         button_mapping = {
             "B": 0,
             "Y": 1,
@@ -957,49 +980,34 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
             "X": 9,
             "L": 10,
             "R": 11,
-            # Street Fighter specific mappings
             "C": 11,
-            "Z": 10,  # Heavy punch/kick
+            "Z": 10,  # Street Fighter specific mappings
         }
-
-        # Ensure button_combination is a list
         if not isinstance(button_combination, (list, tuple)):
             button_combination = [button_combination] if button_combination else []
-
         for button in button_combination:
             if button in button_mapping:
                 action_array[button_mapping[button]] = 1
-
         return action_array
 
     def _build_observation(self, visual_obs, info):
-        """Build optimized observation with enhanced visual processing."""
-        # Process visual observation with optimized pipeline
-        if isinstance(visual_obs, np.ndarray):
-            if len(visual_obs.shape) == 3 and visual_obs.shape[2] == 3:
-                # RGB image - process efficiently
-                processed_frame = self.frame_processor.process(visual_obs)
-                visual_obs = processed_frame.reshape(1, SCREEN_HEIGHT, SCREEN_WIDTH)
-            elif len(visual_obs.shape) == 3:
-                # Already processed
-                visual_obs = visual_obs[0:1]  # Take first channel if multiple
-            else:
-                # Unexpected format - create dummy
-                visual_obs = np.zeros((1, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8)
+        """Build optimized observation with frame stacking."""
+        # Process new frame and add to stack
+        processed_frame = self.frame_processor.process(visual_obs)
+        self.frame_stack.append(processed_frame)
+        stacked_visual_obs = np.stack(list(self.frame_stack), axis=0)
 
         # Build vector observation
         vector_features = self.feature_tracker.get_features()
         self.vector_history.append(vector_features)
-
         while len(self.vector_history) < 3:
             self.vector_history.appendleft(
                 np.zeros(VECTOR_FEATURE_DIM, dtype=np.float32)
             )
-
         vector_obs = np.stack(list(self.vector_history), axis=0)
 
         return {
-            "visual_obs": visual_obs.astype(np.uint8),
+            "visual_obs": stacked_visual_obs.astype(np.uint8),
             "vector_obs": vector_obs.astype(np.float32),
         }
 
@@ -1317,11 +1325,13 @@ class OptimizedStreetFighterCNN(nn.Module):
 
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
+        # The number of input channels is now the size of the frame stack
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
         # Optimized CNN architecture for smaller inputs
         self.visual_cnn = nn.Sequential(
+            # The first layer automatically adapts to n_input_channels (e.g., 8 for frame stack)
             nn.Conv2d(n_input_channels, 16, kernel_size=8, stride=4, padding=2),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(16),
@@ -1576,9 +1586,8 @@ class OptimizedStreetFighterVerifier(nn.Module):
         return energy
 
 
-# OPTIMIZED: Agent with EBT Integration
-class OptimizedEnergyBasedAgent:
-    """🛡️ High-performance agent with Energy-Based Transformer integration."""
+class FixedOptimizedEnergyBasedAgent:
+    """🛡️ High-performance agent with EBT integration and robust action selection."""
 
     def __init__(
         self,
@@ -1626,7 +1635,7 @@ class OptimizedEnergyBasedAgent:
         deterministic: bool = False,
         sequence_context: torch.Tensor = None,
     ) -> Tuple[int, Dict]:
-        """Optimized prediction with EBT integration."""
+        """Optimized prediction with EBT integration and robust action conversion."""
         device = next(self.verifier.parameters()).device
 
         obs_device = {}
@@ -1825,7 +1834,21 @@ class OptimizedEnergyBasedAgent:
             "used_ebt_thinking": self.use_ebt_thinking and sequence_context is not None,
         }
 
-        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
+        # --- FIX: Robustly convert action to a Python integer ---
+        # The training loop operates on a single environment, so we expect a single action.
+        # We ensure the output is a standard Python int to prevent type errors in the environment's step function.
+        if action_idx.numel() != 1:
+            # This is a safeguard for an unexpected tensor shape. We take the first element.
+            logger.warning(
+                f"Unexpected action tensor shape in predict(): {action_idx.shape}. Taking first element."
+            )
+            action_scalar = action_idx.flatten()[0]
+        else:
+            action_scalar = action_idx
+
+        final_action = int(action_scalar.item())
+
+        return final_action, thinking_info
 
     def get_thinking_stats(self) -> Dict:
         """Enhanced thinking stats with EBT metrics."""
@@ -2059,7 +2082,7 @@ class EBTEnhancedCheckpointManager:
 def verify_ebt_energy_flow(verifier, observation_space, action_space):
     """Verify EBT-enhanced energy flow works correctly."""
     try:
-        visual_obs = torch.zeros(1, 1, SCREEN_HEIGHT, SCREEN_WIDTH)
+        visual_obs = torch.zeros(1, FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH)
         vector_obs = torch.zeros(1, 3, VECTOR_FEATURE_DIM)
         dummy_obs = {"visual_obs": visual_obs, "vector_obs": vector_obs}
         dummy_action = torch.ones(1, action_space.n) / action_space.n
@@ -2091,10 +2114,10 @@ def make_optimized_sf_env(
         env = retro.make(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
         )
-        env = OptimizedStreetFighterVisionWrapper(env, render_frequency=30)
+        env = OptimizedStreetFighterVisionWrapper(env)
 
         print(f"   ✅ Optimized environment created")
-        print(f"   - Render frequency: Every 30 steps")
+        print(f"   - Rendering: Handled by external daemon thread")
         print(f"   - Action space: {env.action_space.n} actions")
         print(f"   - Visual obs: {env.observation_space['visual_obs'].shape}")
 
@@ -2110,7 +2133,7 @@ __all__ = [
     "OptimizedStreetFighterVisionWrapper",
     "OptimizedStreetFighterCNN",
     "OptimizedStreetFighterVerifier",
-    "OptimizedEnergyBasedAgent",
+    "FixedOptimizedEnergyBasedAgent",  # EXPORT THE FIXED AGENT
     "EBTEnhancedFeatureTracker",
     "OptimizedStreetFighterActions",
     "OptimizedRewardCalculator",
@@ -2137,12 +2160,14 @@ __all__ = [
     "OPTIMIZED_ACTIONS",
     "SCREEN_WIDTH",
     "SCREEN_HEIGHT",
+    "FRAME_STACK_SIZE",
 ]
 
 print(f"🚀 OPTIMIZED wrapper.py loaded successfully!")
 print(f"   - Performance optimizations: ACTIVE")
 print(f"   - Dense rewards: ENABLED")
-print(f"   - Reduced action space: {len(OPTIMIZED_ACTIONS)} actions")
-print(f"   - Optimized rendering: Every 30 steps")
+print(f"   - Action space: {len(OPTIMIZED_ACTIONS)} actions (special moves re-added)")
+print(f"   - Frame Stacking: ENABLED ({FRAME_STACK_SIZE} frames)")
+print(f"   - Asynchronous rendering: SUPPORTED")
 print(f"   - Memory efficiency: ENHANCED")
 print(f"🎯 Ready for high-performance Street Fighter RL training!")

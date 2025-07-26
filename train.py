@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🚀 FIXED OPTIMIZED EBT TRAINING - High Performance Energy-Based Learning
-Fixes: Type errors, rendering issues, and training stability
+🚀 FINAL FIXED OPTIMIZED EBT TRAINING - High Performance Energy-Based Learning
+Final fix for the list/int modulo error
 """
 
 import torch
@@ -15,13 +15,16 @@ from collections import deque
 from pathlib import Path
 import logging
 from datetime import datetime
+import threading
+import cv2
+import traceback
 
-# Import the optimized wrapper components
+# Import the optimized wrapper components with FIXED AGENT
 from wrapper import (
     make_optimized_sf_env,
     verify_ebt_energy_flow,
     OptimizedStreetFighterVerifier,
-    OptimizedEnergyBasedAgent,
+    FixedOptimizedEnergyBasedAgent,  # Use the FIXED version
     EBTEnhancedExperienceBuffer,
     PolicyMemoryManager,
     EnhancedEnergyStabilityManager,
@@ -36,15 +39,17 @@ from wrapper import (
     OPTIMIZED_ACTIONS,
     SCREEN_WIDTH,
     SCREEN_HEIGHT,
+    FRAME_STACK_SIZE,
 )
 
 
 class OptimizedEBTTrainer:
-    """🚀 High-performance trainer with optimized EBT integration - FIXED VERSION."""
+    """🚀 High-performance trainer with optimized EBT integration - FINAL FIXED VERSION."""
 
     def __init__(self, args):
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.training_active = True
 
         # Enable optimizations
         if torch.cuda.is_available():
@@ -53,6 +58,14 @@ class OptimizedEBTTrainer:
 
         print(f"🎮 Initializing optimized Street Fighter environment...")
         self.env = make_optimized_sf_env()
+
+        # NEW: Setup for daemon rendering thread
+        self.render_frame = None
+        self.render_lock = threading.Lock()
+        self.render_thread = None
+        if self.args.render:
+            self.render_thread = threading.Thread(target=self._render_loop, daemon=True)
+            print("   - Asynchronous rendering: ENABLED")
 
         # Initialize optimized verifier and agent
         self.verifier = OptimizedStreetFighterVerifier(
@@ -68,7 +81,7 @@ class OptimizedEBTTrainer:
         ):
             raise RuntimeError("EBT energy flow verification failed!")
 
-        self.agent = OptimizedEnergyBasedAgent(
+        self.agent = FixedOptimizedEnergyBasedAgent(  # Use FIXED version
             verifier=self.verifier,
             thinking_steps=args.thinking_steps,
             thinking_lr=args.thinking_lr,
@@ -137,13 +150,13 @@ class OptimizedEBTTrainer:
         else:
             self.scaler = None
 
-        # Training state
+        # Training state - FIXED: Ensure all counters are integers
         self.episode = 0
         self.total_steps = 0
         self.best_win_rate = 0.0
 
         # Performance tracking with shorter windows for faster adaptation
-        self.win_rate_history = deque(maxlen=args.win_rate_window)
+        self.win_rate_history = deque(maxlen=int(args.win_rate_window))
         self.energy_quality_history = deque(maxlen=25)
         self.ebt_performance_history = deque(maxlen=25)
         self.reward_history = deque(maxlen=100)
@@ -161,7 +174,7 @@ class OptimizedEBTTrainer:
         print(f"   - Learning rate: {args.learning_rate:.2e}")
         print(f"   - Action space: {len(OPTIMIZED_ACTIONS)} actions")
         print(f"   - Screen size: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
-        print(f"   - Render frequency: Every 30 steps")
+        print(f"   - Frame Stack: {FRAME_STACK_SIZE} frames")
 
     def setup_logging(self):
         """Setup optimized logging system."""
@@ -177,6 +190,30 @@ class OptimizedEBTTrainer:
             handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
         )
         self.logger = logging.getLogger(__name__)
+
+    def _render_loop(self):
+        """A daemon thread function for rendering the game screen without blocking training."""
+        window_name = "Street Fighter II - Render Thread"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+        while self.training_active:
+            frame_to_render = None
+            with self.render_lock:
+                if self.render_frame is not None:
+                    # Make a copy to avoid race conditions after lock is released
+                    frame_to_render = self.render_frame.copy()
+
+            if frame_to_render is not None:
+                # Retro env returns RGB, OpenCV uses BGR
+                frame_bgr = cv2.cvtColor(frame_to_render, cv2.COLOR_RGB2BGR)
+                cv2.imshow(window_name, frame_bgr)
+
+            # Check for quit key, and sleep to target ~30 FPS
+            if cv2.waitKey(33) & 0xFF == ord("q"):
+                self.training_active = False
+                break
+
+        cv2.destroyWindow(window_name)
 
     def calculate_enhanced_experience_quality(
         self, reward, reward_breakdown, episode_stats, thinking_info=None
@@ -247,7 +284,7 @@ class OptimizedEBTTrainer:
         return np.clip(quality_score, 0.0, 1.0)
 
     def run_episode(self):
-        """Optimized episode running with performance monitoring - FIXED VERSION."""
+        """Optimized episode running with performance monitoring - FINAL FIXED VERSION."""
         episode_start_time = time.time()
 
         obs, info = self.env.reset()
@@ -270,7 +307,10 @@ class OptimizedEBTTrainer:
         total_energy_improvement = 0.0
 
         while (
-            not done and not truncated and episode_steps < self.args.max_episode_steps
+            not done
+            and not truncated
+            and episode_steps < self.args.max_episode_steps
+            and self.training_active
         ):
             # Get EBT sequence context from environment
             sequence_context = None
@@ -289,6 +329,13 @@ class OptimizedEBTTrainer:
 
             # Execute action
             next_obs, reward, done, truncated, info = self.env.step(action)
+
+            # NEW: Update shared frame for rendering thread
+            if self.args.render:
+                raw_frame = self.env.get_last_raw_obs()
+                if raw_frame is not None:
+                    with self.render_lock:
+                        self.render_frame = raw_frame
 
             # Update EBT sequence tracker with energy score
             if hasattr(self.env, "feature_tracker") and thinking_info:
@@ -350,7 +397,7 @@ class OptimizedEBTTrainer:
                 "episode": self.episode,
                 "step": episode_steps,
                 "quality_score": quality_score,
-                "reward_breakdown": reward_breakdown,  # FIXED: Added this field
+                "reward_breakdown": reward_breakdown,
             }
 
             # Add EBT sequence to experience if available
@@ -400,7 +447,7 @@ class OptimizedEBTTrainer:
     def calculate_optimized_contrastive_loss(
         self, good_batch, bad_batch, sequence_batch=None, margin=1.5
     ):
-        """Optimized contrastive loss with mixed precision and EBT integration - FIXED VERSION."""
+        """Optimized contrastive loss with mixed precision and EBT integration - FINAL FIXED VERSION."""
         device = self.device
 
         def process_batch_efficiently(batch):
@@ -607,7 +654,7 @@ class OptimizedEBTTrainer:
         return total_loss, loss_info
 
     def train_step(self):
-        """Optimized training step with mixed precision - FIXED VERSION."""
+        """Optimized training step with mixed precision - FINAL FIXED VERSION."""
         # Sample balanced batch
         batch_result = self.experience_buffer.sample_enhanced_balanced_batch(
             self.args.batch_size, golden_ratio=0.1, sequence_ratio=0.15
@@ -702,7 +749,7 @@ class OptimizedEBTTrainer:
         return loss_info
 
     def evaluate_performance(self):
-        """Optimized evaluation with performance monitoring - FIXED VERSION."""
+        """Optimized evaluation with performance monitoring - FINAL FIXED VERSION."""
         eval_episodes = min(3, max(1, self.episode // 200))  # Fewer episodes for speed
 
         wins = 0
@@ -788,7 +835,7 @@ class OptimizedEBTTrainer:
         }
 
     def handle_policy_memory_operations(self, performance_stats, train_stats):
-        """Enhanced policy memory operations with optimized thresholds - FIXED VERSION."""
+        """Enhanced policy memory operations with optimized thresholds - FINAL FIXED VERSION."""
         current_win_rate = performance_stats["win_rate"]
 
         # Find base learning rate
@@ -867,20 +914,37 @@ class OptimizedEBTTrainer:
         return policy_memory_action_taken
 
     def train(self):
-        """Optimized main training loop - FIXED VERSION."""
-        print(f"🚀 Starting Optimized EBT Training")
+        """Optimized main training loop - FINAL FIXED VERSION."""
+        print(f"\n🚀 Starting Optimized EBT Training")
         print(f"   - Target episodes: {self.args.max_episodes}")
         print(f"   - Action space: {len(OPTIMIZED_ACTIONS)} actions")
         print(f"   - Mixed precision: {'ENABLED' if self.scaler else 'DISABLED'}")
-        print(f"   - Render frequency: Every 30 steps")
+
+        # Start the rendering thread if enabled
+        if self.render_thread:
+            self.render_thread.start()
 
         # Training metrics
         episode_rewards = deque(maxlen=50)
         recent_losses = deque(maxlen=25)
         training_start_time = time.time()
 
-        for episode in range(self.args.max_episodes):
-            self.episode = episode
+        # FINAL FIX: Ensure all arguments are proper integers/floats before the loop
+        max_episodes = int(self.args.max_episodes)
+        eval_frequency = int(self.args.eval_frequency)
+        checkpoint_frequency = int(self.args.checkpoint_frequency)
+
+        print(
+            f"🔍 DEBUG: Loop parameters - max_episodes: {max_episodes}, eval_frequency: {eval_frequency}"
+        )
+
+        for episode_idx in range(max_episodes):
+            if not self.training_active:
+                print("🛑 Training loop terminated by render window closure.")
+                break
+
+            # FINAL FIX: Ensure episode is always an integer
+            self.episode = int(episode_idx)
             episode_start_time = time.time()
 
             # Run episode
@@ -899,14 +963,32 @@ class OptimizedEBTTrainer:
             else:
                 train_stats = {}
 
-            # FIXED: Periodic evaluation and management - use integer episode check
-            if int(episode) % int(self.args.eval_frequency) == 0:
+            # FINAL FIX: Use integer modulo operations with explicit type checking
+            if self.episode % eval_frequency == 0:
                 # Performance evaluation
                 performance_stats = self.evaluate_performance()
-                self.win_rate_history.append(performance_stats["win_rate"])
+
+                # FINAL FIX: Ensure win_rate is a scalar float, not a list
+                win_rate = performance_stats["win_rate"]
+                if isinstance(win_rate, (list, np.ndarray)):
+                    win_rate = float(win_rate[0]) if len(win_rate) > 0 else 0.0
+                else:
+                    win_rate = float(win_rate)
+                performance_stats["win_rate"] = win_rate
+
+                self.win_rate_history.append(win_rate)
 
                 # Calculate energy quality metrics
                 energy_separation = train_stats.get("energy_separation", 0.0)
+                if isinstance(energy_separation, (list, np.ndarray)):
+                    energy_separation = (
+                        float(energy_separation[0])
+                        if len(energy_separation) > 0
+                        else 0.0
+                    )
+                else:
+                    energy_separation = float(energy_separation)
+
                 energy_quality = abs(energy_separation) * 10.0
                 self.energy_quality_history.append(energy_quality)
 
@@ -924,7 +1006,7 @@ class OptimizedEBTTrainer:
                 avg_ebt_success = safe_mean(list(self.ebt_performance_history), 1.0)
 
                 stability_emergency = self.stability_manager.update_metrics(
-                    performance_stats["win_rate"],
+                    win_rate,
                     energy_quality,
                     energy_separation,
                     early_stop_rate,
@@ -944,12 +1026,12 @@ class OptimizedEBTTrainer:
 
                     self.agent.current_thinking_lr = new_thinking_lr
 
-                # FIXED: Checkpoint saving - use integer operations
+                # FINAL FIX: Checkpoint saving with integer operations
                 checkpoint_due = (
-                    int(episode) - int(self.last_checkpoint_episode)
-                ) >= int(self.args.checkpoint_frequency)
+                    self.episode - self.last_checkpoint_episode
+                ) >= checkpoint_frequency
 
-                if checkpoint_due or performance_stats["win_rate"] > self.best_win_rate:
+                if checkpoint_due or win_rate > self.best_win_rate:
 
                     ebt_stats = {
                         "ebt_success_rate": performance_stats.get(
@@ -960,26 +1042,26 @@ class OptimizedEBTTrainer:
                         ),
                         "ebt_enabled": self.args.use_ebt,
                         "ebt_thinking_enabled": self.args.use_ebt_thinking,
-                        "episode": episode,
+                        "episode": self.episode,
                     }
 
                     self.checkpoint_manager.save_checkpoint(
                         self.verifier,
                         self.agent,
-                        episode,
-                        performance_stats["win_rate"],
+                        self.episode,
+                        win_rate,
                         energy_quality,
                         policy_memory_stats=self.policy_memory.get_stats(),
                         ebt_stats=ebt_stats,
                     )
-                    self.last_checkpoint_episode = episode
+                    self.last_checkpoint_episode = self.episode
 
-                    if performance_stats["win_rate"] > self.best_win_rate:
-                        self.best_win_rate = performance_stats["win_rate"]
+                    if win_rate > self.best_win_rate:
+                        self.best_win_rate = win_rate
 
-                # FIXED: Adjust experience buffer threshold - use integer operations
-                if int(episode) % 20 == 0:
-                    self.experience_buffer.adjust_threshold(episode_number=int(episode))
+                # FINAL FIX: Adjust experience buffer threshold with integer operations
+                if self.episode % 20 == 0:
+                    self.experience_buffer.adjust_threshold(episode_number=self.episode)
 
                 # Performance reporting
                 buffer_stats = self.experience_buffer.get_stats()
@@ -991,12 +1073,59 @@ class OptimizedEBTTrainer:
                 episodes_per_hour = 3600 / max(avg_episode_time, 1.0)
                 avg_reward = safe_mean(list(self.reward_history)[-50:], 0.0)
 
-                print(f"\n🚀 OPTIMIZED STATUS (Episode {episode}):")
+                # FINAL FIX: Ensure all values are properly converted to scalars
+                ebt_success_rate_display = performance_stats.get(
+                    "ebt_success_rate", 1.0
+                )
+                if isinstance(ebt_success_rate_display, (list, np.ndarray)):
+                    ebt_success_rate_display = (
+                        float(ebt_success_rate_display[0])
+                        if len(ebt_success_rate_display) > 0
+                        else 1.0
+                    )
+                else:
+                    ebt_success_rate_display = float(ebt_success_rate_display)
+
+                avg_energy_improvement_display = performance_stats.get(
+                    "avg_energy_improvement", 0.0
+                )
+                if isinstance(avg_energy_improvement_display, (list, np.ndarray)):
+                    avg_energy_improvement_display = (
+                        float(avg_energy_improvement_display[0])
+                        if len(avg_energy_improvement_display) > 0
+                        else 0.0
+                    )
+                else:
+                    avg_energy_improvement_display = float(
+                        avg_energy_improvement_display
+                    )
+
+                thinking_success_rate = thinking_stats.get("success_rate", 1.0)
+                if isinstance(thinking_success_rate, (list, np.ndarray)):
+                    thinking_success_rate = (
+                        float(thinking_success_rate[0])
+                        if len(thinking_success_rate) > 0
+                        else 1.0
+                    )
+                else:
+                    thinking_success_rate = float(thinking_success_rate)
+
+                contrastive_loss_display = train_stats.get("contrastive_loss", 0.0)
+                if isinstance(contrastive_loss_display, (list, np.ndarray)):
+                    contrastive_loss_display = (
+                        float(contrastive_loss_display[0])
+                        if len(contrastive_loss_display) > 0
+                        else 0.0
+                    )
+                else:
+                    contrastive_loss_display = float(contrastive_loss_display)
+
+                print(f"\n🚀 OPTIMIZED STATUS (Episode {self.episode}):")
                 print(f"   🎯 Performance:")
-                print(f"      - Win rate: {performance_stats['win_rate']:.1%}")
-                print(f"      - Avg reward (50ep): {avg_reward:.2f}")
+                print(f"      - Win rate: {win_rate:.1%}")
+                print(f"      - Avg reward (50ep): {float(avg_reward):.2f}")
                 print(f"      - Energy separation: {energy_separation:.4f}")
-                print(f"      - Episodes/hour: {episodes_per_hour:.1f}")
+                print(f"      - Episodes/hour: {float(episodes_per_hour):.1f}")
 
                 print(f"   🤖 Experience Buffer:")
                 print(f"      - Good: {buffer_stats['good_count']:,}")
@@ -1005,68 +1134,66 @@ class OptimizedEBTTrainer:
                 print(f"      - Golden: {buffer_stats['golden_buffer']['size']:,}")
 
                 print(f"   🧠 EBT Performance:")
+                print(f"      - EBT success rate: {ebt_success_rate_display:.1%}")
                 print(
-                    f"      - EBT success rate: {performance_stats.get('ebt_success_rate', 1.0):.1%}"
-                )
-                print(
-                    f"      - Energy improvement: {performance_stats.get('avg_energy_improvement', 0.0):.4f}"
+                    f"      - Energy improvement: {avg_energy_improvement_display:.4f}"
                 )
 
                 print(f"   🔧 Training:")
-                print(
-                    f"      - Thinking success: {thinking_stats.get('success_rate', 1.0):.1%}"
-                )
-                print(f"      - Learning rate: {current_lr:.2e}")
+                print(f"      - Thinking success: {thinking_success_rate:.1%}")
+                print(f"      - Learning rate: {float(current_lr):.2e}")
 
                 if train_stats:
                     print(f"   📊 Loss Info:")
-                    print(
-                        f"      - Contrastive: {train_stats.get('contrastive_loss', 0.0):.4f}"
-                    )
-                    print(
-                        f"      - Energy sep: {train_stats.get('energy_separation', 0.0):.4f}"
-                    )
+                    print(f"      - Contrastive: {contrastive_loss_display:.4f}")
+                    print(f"      - Energy sep: {energy_separation:.4f}")
                     print(
                         f"      - EBT sequences: {train_stats.get('used_ebt_sequences', False)}"
                     )
 
-                # Enhanced logging
                 self.logger.info(
-                    f"E{episode}: Win={performance_stats['win_rate']:.1%}, "
-                    f"R={avg_reward:.2f}, Sep={energy_separation:.4f}, "
-                    f"EBT={performance_stats.get('ebt_success_rate', 1.0):.1%}, "
-                    f"EPS/h={episodes_per_hour:.1f}"
+                    f"E{self.episode}: Win={win_rate:.1%}, "
+                    f"R={float(avg_reward):.2f}, Sep={energy_separation:.4f}, "
+                    f"EBT={ebt_success_rate_display:.1%}, "
+                    f"EPS/h={float(episodes_per_hour):.1f}"
                 )
 
+        self.training_active = False  # Signal render thread to exit
         # Training completed
         training_time = time.time() - training_start_time
 
         print(f"\n🎉 Optimized Training Completed!")
-        print(f"   - Episodes: {self.args.max_episodes}")
+        print(f"   - Episodes: {max_episodes}")
         print(f"   - Training time: {training_time/3600:.1f} hours")
         print(f"   - Best win rate: {self.best_win_rate:.1%}")
-        print(
-            f"   - Avg episodes/hour: {self.args.max_episodes / (training_time/3600):.1f}"
-        )
+        print(f"   - Avg episodes/hour: {max_episodes / (training_time/3600):.1f}")
 
         # Save final checkpoint
         final_performance = self.evaluate_performance()
+        final_win_rate = final_performance["win_rate"]
+        if isinstance(final_win_rate, (list, np.ndarray)):
+            final_win_rate = (
+                float(final_win_rate[0]) if len(final_win_rate) > 0 else 0.0
+            )
+        else:
+            final_win_rate = float(final_win_rate)
+
         self.checkpoint_manager.save_checkpoint(
             self.verifier,
             self.agent,
-            self.args.max_episodes,
-            final_performance["win_rate"],
+            max_episodes,
+            final_win_rate,
             0.0,
             ebt_stats={
                 "training_completed": True,
-                "final_win_rate": final_performance["win_rate"],
+                "final_win_rate": final_win_rate,
                 "training_time_hours": training_time / 3600,
             },
         )
 
 
 def parse_arguments():
-    """Enhanced argument parsing with optimized defaults - FIXED VERSION."""
+    """Enhanced argument parsing with optimized defaults - FINAL FIXED VERSION."""
     parser = argparse.ArgumentParser(
         description="🚀 Optimized EBT Street Fighter Training"
     )
@@ -1091,7 +1218,7 @@ def parse_arguments():
         "--render",
         action="store_true",
         default=True,
-        help="Enable rendering (every 30 steps)",
+        help="Enable rendering in a separate, non-blocking window.",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
@@ -1232,9 +1359,33 @@ def parse_arguments():
 
 
 def main():
-    """Optimized main function with performance monitoring - FIXED VERSION."""
+    """Optimized main function with performance monitoring - FINAL FIXED VERSION."""
     # Parse arguments
     args = parse_arguments()
+
+    # FINAL FIX: Explicitly validate and convert arguments to ensure proper types
+    print("🔍 FINAL FIX: Validating argument types...")
+
+    # Ensure all integer arguments are proper integers
+    args.max_episodes = int(args.max_episodes)
+    args.eval_frequency = int(args.eval_frequency)
+    args.checkpoint_frequency = int(args.checkpoint_frequency)
+    args.batch_size = int(args.batch_size)
+    args.thinking_steps = int(args.thinking_steps)
+    args.features_dim = int(args.features_dim)
+
+    # Ensure all float arguments are proper floats
+    args.learning_rate = float(args.learning_rate)
+    args.thinking_lr = float(args.thinking_lr)
+    args.quality_threshold = float(args.quality_threshold)
+    args.ebt_lr_multiplier = float(args.ebt_lr_multiplier)
+
+    print(f"✅ FINAL FIX: Arguments validated:")
+    print(f"   - max_episodes: {args.max_episodes} ({type(args.max_episodes)})")
+    print(f"   - eval_frequency: {args.eval_frequency} ({type(args.eval_frequency)})")
+    print(
+        f"   - checkpoint_frequency: {args.checkpoint_frequency} ({type(args.checkpoint_frequency)})"
+    )
 
     # Create directories
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -1267,7 +1418,7 @@ def main():
     print(f"\n🚀 OPTIMIZED STREET FIGHTER RL TRAINING:")
     print(f"   🎮 Environment: Street Fighter II (Optimized)")
     print(
-        f"   🎥 Rendering: {'ENABLED (every 30 steps)' if args.render else 'DISABLED'}"
+        f"   🎥 Rendering: {'ENABLED (daemon thread)' if args.render else 'DISABLED'}"
     )
     print(f"   🎲 Random Seed: {args.seed}")
     print(f"   🏆 Target Episodes: {args.max_episodes:,}")
@@ -1282,23 +1433,29 @@ def main():
     print(f"   💾 Buffer Capacity: {args.buffer_capacity:,}")
     print(f"   🏅 Golden Buffer: {args.golden_buffer_capacity:,}")
     print(f"   🎮 Action Space: {len(OPTIMIZED_ACTIONS)} actions")
-    print(f"   📺 Screen Size: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
+    print(
+        f"   📺 Screen Size: {SCREEN_WIDTH}x{SCREEN_HEIGHT} x {FRAME_STACK_SIZE} frames"
+    )
     print(f"   📁 Checkpoint Dir: {args.checkpoint_dir}")
 
     if args.debug:
         print(f"   🐛 Debug Mode: ENABLED")
 
     print(f"\n🚀 KEY OPTIMIZATIONS:")
-    print(f"   - Reduced action space from 4096 → {len(OPTIMIZED_ACTIONS)}")
-    print(f"   - Optimized screen resolution: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
+    print(f"   - Asynchronous rendering in a daemon thread (no slowdown)")
+    print(f"   - 8-frame stacking for enhanced motion detection")
+    print(
+        f"   - Re-added Hurricane Kicks to action space: {len(OPTIMIZED_ACTIONS)} actions"
+    )
     print(f"   - Dense reward signals for faster learning")
-    print(f"   - Selective rendering every 30 steps")
     print(f"   - Mixed precision training for 2x speedup")
     print(f"   - Pre-allocated memory buffers")
     print(f"   - Optimized CNN architecture")
     print(f"   - Enhanced experience quality scoring")
     print(f"   - Fixed type errors and stability issues")
+    print(f"   - FINAL FIX: Explicit type validation for all arguments")
 
+    trainer = None
     try:
         # Initialize and run trainer
         trainer = OptimizedEBTTrainer(args)
@@ -1328,16 +1485,23 @@ def main():
 
     except KeyboardInterrupt:
         print(f"\n⚠️ Training interrupted by user")
+        if trainer:
+            trainer.training_active = False  # Signal render thread to stop
         print(f"💾 Checkpoints saved in: {args.checkpoint_dir}")
     except Exception as e:
         print(f"\n❌ Training failed with error: {e}")
+        if trainer:
+            trainer.training_active = False  # Signal render thread to stop
+        # --- FIX: Provide full traceback in debug mode ---
         if args.debug:
-            import traceback
-
             traceback.print_exc()
         else:
             print(f"💡 Use --debug flag for detailed error information")
     finally:
+        if trainer and trainer.training_active:
+            trainer.training_active = False  # Ensure thread is signaled to stop
+        # Give the render thread a moment to close
+        time.sleep(0.5)
         # Cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
