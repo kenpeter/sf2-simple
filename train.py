@@ -99,6 +99,9 @@ class FixedTrainer:
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Setup directories for logging and checkpoints
+        self._setup_directories()
+
         # Initialize FIXED environment
         print(f"🎮 Initializing FIXED environment...")
         self.env = make_fixed_env()
@@ -153,19 +156,26 @@ class FixedTrainer:
         # Setup logging
         self.setup_logging()
 
+        # Load checkpoint if provided, this will update self.episode and other states
+        self.load_checkpoint()
+
         print(f"🛡️ Fixed Trainer initialized")
         print(f"   - Device: {self.device}")
         print(f"   - Learning rate: {args.learning_rate:.2e}")
         print(f"   - Health detection: MULTI-METHOD")
         print(f"   - Draw problem: TARGETED FOR ELIMINATION")
 
+    def _setup_directories(self):
+        """Create necessary directories for logging and checkpoints."""
+        self.log_dir = Path("logs_fixed")
+        self.checkpoint_dir = Path("checkpoints_fixed")
+        self.log_dir.mkdir(exist_ok=True)
+        self.checkpoint_dir.mkdir(exist_ok=True)
+
     def setup_logging(self):
         """Setup logging system."""
-        log_dir = Path("logs_fixed")
-        log_dir.mkdir(exist_ok=True)
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"fixed_training_{timestamp}.log"
+        log_file = self.log_dir / f"fixed_training_{timestamp}.log"
 
         logging.basicConfig(
             level=logging.INFO,
@@ -173,6 +183,53 @@ class FixedTrainer:
             handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
         )
         self.logger = logging.getLogger(__name__)
+
+    def save_checkpoint(self, episode):
+        """Save a training checkpoint."""
+        if not self.args.save_frequency > 0:
+            return
+
+        filename = self.checkpoint_dir / f"checkpoint_ep_{episode}.pth"
+        state = {
+            "episode": episode,
+            "verifier_state_dict": self.verifier.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "total_steps": self.total_steps,
+            "best_win_rate": self.best_win_rate,
+            "args": self.args,  # Save args for reference
+        }
+        torch.save(state, filename)
+        self.logger.info(f"💾 Checkpoint saved to {filename}")
+
+    def load_checkpoint(self):
+        """Load a training checkpoint."""
+        if self.args.load_checkpoint:
+            checkpoint_path = self.args.load_checkpoint
+            if os.path.exists(checkpoint_path):
+                self.logger.info(f"🔄 Loading checkpoint from {checkpoint_path}...")
+                checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+                self.verifier.load_state_dict(checkpoint["verifier_state_dict"])
+                self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+                # Load training state, starting from the next episode
+                self.episode = checkpoint["episode"] + 1
+                self.wins = checkpoint.get("wins", 0)
+                self.losses = checkpoint.get("losses", 0)
+                self.draws = checkpoint.get("draws", 0)
+                self.total_steps = checkpoint.get("total_steps", 0)
+                self.best_win_rate = checkpoint.get("best_win_rate", 0.0)
+
+                self.logger.info(
+                    f"✅ Checkpoint loaded. Resuming from episode {self.episode}."
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ Checkpoint file not found at {checkpoint_path}. Starting from scratch."
+                )
 
     def run_episode(self):
         """Run a single episode with fixed health detection."""
@@ -498,13 +555,14 @@ class FixedTrainer:
         """Main training loop with draw elimination focus."""
         print(f"🛡️ Starting FIXED Training")
         print(f"   - Target episodes: {self.args.max_episodes}")
+        print(f"   - Starting from episode: {self.episode}")
         print(f"   - Focus: ELIMINATE DRAWS")
         print(f"   - Health detection: MULTI-METHOD")
 
         training_start_time = time.time()
-        last_eval_episode = 0
 
-        for episode in range(self.args.max_episodes):
+        # The loop now starts from `self.episode`, which is 0 unless a checkpoint was loaded
+        for episode in range(self.episode, self.args.max_episodes):
             self.episode = episode
             episode_start_time = time.time()
 
@@ -658,7 +716,13 @@ class FixedTrainer:
                     f"LastTerm={episode_stats.get('termination_reason', 'unknown')}"
                 )
 
-                last_eval_episode = episode
+            # Save checkpoint
+            if (
+                self.args.save_frequency > 0
+                and episode > 0
+                and episode % self.args.save_frequency == 0
+            ):
+                self.save_checkpoint(episode)
 
             # Early stopping check
             if len(self.win_rate_history) >= 10:
@@ -670,6 +734,9 @@ class FixedTrainer:
                     break
 
         # Training completed
+        self.logger.info("💾 Saving final model checkpoint...")
+        self.save_checkpoint(self.episode)
+
         final_performance = self.evaluate_performance()
         final_win_lose_stats = self.get_win_lose_stats()
 
@@ -738,6 +805,18 @@ def main():
     parser.add_argument(
         "--eval-frequency", type=int, default=10, help="Evaluate every N episodes"
     )
+    parser.add_argument(
+        "--save-frequency",
+        type=int,
+        default=20,
+        help="Save checkpoint every N episodes. Set to 0 to disable.",
+    )
+    parser.add_argument(
+        "--load-checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint file to resume training.",
+    )
 
     # Model arguments
     parser.add_argument(
@@ -788,6 +867,9 @@ def main():
     print(f"🛡️ Fixed Street Fighter Training Configuration:")
     print(f"   Max Episodes: {args.max_episodes:,}")
     print(f"   Learning Rate: {args.learning_rate:.2e}")
+    print(f"   Save Frequency: Every {args.save_frequency} episodes")
+    if args.load_checkpoint:
+        print(f"   Resuming from: {args.load_checkpoint}")
     print(f"   Target Win Rate: {args.target_win_rate:.1%}")
     print(f"   Health Verification: {args.verify_health}")
     print(f"   🎯 PRIMARY GOAL: ELIMINATE 176 vs 176 DRAWS")

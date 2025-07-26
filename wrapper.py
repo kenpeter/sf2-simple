@@ -1064,12 +1064,14 @@ class SimpleVerifier(nn.Module):
     ):
         super().__init__()
 
+        # verifier.parameters() will return obs_space, action_space (retro), feature_dim, action_dim
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
         # Feature extractor
+        # obs_space (raw obs), feature_dim (health etc)
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
         # Action embedding
