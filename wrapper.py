@@ -845,6 +845,10 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
+        # --- NEW: STATE FLAG TO FIX THE ROUND 2 PROBLEM ---
+        self.round_over = False
+        # --- END OF NEW CODE ---
+
         print(f"🚀 Optimized StreetFighterVisionWrapper initialized")
         print(f"   - Frame Stack: {FRAME_STACK_SIZE} frames")
         print(f"   - Rendering: Handled externally by daemon thread")
@@ -860,6 +864,10 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
         self.feature_tracker.reset()
         self.vector_history.clear()
         self.step_count = 0
+
+        # --- NEW: RESET THE STATE FLAG ---
+        self.round_over = False
+        # --- END OF NEW CODE ---
 
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
@@ -879,67 +887,61 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
 
         return observation, info
 
-    # --- [IN wrapper.py, inside OptimizedStreetFighterVisionWrapper class] ---
-
-    # --- START OF FIX ---
+    # In wrapper.py, inside OptimizedStreetFighterVisionWrapper
+    # REPLACE the entire old step method with this new one.
     def step(self, action: int):
         """
-        Enhanced step with optimized processing and dense rewards.
-        This version passes the integer action directly to the underlying retro env,
-        as it's configured for retro.Actions.DISCRETE.
+        Enhanced step with a stateful flag to ensure single-round episodes.
+        This is the FINAL FIX for the "round 2" problem.
         """
+        # If the round is already marked as over, don't take any more actions.
+        # Just return the last observation and a firm 'done = True' signal.
+        if self.round_over:
+            # We must return an observation of the correct shape.
+            # Building it ensures consistency.
+            obs, info = self.env.state, self.env.data.lookup_all()
+            last_observation = self._build_observation(self.last_raw_obs or obs, info)
+            return last_observation, 0.0, True, False, info
+
+        # --- If the round is not over, proceed normally ---
         self.step_count += 1
 
-        # The agent provides a single integer action. The retro environment is configured
-        # for `retro.Actions.DISCRETE`, which also expects a single integer.
-        # We pass the action integer directly, and the retro library handles the conversion.
         obs, reward, done, truncated, info = self.env.step(action)
-        self.last_raw_obs = obs  # Store raw frame for rendering thread
+        self.last_raw_obs = obs  # Store raw frame for rendering
 
-        # We still look up the button combination for logging and info purposes.
         button_combination = self.action_mapper.get_action(action)
-
         player_health, opponent_health = self._extract_health(info)
 
         # --- SINGLE-ROUND TERMINATION LOGIC ---
-        # The 'done' signal from the base retro env is for the entire match (e.g., best-of-3).
-        # We override it here to force the episode to end after a single round.
-        # A round ends if:
-        #   1. A player is knocked out (health drops to 0).
-        #   2. The in-game timer runs out.
-        #   3. The manual step limit (MAX_FIGHT_STEPS) is reached.
-
         is_ko = (self.previous_player_health > 0 and player_health <= 0) or (
             self.previous_opponent_health > 0 and opponent_health <= 0
         )
-
-        # The in-game timer usually counts down from 99.
         in_game_timer_expired = info.get("timer", 99) <= 0
-
         step_limit_reached = self.step_count >= MAX_FIGHT_STEPS
 
-        # it is ko, game timer expired, step limit reach, we stop the game
+        # Check if the round should end NOW
         if is_ko or in_game_timer_expired or step_limit_reached:
             done = True
-        # --- END OF SINGLE-ROUND TERMINATION LOGIC ---
+            self.round_over = True  # Latch the flag! It will now be true until reset().
 
+        # Update health for the next step's comparison
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
 
-        # Dense reward calculation with action information
+        # Calculate reward (pass our final 'done' signal to it)
         intelligent_reward, reward_breakdown = self.reward_calculator.calculate_reward(
             player_health, opponent_health, done, info, action
         )
 
-        # Update feature tracker with EBT sequence tracking
+        # Update trackers
         self.feature_tracker.update(
             player_health, opponent_health, action, reward_breakdown, energy_score=0.0
         )
 
-        # Build the full observation for the current step
+        # Build the final observation for the agent
         observation = self._build_observation(obs, info)
 
-        # Enhanced info with performance metrics
+        # Update info dictionary
         info.update(
             {
                 "player_health": player_health,
@@ -951,15 +953,12 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
                 "ebt_sequence_info": self.feature_tracker.get_sequence_info(),
                 "action_taken": action,
                 "button_combination": button_combination,
-                # Add our custom done flags to info for debugging
                 "is_ko": is_ko,
                 "is_timeout": in_game_timer_expired,
             }
         )
 
         return observation, intelligent_reward, done, truncated, info
-
-    # --- END OF FIX ---
 
     def get_last_raw_obs(self):
         """Allows the external rendering thread to get the latest frame."""
