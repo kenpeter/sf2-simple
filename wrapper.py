@@ -879,6 +879,8 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
 
         return observation, info
 
+    # --- [IN wrapper.py, inside OptimizedStreetFighterVisionWrapper class] ---
+
     # --- START OF FIX ---
     def step(self, action: int):
         """
@@ -899,13 +901,27 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
 
         player_health, opponent_health = self._extract_health(info)
 
-        # Episode termination logic
-        if (self.previous_player_health > 0 and player_health <= 0) or (
+        # --- SINGLE-ROUND TERMINATION LOGIC ---
+        # The 'done' signal from the base retro env is for the entire match (e.g., best-of-3).
+        # We override it here to force the episode to end after a single round.
+        # A round ends if:
+        #   1. A player is knocked out (health drops to 0).
+        #   2. The in-game timer runs out.
+        #   3. The manual step limit (MAX_FIGHT_STEPS) is reached.
+
+        is_ko = (self.previous_player_health > 0 and player_health <= 0) or (
             self.previous_opponent_health > 0 and opponent_health <= 0
-        ):
+        )
+
+        # The in-game timer usually counts down from 99.
+        in_game_timer_expired = info.get("timer", 99) <= 0
+
+        step_limit_reached = self.step_count >= MAX_FIGHT_STEPS
+
+        # it is ko, game timer expired, step limit reach, we stop the game
+        if is_ko or in_game_timer_expired or step_limit_reached:
             done = True
-        elif self.step_count >= MAX_FIGHT_STEPS:
-            done = True
+        # --- END OF SINGLE-ROUND TERMINATION LOGIC ---
 
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
@@ -935,6 +951,9 @@ class OptimizedStreetFighterVisionWrapper(gym.Wrapper):
                 "ebt_sequence_info": self.feature_tracker.get_sequence_info(),
                 "action_taken": action,
                 "button_combination": button_combination,
+                # Add our custom done flags to info for debugging
+                "is_ko": is_ko,
+                "is_timeout": in_game_timer_expired,
             }
         )
 
