@@ -1169,10 +1169,11 @@ class EnhancedEnergyBasedVerifier(nn.Module):
         action_space: spaces.Space,
         features_dim: int = 256,
     ):
-        # verifier has obs, action space, feature dim
+        # verifier has obs, action space, feature dim (player health etc)
         # super init
         super().__init__()
 
+        # obs, action space, feature, action dim
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_dim = features_dim

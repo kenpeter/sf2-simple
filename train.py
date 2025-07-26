@@ -1,109 +1,3 @@
-def run_enhanced_episode(self):
-    """Enhanced episode running with detailed win/lose tracking."""
-    obs, info = self.env.reset()
-    done = False
-    truncated = False
-
-    episode_reward = 0.0
-    episode_steps = 0
-    episode_experiences = []
-
-    # Episode-level tracking - INITIALIZE ALL VARIABLES
-    damage_dealt_total = 0.0
-    damage_taken_total = 0.0
-    round_won = False
-    round_lost = False  # EXPLICITLY INITIALIZE
-    round_draw = False  # EXPLICITLY INITIALIZE
-    termination_reason = "ongoing"
-    victory_type = "none"
-    defeat_type = "none"
-
-    # Enhanced tracking for transformer analysis
-    transformer_energy_total = 0.0
-
-    while not done and not truncated and episode_steps < self.args.max_episode_steps:
-        # Enhanced agent prediction with transformer awareness
-        action, thinking_info = self.agent.predict(obs, deterministic=False)
-
-        # Analyze attention patterns
-        self.analyze_attention_patterns(thinking_info)
-
-        # Execute action (FAST - no changes to game speed)
-        next_obs, reward, done, truncated, info = self.env.step(action)
-
-        episode_reward += reward
-        episode_steps += 1
-        self.total_steps += 1
-
-        # Track round result from info
-        if info.get("round_ended", False):
-            termination_reason = info.get("termination_reason", "unknown")
-            round_result = info.get("round_result", "ONGOING")
-            victory_type = info.get("victory_type", "none")
-            defeat_type = info.get("defeat_type", "none")
-
-            if round_result == "WIN":
-                round_won = True
-                round_lost = False
-                round_draw = False
-            elif round_result == "LOSE":
-                round_won = False
-                round_lost = True
-                round_draw = False
-            elif round_result == "DRAW":
-                round_won = False
-                round_lost = False
-                round_draw = True
-
-        # Track episode stats
-        reward_breakdown = info.get("reward_breakdown", {})
-        damage_dealt_total += reward_breakdown.get("damage_dealt", 0.0)
-        damage_taken_total += abs(reward_breakdown.get("damage_taken", 0.0))
-
-        # Legacy round_won detection for compatibility
-        if "round_won" in reward_breakdown:
-            round_won = True
-            round_lost = False
-            round_draw = False
-        elif "round_lost" in reward_breakdown:
-            round_won = False
-            round_lost = True
-            round_draw = False
-
-        # Enhanced tracking
-        if "avg_transformer_energy" in thinking_info:
-            transformer_energy_total += abs(thinking_info["avg_transformer_energy"])
-
-        # Calculate enhanced experience quality
-        episode_stats = {
-            "won": round_won,
-            "damage_ratio": safe_divide(
-                damage_dealt_total, damage_taken_total + 1e-6, 1.0
-            ),
-        }
-        quality_score = self.calculate_enhanced_experience_quality(
-            reward, reward_breakdown, episode_stats
-        )
-
-        # Store enhanced experience
-        experience = {
-            "obs": obs,
-            "action": action,
-            "reward": reward,
-            "next_obs": next_obs,
-            "done": done,
-            "thinking_info": thinking_info,
-            "episode": self.episode,
-            "step": episode_steps,
-            "transformer_energy": thinking_info.get("avg_transformer_energy", 0.0),
-        }
-
-        episode_experiences.append((experience, quality_score))
-        obs = next_obs
-
-    # Update win/lose statistics#!/usr/bin/env python3
-
-
 """
 🛡️ ENHANCED TRAINING - Energy-Based Transformers + Current Energy Thinking
 Keeps your original training logic and adds EBT architecture for enhanced learning
@@ -347,7 +241,7 @@ class EnhancedEBTTrainer:
                 self.attention_analysis.append(attention_analysis)
 
     def run_enhanced_episode(self):
-        """Enhanced episode running with round termination tracking."""
+        """Enhanced episode running with detailed win/lose tracking."""
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -356,11 +250,15 @@ class EnhancedEBTTrainer:
         episode_steps = 0
         episode_experiences = []
 
-        # Episode-level tracking
+        # Episode-level tracking - INITIALIZE ALL VARIABLES
         damage_dealt_total = 0.0
         damage_taken_total = 0.0
         round_won = False
+        round_lost = False  # EXPLICITLY INITIALIZE
+        round_draw = False  # EXPLICITLY INITIALIZE
         termination_reason = "ongoing"
+        victory_type = "none"
+        defeat_type = "none"
 
         # Enhanced tracking for transformer analysis
         transformer_energy_total = 0.0
@@ -381,19 +279,40 @@ class EnhancedEBTTrainer:
             episode_steps += 1
             self.total_steps += 1
 
-            # Track termination reason
+            # Track round result from info
             if info.get("round_ended", False):
                 termination_reason = info.get("termination_reason", "unknown")
-                if termination_reason in ["player_ko", "opponent_ko", "technical_ko"]:
-                    round_won = termination_reason == "opponent_ko"
+                round_result = info.get("round_result", "ONGOING")
+                victory_type = info.get("victory_type", "none")
+                defeat_type = info.get("defeat_type", "none")
+
+                if round_result == "WIN":
+                    round_won = True
+                    round_lost = False
+                    round_draw = False
+                elif round_result == "LOSE":
+                    round_won = False
+                    round_lost = True
+                    round_draw = False
+                elif round_result == "DRAW":
+                    round_won = False
+                    round_lost = False
+                    round_draw = True
 
             # Track episode stats
             reward_breakdown = info.get("reward_breakdown", {})
             damage_dealt_total += reward_breakdown.get("damage_dealt", 0.0)
             damage_taken_total += abs(reward_breakdown.get("damage_taken", 0.0))
 
+            # Legacy round_won detection for compatibility
             if "round_won" in reward_breakdown:
                 round_won = True
+                round_lost = False
+                round_draw = False
+            elif "round_lost" in reward_breakdown:
+                round_won = False
+                round_lost = True
+                round_draw = False
 
             # Enhanced tracking
             if "avg_transformer_energy" in thinking_info:
