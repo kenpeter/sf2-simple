@@ -10,11 +10,12 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 python train.py \
     --thinking-steps 5 \
-    --max-episodes 100 \
+    --max-episodes 10 \
     --learning-rate 1e-4 \
     --thinking-lr 0.02 \
     --verify-health
     --render
+    --resume checkpoints_fixed/checkpoint_ep_499.pth
 
   ta.json 
 {

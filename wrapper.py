@@ -1053,6 +1053,7 @@ class SimpleCNN(nn.Module):
         return output
 
 
+# this is a model
 class SimpleVerifier(nn.Module):
     """🛡️ Simple verifier for energy-based training."""
 
@@ -1074,14 +1075,14 @@ class SimpleVerifier(nn.Module):
         # obs_space (raw obs), feature_dim (health etc)
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # Action embedding
+        # this is action embed
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
 
-        # Energy network
+        # this is energy net feature dim + 64
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 256),
             nn.ReLU(),
@@ -1097,18 +1098,21 @@ class SimpleVerifier(nn.Module):
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
+        # if context is dict, exact them
         if isinstance(context, dict):
             context_features = self.features_extractor(context)
         else:
+            # if context is not dict, do not exact
             context_features = context
 
-        # Process action
+        # candidate action goes into action embed
         action_embedded = self.action_embed(candidate_action)
 
-        # Combine and predict energy
+        # combine context and action embed
         combined = torch.cat([context_features, action_embedded], dim=-1)
         energy = self.energy_net(combined) * self.energy_scale
 
+        # verifier has network
         return energy
 
 
@@ -1167,6 +1171,10 @@ class SimpleAgent:
         # Thinking loop
         for step in range(self.thinking_steps):
             try:
+                # 1. in thinking loop, verifier returns the energy
+                # 2. the energy can product gradient
+                # 3. new action = action - think_rate * gradient
+                # 4. all these in loop. so we don't need to reward this action that action. Energy will assign to action
                 energy = self.verifier(obs_device, candidate_action)
 
                 gradients = torch.autograd.grad(
@@ -1177,6 +1185,7 @@ class SimpleAgent:
                 )[0]
 
                 with torch.no_grad():
+                    # minus gradient so become gradient decent, so better action
                     candidate_action = candidate_action - self.thinking_lr * gradients
                     candidate_action = F.softmax(candidate_action, dim=-1)
                     candidate_action.requires_grad_(True)
