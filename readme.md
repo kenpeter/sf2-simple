@@ -6,7 +6,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-
+# cli 
 python train.py \
    --max-episodes 200 \
    --learning-rate 3e-4 \
@@ -22,7 +22,8 @@ python train.py \
 
 
 
-  ta.json 
+
+# data.json 
 {
     "info": {
         "enemy_character": {
