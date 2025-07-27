@@ -60,9 +60,7 @@ MAX_HEALTH = 176
 SCREEN_WIDTH = 160  # Reduced from 320 (half size)
 SCREEN_HEIGHT = 112  # Reduced from 224 (half size)
 VECTOR_FEATURE_DIM = 32
-MAX_FIGHT_STEPS = (
-    1200  # Note: This is now only used for reward calculation, not for termination
-)
+MAX_FIGHT_STEPS = 1200  # Re-enabling this as a hard stop is crucial
 FRAME_STACK_SIZE = 8
 
 print(f"🚀 ENHANCED Street Fighter II Configuration (RGB):")
@@ -232,14 +230,23 @@ class EnhancedRewardCalculator:
         self.step_count = 0
 
         # ENHANCED: More aggressive reward structure
-        self.max_damage_reward = 1.5  # Increased from 1.0
-        self.base_winning_bonus = 4.0  # Increased from 3.0
-        self.health_advantage_bonus = 0.8  # Increased from 0.5
+        self.max_damage_reward = 1.5
+        self.base_winning_bonus = 5.0  # Increased
+        self.health_advantage_bonus = 0.8
+
+        # NEW: Health Preservation Bonus - Reward for winning with high health
+        self.health_preservation_bonus = 2.0
+
+        # NEW: Increased penalty for taking damage
+        self.damage_taken_penalty_multiplier = 1.2  # Increased from 0.5
+
+        # NEW: Massive penalty for a double KO
+        self.double_ko_penalty = -10.0
 
         # NEW: Aggression incentives
         self.combo_bonus_multiplier = 2.0
         self.fast_damage_bonus = 1.0
-        self.timeout_penalty_multiplier = 3.0  # Heavy penalty for timeouts
+        self.timeout_penalty_multiplier = 3.0
 
         self.round_won = False
         self.round_lost = False
@@ -256,7 +263,6 @@ class EnhancedRewardCalculator:
         reward = 0.0
         reward_breakdown = {}
 
-        # Update step count
         self.step_count = info.get("step_count", self.step_count + 1)
 
         if not self.match_started:
@@ -265,29 +271,22 @@ class EnhancedRewardCalculator:
             self.match_started = True
             return 0.0, {"initialization": 0.0}
 
-        # Calculate damage
         player_damage_taken = max(0, self.previous_player_health - player_health)
         opponent_damage_dealt = max(0, self.previous_opponent_health - opponent_health)
 
-        # Track cumulative damage
         self.total_damage_dealt += opponent_damage_dealt
         self.total_damage_taken += player_damage_taken
 
-        # ENHANCED: Combo detection and bonus
         if opponent_damage_dealt > 0:
-            # Check for consecutive damage (combo detection)
             if self.step_count == self.last_damage_frame + 1:
                 self.consecutive_damage_frames += 1
             else:
                 self.consecutive_damage_frames = 1
             self.last_damage_frame = self.step_count
 
-            # Base damage reward
             damage_reward = min(
                 opponent_damage_dealt / MAX_HEALTH, self.max_damage_reward
             )
-
-            # COMBO BONUS: Reward consecutive damage frames exponentially
             if self.consecutive_damage_frames > 1:
                 combo_multiplier = min(
                     1 + (self.consecutive_damage_frames - 1) * 0.5, 3.0
@@ -296,24 +295,22 @@ class EnhancedRewardCalculator:
                 reward_breakdown["combo_multiplier"] = combo_multiplier
                 reward_breakdown["combo_frames"] = self.consecutive_damage_frames
 
-            # FAST DAMAGE BONUS: Extra reward for early damage
             time_factor = (MAX_FIGHT_STEPS - self.step_count) / MAX_FIGHT_STEPS
             fast_bonus = damage_reward * self.fast_damage_bonus * time_factor
             damage_reward += fast_bonus
             reward_breakdown["fast_damage_bonus"] = fast_bonus
-
             reward += damage_reward
             reward_breakdown["damage_dealt"] = damage_reward
 
-        # Penalty for taking damage (slightly reduced to encourage aggression)
+        # INCREASED PENALTY for taking damage
         if player_damage_taken > 0:
             damage_penalty = (
-                -(player_damage_taken / MAX_HEALTH) * 0.5
-            )  # Reduced from 0.6
+                -(player_damage_taken / MAX_HEALTH)
+                * self.damage_taken_penalty_multiplier
+            )
             reward += damage_penalty
             reward_breakdown["damage_taken"] = damage_penalty
 
-        # Health advantage bonus (ongoing)
         if not done:
             health_diff = (player_health - opponent_health) / MAX_HEALTH
             if abs(health_diff) > 0.1:
@@ -321,43 +318,35 @@ class EnhancedRewardCalculator:
                 reward += advantage_bonus
                 reward_breakdown["health_advantage"] = advantage_bonus
 
-        # ENHANCED TERMINAL REWARDS with TIME-DECAYED BONUSES
-        # the done pass from top
         if done:
             termination_reason = info.get("termination_reason", "unknown")
 
-            # TIME-DECAYED WINNING BONUS - FAST WINS ARE EXPONENTIALLY BETTER
-            if player_health > opponent_health:
-                # Calculate time bonus factor (1.0 at step 0, ~0.0 at max steps)
+            # **NEW: HUGE PENALTY FOR DOUBLE KO**
+            if player_health <= 0 and opponent_health <= 0:
+                reward += self.double_ko_penalty
+                reward_breakdown["double_ko_penalty"] = self.double_ko_penalty
+                self.round_won = False
+                self.round_lost = False
+                self.round_draw = True
+
+            elif player_health > opponent_health:
                 time_bonus_factor = (
                     MAX_FIGHT_STEPS - self.step_count
                 ) / MAX_FIGHT_STEPS
+                time_multiplier = 1 + 3 * (time_bonus_factor**2)
 
-                # Exponential scaling for aggressive fast play
-                time_multiplier = 1 + 3 * (
-                    time_bonus_factor**2
-                )  # Up to 4x bonus for fast wins
-
-                if opponent_health <= 0:
-                    # Perfect KO with time bonus
-                    win_bonus = self.base_winning_bonus * time_multiplier
-                    reward_breakdown["victory_type"] = "knockout"
-                elif player_health > opponent_health + 20:
-                    # Decisive victory
-                    win_bonus = self.base_winning_bonus * 0.8 * time_multiplier
-                    reward_breakdown["victory_type"] = "decisive"
-                else:
-                    # Close victory
-                    win_bonus = self.base_winning_bonus * 0.6 * time_multiplier
-                    reward_breakdown["victory_type"] = "close"
-
+                win_bonus = self.base_winning_bonus * time_multiplier
                 reward += win_bonus
-                reward_breakdown["round_won"] = win_bonus
-                reward_breakdown["time_bonus_factor"] = time_bonus_factor
-                reward_breakdown["time_multiplier"] = time_multiplier
+                reward_breakdown["round_won_base"] = win_bonus
 
-                # SPEED BONUS: Extra reward for very fast wins
-                if self.step_count < MAX_FIGHT_STEPS * 0.3:  # Win in first 30% of fight
+                # **NEW: HEALTH PRESERVATION BONUS**
+                health_bonus = (
+                    player_health / MAX_HEALTH
+                ) * self.health_preservation_bonus
+                reward += health_bonus
+                reward_breakdown["health_preservation_bonus"] = health_bonus
+
+                if self.step_count < MAX_FIGHT_STEPS * 0.3:
                     speed_bonus = self.base_winning_bonus * 0.5
                     reward += speed_bonus
                     reward_breakdown["speed_bonus"] = speed_bonus
@@ -367,54 +356,42 @@ class EnhancedRewardCalculator:
                 self.round_draw = False
 
             elif opponent_health > player_health:
-                # Loss penalties (unchanged but noted)
                 if player_health <= 0:
-                    loss_penalty = -2.5  # Slightly increased
-                    reward_breakdown["defeat_type"] = "knockout"
-                elif opponent_health > player_health + 20:
-                    loss_penalty = -2.0  # Slightly increased
-                    reward_breakdown["defeat_type"] = "decisive"
-                else:
-                    loss_penalty = -1.2  # Slightly increased
-                    reward_breakdown["defeat_type"] = "close"
-
+                    loss_penalty = -3.0  # Increased penalty
+                else:  # Timeout loss
+                    loss_penalty = -2.5  # Increased penalty
                 reward += loss_penalty
                 reward_breakdown["round_lost"] = loss_penalty
                 self.round_won = False
                 self.round_lost = True
                 self.round_draw = False
 
-            else:
-                # TRUE DRAW - HEAVILY PENALIZED
-                draw_penalty = -1.5  # Tripled from -0.5
+            else:  # Timeout Draw
+                draw_penalty = -4.0  # Increased penalty
                 reward += draw_penalty
                 reward_breakdown["draw"] = draw_penalty
-                reward_breakdown["result_type"] = "draw"
                 self.round_won = False
                 self.round_lost = False
                 self.round_draw = True
 
-            # TIMEOUT PENALTY: Massive penalty for defensive play
             if "timeout" in termination_reason:
-                timeout_penalty = -2.0 * self.timeout_penalty_multiplier  # Up to -6.0
+                timeout_penalty = -2.0 * self.timeout_penalty_multiplier
                 reward += timeout_penalty
                 reward_breakdown["timeout_penalty"] = timeout_penalty
 
-            # Enhanced damage ratio bonus/penalty
             if self.total_damage_dealt > 0 or self.total_damage_taken > 0:
                 damage_ratio = safe_divide(
                     self.total_damage_dealt, self.total_damage_taken + 1, 1.0
                 )
-                damage_ratio_bonus = (damage_ratio - 1.0) * 0.8  # Increased from 0.5
+                damage_ratio_bonus = (damage_ratio - 1.0) * 0.8
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
-        # ENHANCED step penalty - encourages faster play
-        step_penalty = -0.008  # Increased from -0.005
+        # HARSHER STEP PENALTY
+        step_penalty = -0.01
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
 
-        # Update previous health values
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
 
@@ -1020,10 +997,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             self.env, info, obs
         )
 
-        # --- SIMPLIFIED TERMINATION LOGIC ---
-        # A round ends only on KO or when the base environment signals it's over (e.g., timeout).
-        # This removes custom wrapper termination rules like a separate step counter.
-        base_env_done = done
+        # --- RE-INSTATED STRICTER TERMINATION LOGIC ---
         round_ended = False
         termination_reason = "ongoing"
 
@@ -1037,8 +1011,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             else:  # opponent_health <= 0
                 termination_reason = "opponent_ko"
 
-        # Case 2: If no KO, but the base env says the game is over, it must be a timeout.
-        elif base_env_done:
+        # Case 2: Wrapper-enforced timeout to prevent endless fights
+        elif self.step_count >= MAX_FIGHT_STEPS:
             round_ended = True
             if abs(player_health - opponent_health) <= 5:
                 termination_reason = "timeout_draw"
@@ -1052,7 +1026,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             done = True
             # Using truncated is good practice for early termination or timeouts.
             truncated = True
-        # --- END OF SIMPLIFIED TERMINATION LOGIC ---
+        # --- END OF STRICTER TERMINATION LOGIC ---
 
         # Add step count to info for reward calculator
         info["step_count"] = self.step_count
@@ -1330,10 +1304,10 @@ class AggressiveAgent:
         self.thinking_lr = thinking_lr
         self.action_dim = verifier.action_dim
 
-        # NEW: Aggressive exploration parameters
-        self.epsilon = 0.25  # 25% random exploration
-        self.epsilon_decay = 0.995  # Slow decay to maintain exploration
-        self.min_epsilon = 0.05  # Always maintain some exploration
+        # **NEW: MORE AGGRESSIVE EXPLORATION**
+        self.epsilon = 0.40  # Start with higher exploration
+        self.epsilon_decay = 0.999  # Decay slower to explore for longer
+        self.min_epsilon = 0.10  # Maintain a higher minimum exploration
 
         # Enhanced stats tracking
         self.stats = {
