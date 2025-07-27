@@ -342,8 +342,8 @@ class EnhancedTrainer:
 
     def _setup_directories(self):
         """Create necessary directories."""
-        self.log_dir = Path("logs_enhanced")
-        self.checkpoint_dir = Path("checkpoints_enhanced")
+        self.log_dir = Path("logs")
+        self.checkpoint_dir = Path("checkpoints")
         self.log_dir.mkdir(exist_ok=True)
         self.checkpoint_dir.mkdir(exist_ok=True)
 
