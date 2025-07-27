@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-🛡️ ENHANCED WRAPPER - Breaks Learning Plateaus with Aggressive Exploration
+🛡️ ENHANCED WRAPPER - RGB Version with Smaller Image Sizes
 Key Improvements:
-1. Time-decayed winning bonuses (fast wins >>> slow wins)
-2. Aggressive epsilon-greedy exploration
-3. Reservoir sampling for experience diversity
-4. Enhanced temporal awareness with 8-frame stacking
+1. Keep RGB images but resize to smaller dimensions for efficiency
+2. Time-decayed winning bonuses (fast wins >>> slow wins)
+3. Aggressive epsilon-greedy exploration
+4. Reservoir sampling for experience diversity
+5. Enhanced temporal awareness with 8-frame stacking
 """
 
 import cv2
@@ -54,16 +55,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
+# Constants - RGB version with smaller image size
 MAX_HEALTH = 176
-SCREEN_WIDTH = 320
-SCREEN_HEIGHT = 224
+SCREEN_WIDTH = 160  # Reduced from 320 (half size)
+SCREEN_HEIGHT = 112  # Reduced from 224 (half size)
 VECTOR_FEATURE_DIM = 32
 MAX_FIGHT_STEPS = 1200
 FRAME_STACK_SIZE = 8
 
-print(f"🚀 ENHANCED Street Fighter II Configuration:")
+print(f"🚀 ENHANCED Street Fighter II Configuration (RGB):")
 print(f"   - Health detection: MULTI-METHOD")
+print(f"   - Image format: RGB (3 channels)")
+print(f"   - Image size: {SCREEN_WIDTH}x{SCREEN_HEIGHT} (reduced for efficiency)")
 print(f"   - Time-decayed rewards: ENABLED")
 print(f"   - Aggressive exploration: ACTIVE")
 print(f"   - Reservoir sampling: ENABLED")
@@ -442,16 +445,17 @@ class EnhancedRewardCalculator:
 
 # Keep the HealthDetector class unchanged (it's working well)
 class HealthDetector:
-    """🔍 Advanced health detection system."""
+    """🔍 Advanced health detection system - RGB version."""
 
     def __init__(self):
         self.health_history = {"player": deque(maxlen=10), "opponent": deque(maxlen=10)}
         self.last_valid_health = {"player": MAX_HEALTH, "opponent": MAX_HEALTH}
         self.health_change_detected = False
         self.frame_count = 0
+        # Adjusted bar positions for smaller image size
         self.bar_positions = {
-            "player": {"x": 40, "y": 16, "width": 120, "height": 8},
-            "opponent": {"x": 160, "y": 16, "width": 120, "height": 8},
+            "player": {"x": 20, "y": 8, "width": 60, "height": 4},  # Half size
+            "opponent": {"x": 80, "y": 8, "width": 60, "height": 4},  # Half size
         }
 
     def extract_health_from_memory(self, info):
@@ -532,16 +536,18 @@ class HealthDetector:
         return player_health, opponent_health
 
     def extract_health_from_visual(self, visual_obs):
-        """Extract health from visual health bars as fallback."""
+        """Extract health from visual health bars as fallback - RGB version."""
         if visual_obs is None or len(visual_obs.shape) != 3:
             return MAX_HEALTH, MAX_HEALTH
 
         try:
-            if visual_obs.shape[0] == 3:
-                frame = np.transpose(visual_obs, (1, 2, 0))
-            else:
+            # Handle both HWC and CHW formats
+            if visual_obs.shape[0] == 3:  # CHW format
+                frame = np.transpose(visual_obs, (1, 2, 0))  # Convert to HWC
+            else:  # HWC format
                 frame = visual_obs
 
+            # Ensure RGB format and proper data type
             if frame.dtype != np.uint8:
                 frame = (frame * 255).astype(np.uint8)
 
@@ -553,7 +559,7 @@ class HealthDetector:
             return MAX_HEALTH, MAX_HEALTH
 
     def _analyze_health_bar(self, frame, player_type):
-        """Analyze health bar pixels to estimate health."""
+        """Analyze health bar pixels to estimate health - RGB version."""
         pos = self.bar_positions[player_type]
         health_region = frame[
             pos["y"] : pos["y"] + pos["height"], pos["x"] : pos["x"] + pos["width"]
@@ -562,6 +568,7 @@ class HealthDetector:
         if health_region.size == 0:
             return MAX_HEALTH
 
+        # Convert RGB to grayscale for analysis
         if len(health_region.shape) == 3:
             gray_region = cv2.cvtColor(health_region, cv2.COLOR_RGB2GRAY)
         else:
@@ -838,7 +845,7 @@ class StreetFighterDiscreteActions:
 
 
 class EnhancedStreetFighterWrapper(gym.Wrapper):
-    """🚀 ENHANCED Street Fighter wrapper with aggressive exploration and time-decayed rewards."""
+    """🚀 ENHANCED Street Fighter wrapper with RGB images and aggressive exploration."""
 
     def __init__(self, env):
         super().__init__(env)
@@ -849,14 +856,18 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.action_mapper = StreetFighterDiscreteActions()
         self.health_detector = HealthDetector()
 
-        # Frame stacking for visual observations
+        # Frame stacking for RGB visual observations
         self.frame_stack = deque(maxlen=FRAME_STACK_SIZE)
 
-        # Setup observation and action spaces
+        # Setup observation and action spaces for RGB images
         visual_space = gym.spaces.Box(
             low=0,
             high=255,
-            shape=(3 * FRAME_STACK_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH),
+            shape=(
+                3 * FRAME_STACK_SIZE,
+                SCREEN_HEIGHT,
+                SCREEN_WIDTH,
+            ),  # RGB with stacking
             dtype=np.uint8,
         )
         vector_space = gym.spaces.Box(
@@ -879,7 +890,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
-        print(f"🚀 EnhancedStreetFighterWrapper initialized")
+        print(f"🚀 EnhancedStreetFighterWrapper initialized (RGB)")
+        print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
@@ -891,20 +903,45 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             self.frame_stack.append(initial_frame)
 
     def _process_visual_frame(self, obs):
-        """Process and normalize visual frame."""
+        """Process and resize RGB visual frame."""
         if isinstance(obs, np.ndarray):
-            if len(obs.shape) == 3 and obs.shape[2] == 3:
-                obs = np.transpose(obs, (2, 0, 1))
+            # Handle different input formats
+            if len(obs.shape) == 3:
+                if obs.shape[2] == 3:  # HWC format
+                    # Already in HWC RGB format
+                    frame = obs
+                elif obs.shape[0] == 3:  # CHW format
+                    # Convert CHW to HWC
+                    frame = np.transpose(obs, (1, 2, 0))
+                else:
+                    print(f"⚠️ Unexpected image shape: {obs.shape}")
+                    frame = obs
+            else:
+                print(f"⚠️ Unexpected image dimensions: {obs.shape}")
+                frame = obs
 
-            if obs.shape[-2:] != (SCREEN_HEIGHT, SCREEN_WIDTH):
-                obs = cv2.resize(
-                    obs.transpose(1, 2, 0), (SCREEN_WIDTH, SCREEN_HEIGHT)
-                ).transpose(2, 0, 1)
+            # Resize to smaller dimensions while keeping RGB
+            if frame.shape[:2] != (SCREEN_HEIGHT, SCREEN_WIDTH):
+                frame = cv2.resize(frame, (SCREEN_WIDTH, SCREEN_HEIGHT))
 
-        return obs.astype(np.uint8)
+            # Ensure uint8 format
+            if frame.dtype != np.uint8:
+                if frame.max() <= 1.0:
+                    frame = (frame * 255).astype(np.uint8)
+                else:
+                    frame = frame.astype(np.uint8)
+
+            # Convert back to CHW format for stacking
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                frame = np.transpose(frame, (2, 0, 1))  # HWC to CHW
+
+            return frame
+
+        # If not numpy array, create empty RGB frame
+        return np.zeros((3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8)
 
     def _get_stacked_visual_obs(self):
-        """Get stacked visual observations."""
+        """Get stacked RGB visual observations."""
         if len(self.frame_stack) == 0:
             empty_frame = np.zeros((3, SCREEN_HEIGHT, SCREEN_WIDTH), dtype=np.uint8)
             return np.tile(empty_frame, (FRAME_STACK_SIZE, 1, 1))
@@ -913,7 +950,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         return stacked
 
     def reset(self, **kwargs):
-        """Enhanced reset with proper initialization."""
+        """Enhanced reset with proper RGB initialization."""
         obs, info = self.env.reset(**kwargs)
 
         # Reset all components
@@ -925,7 +962,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.episode_count += 1
         self.step_count = 0
 
-        # Process initial visual frame
+        # Process initial RGB visual frame
         processed_frame = self._process_visual_frame(obs)
         self._initialize_frame_stack(processed_frame)
 
@@ -955,13 +992,15 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 "episode_count": self.episode_count,
                 "health_detection_working": self.health_detector.is_detection_working(),
                 "frame_stack_size": FRAME_STACK_SIZE,
+                "image_format": "RGB",
+                "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
             }
         )
 
         return observation, info
 
     def step(self, action):
-        """Enhanced step function with time-decayed rewards and aggression incentives."""
+        """Enhanced step function with RGB processing and time-decayed rewards."""
         self.step_count += 1
 
         # Convert action
@@ -969,7 +1008,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         retro_action = self._convert_to_retro_action(button_combination)
         obs, reward, done, truncated, info = self.env.step(retro_action)
 
-        # Process and add visual frame to stack
+        # Process and add RGB visual frame to stack
         processed_frame = self._process_visual_frame(obs)
         self.frame_stack.append(processed_frame)
 
@@ -1057,6 +1096,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 "total_damage_dealt": self.reward_calculator.total_damage_dealt,
                 "total_damage_taken": self.reward_calculator.total_damage_taken,
                 "frame_stack_size": FRAME_STACK_SIZE,
+                "image_format": "RGB",
+                "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
             }
         )
 
@@ -1095,8 +1136,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             return 0
 
     def _build_observation(self, visual_obs, info):
-        """Build observation dictionary with frame stacking."""
-        # Get stacked visual observations
+        """Build observation dictionary with RGB frame stacking."""
+        # Get stacked RGB visual observations
         stacked_visual = self._get_stacked_visual_obs()
 
         # Get vector features and maintain history
@@ -1118,27 +1159,36 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
 
 
 class SimpleCNN(nn.Module):
-    """🚀 Enhanced CNN for temporal processing with better feature extraction."""
+    """🚀 Enhanced CNN for RGB temporal processing with better feature extraction."""
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
 
         visual_space = observation_space["visual_obs"]
         vector_space = observation_space["vector_obs"]
-        n_input_channels = visual_space.shape[0]  # 24 channels for 8-frame stacking
+        n_input_channels = visual_space.shape[0]  # 24 channels for 8-frame RGB stacking
         seq_length, vector_feature_count = vector_space.shape  # (8, 32)
 
-        # Enhanced visual CNN with better temporal processing
+        # Enhanced RGB CNN with better temporal processing
+        # Designed for smaller images (160x112) but with RGB information
         self.visual_cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 64, kernel_size=8, stride=4, padding=2),
+            # First layer: handle 24 input channels (8 frames * 3 RGB)
+            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
             nn.ReLU(),
-            nn.BatchNorm2d(64),  # NEW: Batch normalization for stability
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            # Second layer: extract RGB-aware features
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(64),
+            # Third layer: higher-level features
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(128),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            # Fourth layer: final feature extraction
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(256),
+            # Adaptive pooling to handle variable sizes
             nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
         )
@@ -1185,7 +1235,8 @@ class SimpleCNN(nn.Module):
         visual_obs = observations["visual_obs"]
         vector_obs = observations["vector_obs"]
 
-        # Process visual with enhanced temporal awareness
+        # Process RGB visual with enhanced temporal awareness
+        # Normalize to [0, 1] range for better training stability
         visual_features = self.visual_cnn(visual_obs.float() / 255.0)
 
         # Process vector sequence with enhanced LSTM
@@ -1215,14 +1266,14 @@ class SimpleVerifier(nn.Module):
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
-        # Enhanced feature extractor
+        # Enhanced feature extractor for RGB
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
         # Enhanced action embedding with better representation
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 128),
             nn.ReLU(),
-            nn.BatchNorm1d(128),  # NEW: Better normalization
+            nn.BatchNorm1d(128),  # Better normalization
             nn.Dropout(0.2),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -1233,7 +1284,7 @@ class SimpleVerifier(nn.Module):
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),  # NEW: Better normalization
+            nn.BatchNorm1d(512),  # Better normalization
             nn.Dropout(0.3),
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -1251,7 +1302,7 @@ class SimpleVerifier(nn.Module):
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
-        # Extract enhanced features
+        # Extract enhanced RGB features
         if isinstance(context, dict):
             context_features = self.features_extractor(context)
         else:
@@ -1426,14 +1477,15 @@ class AggressiveAgent:
 def make_enhanced_env(
     game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
 ):
-    """Create enhanced Street Fighter environment."""
+    """Create enhanced Street Fighter environment with RGB support."""
     try:
         env = retro.make(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
         )
         env = EnhancedStreetFighterWrapper(env)
 
-        print(f"   ✅ Enhanced environment created")
+        print(f"   ✅ Enhanced RGB environment created")
+        print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
@@ -1445,8 +1497,8 @@ def make_enhanced_env(
 
 
 def verify_health_detection(env, episodes=5):
-    """Verify that health detection and reward system is working."""
-    print(f"🔍 Verifying enhanced system over {episodes} episodes...")
+    """Verify that health detection and reward system is working with RGB."""
+    print(f"🔍 Verifying enhanced RGB system over {episodes} episodes...")
 
     detection_working = 0
     health_changes_detected = 0
@@ -1458,6 +1510,13 @@ def verify_health_detection(env, episodes=5):
         done = False
         step_count = 0
         episode_healths = {"player": [], "opponent": []}
+
+        # Verify RGB format
+        if "visual_obs" in obs:
+            visual_shape = obs["visual_obs"].shape
+            print(f"   Episode {episode + 1}: Visual obs shape: {visual_shape}")
+            if visual_shape[0] == 24:  # 8 frames * 3 RGB channels
+                print(f"   ✅ RGB frame stacking verified: {visual_shape[0]//3} frames")
 
         while not done and step_count < 200:
             action = env.action_space.sample()
@@ -1495,23 +1554,24 @@ def verify_health_detection(env, episodes=5):
         )
 
     success_rate = health_changes_detected / episodes
-    print(f"\n🎯 Enhanced System Results:")
+    print(f"\n🎯 Enhanced RGB System Results:")
     print(f"   - Health detection working: {detection_working}/{episodes}")
     print(
         f"   - Health changes detected: {health_changes_detected}/{episodes} ({success_rate:.1%})"
     )
     print(f"   - Timeout wins: {timeout_wins}/{episodes}")
     print(f"   - Fast wins: {fast_wins}/{episodes}")
+    print(f"   - Image format: RGB at {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
     if success_rate > 0.6:
-        print(f"   ✅ Enhanced system is working! Ready for aggressive training.")
+        print(f"   ✅ Enhanced RGB system is working! Ready for aggressive training.")
     else:
         print(f"   ⚠️  System may need adjustment.")
 
     return success_rate > 0.6
 
 
-# Export enhanced components
+# Export enhanced RGB components
 __all__ = [
     # Enhanced Environment
     "EnhancedStreetFighterWrapper",
@@ -1538,12 +1598,15 @@ __all__ = [
     "MAX_FIGHT_STEPS",
     "MAX_HEALTH",
     "FRAME_STACK_SIZE",
+    "SCREEN_WIDTH",
+    "SCREEN_HEIGHT",
 ]
 
-print(f"🚀 ENHANCED Street Fighter wrapper loaded successfully!")
+print(f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (RGB Version)")
+print(f"   - ✅ RGB images with resizing: ACTIVE ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
 print(f"   - ✅ Time-decayed winning bonuses: ACTIVE")
 print(f"   - ✅ Aggressive exploration: ENABLED")
 print(f"   - ✅ Enhanced temporal awareness: ACTIVE")
 print(f"   - ✅ Combo and speed incentives: ENABLED")
 print(f"   - ✅ Timeout penalties: HEAVY")
-print(f"🎯 Ready to break learning plateaus and eliminate timeout strategies!")
+print(f"🎯 Ready to break learning plateaus with RGB visual information!")

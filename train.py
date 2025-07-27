@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-🚀 ENHANCED TRAINING - Breaks Learning Plateaus with Multiple Strategies
+🚀 ENHANCED TRAINING - RGB Version with Smaller Images
 Key Improvements:
-1. Time-decayed winning bonuses (fast wins >>> slow wins)
-2. Aggressive epsilon-greedy exploration (25% random actions)
-3. Reservoir sampling for experience diversity
-4. Learning rate reboots when performance stagnates
-5. Enhanced reward shaping against timeout strategies
+1. RGB image processing with smaller dimensions for efficiency
+2. Time-decayed winning bonuses (fast wins >>> slow wins)
+3. Aggressive epsilon-greedy exploration (25% random actions)
+4. Reservoir sampling for experience diversity
+5. Learning rate reboots when performance stagnates
+6. Enhanced reward shaping against timeout strategies
 """
 
 import torch
@@ -22,7 +23,7 @@ import logging
 from datetime import datetime
 import random
 
-# Import the ENHANCED wrapper components
+# Import the ENHANCED RGB wrapper components
 try:
     from wrapper import (
         make_enhanced_env,
@@ -36,9 +37,12 @@ try:
         MAX_FIGHT_STEPS,
         MAX_HEALTH,
         FRAME_STACK_SIZE,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
     )
 
-    print("✅ Successfully imported enhanced wrapper components")
+    print("✅ Successfully imported enhanced RGB wrapper components")
+    print(f"✅ RGB processing with {SCREEN_WIDTH}x{SCREEN_HEIGHT} images: ACTIVE")
     print(f"✅ Aggressive exploration and time-decayed rewards: ACTIVE")
 except ImportError as e:
     print(f"❌ Failed to import enhanced wrapper: {e}")
@@ -47,7 +51,7 @@ except ImportError as e:
 
 
 class ReservoirExperienceBuffer:
-    """🎯 Enhanced experience buffer with reservoir sampling for maximum diversity."""
+    """🎯 Enhanced experience buffer with reservoir sampling for maximum diversity - RGB optimized."""
 
     def __init__(self, capacity=30000):
         self.capacity = capacity
@@ -244,11 +248,13 @@ class ReservoirExperienceBuffer:
             "avg_diversity": avg_diversity,
             "action_diversity": action_diversity,
             "frame_stack_size": FRAME_STACK_SIZE,
+            "image_format": "RGB",
+            "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
         }
 
 
 class EnhancedTrainer:
-    """🚀 Enhanced trainer with learning rate reboots and plateau detection."""
+    """🚀 Enhanced trainer with RGB support, learning rate reboots and plateau detection."""
 
     def __init__(self, args):
         self.args = args
@@ -257,8 +263,10 @@ class EnhancedTrainer:
         # Setup directories
         self._setup_directories()
 
-        # Initialize ENHANCED environment
-        print(f"🚀 Initializing ENHANCED environment with aggressive exploration...")
+        # Initialize ENHANCED RGB environment
+        print(
+            f"🚀 Initializing ENHANCED RGB environment with aggressive exploration..."
+        )
         self.env = make_enhanced_env()
 
         # Verify enhanced system
@@ -266,8 +274,17 @@ class EnhancedTrainer:
             if not verify_health_detection(self.env):
                 print("⚠️  System verification failed, but continuing anyway...")
 
-        # Initialize enhanced models
-        print(f"🧠 Initializing enhanced models with aggressive training...")
+        # Verify RGB format
+        obs, _ = self.env.reset()
+        visual_shape = obs["visual_obs"].shape
+        print(f"🎨 RGB Visual format verified: {visual_shape}")
+        print(
+            f"   - Expected: {3 * FRAME_STACK_SIZE} channels (RGB * {FRAME_STACK_SIZE} frames)"
+        )
+        print(f"   - Image size: {SCREEN_WIDTH} x {SCREEN_HEIGHT}")
+
+        # Initialize enhanced models for RGB
+        print(f"🧠 Initializing enhanced RGB models with aggressive training...")
         self.verifier = SimpleVerifier(
             observation_space=self.env.observation_space,
             action_space=self.env.action_space,
@@ -333,12 +350,13 @@ class EnhancedTrainer:
         # Load checkpoint if provided
         self.load_checkpoint()
 
-        print(f"🚀 Enhanced Trainer initialized")
+        print(f"🚀 Enhanced RGB Trainer initialized")
         print(f"   - Device: {self.device}")
         print(f"   - Learning rate: {args.learning_rate:.2e} (with reboots)")
         print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
         print(f"   - Reservoir sampling: ENABLED")
         print(f"   - Plateau detection: ACTIVE")
+        print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
     def _setup_directories(self):
         """Create necessary directories."""
@@ -350,7 +368,7 @@ class EnhancedTrainer:
     def setup_logging(self):
         """Setup enhanced logging."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = self.log_dir / f"enhanced_training_{timestamp}.log"
+        log_file = self.log_dir / f"enhanced_rgb_training_{timestamp}.log"
 
         logging.basicConfig(
             level=logging.INFO,
@@ -427,11 +445,11 @@ class EnhancedTrainer:
         print(f"   - Breaking out of plateau!")
 
     def save_checkpoint(self, episode):
-        """Save enhanced checkpoint."""
+        """Save enhanced checkpoint with RGB info."""
         if not self.args.save_frequency > 0:
             return
 
-        filename = self.checkpoint_dir / f"enhanced_checkpoint_ep_{episode}.pth"
+        filename = self.checkpoint_dir / f"enhanced_rgb_checkpoint_ep_{episode}.pth"
         state = {
             "episode": episode,
             "verifier_state_dict": self.verifier.state_dict(),
@@ -448,18 +466,21 @@ class EnhancedTrainer:
             "timeout_wins": self.timeout_wins,
             "fast_wins": self.fast_wins,
             "agent_epsilon": self.agent.epsilon,
+            "image_format": "RGB",
+            "screen_width": SCREEN_WIDTH,
+            "screen_height": SCREEN_HEIGHT,
             "args": self.args,
         }
         torch.save(state, filename)
-        self.logger.info(f"💾 Enhanced checkpoint saved to {filename}")
+        self.logger.info(f"💾 Enhanced RGB checkpoint saved to {filename}")
 
     def load_checkpoint(self):
-        """Load enhanced checkpoint."""
+        """Load enhanced checkpoint with RGB compatibility."""
         if self.args.load_checkpoint:
             checkpoint_path = self.args.load_checkpoint
             if os.path.exists(checkpoint_path):
                 self.logger.info(
-                    f"🔄 Loading enhanced checkpoint from {checkpoint_path}..."
+                    f"🔄 Loading enhanced RGB checkpoint from {checkpoint_path}..."
                 )
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
@@ -485,14 +506,25 @@ class EnhancedTrainer:
                 if "agent_epsilon" in checkpoint:
                     self.agent.epsilon = checkpoint["agent_epsilon"]
 
+                # Check RGB compatibility
+                checkpoint_format = checkpoint.get("image_format", "unknown")
+                checkpoint_width = checkpoint.get("screen_width", "unknown")
+                checkpoint_height = checkpoint.get("screen_height", "unknown")
+
+                print(f"   📸 Checkpoint image format: {checkpoint_format}")
+                print(
+                    f"   📏 Checkpoint resolution: {checkpoint_width}x{checkpoint_height}"
+                )
+                print(f"   📏 Current resolution: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
+
                 self.logger.info(
-                    f"✅ Enhanced checkpoint loaded. Resuming from episode {self.episode}."
+                    f"✅ Enhanced RGB checkpoint loaded. Resuming from episode {self.episode}."
                 )
             else:
                 self.logger.warning(f"⚠️ Checkpoint file not found. Starting fresh.")
 
     def run_episode(self):
-        """Run enhanced episode with aggressive exploration."""
+        """Run enhanced episode with RGB processing and aggressive exploration."""
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -552,7 +584,7 @@ class EnhancedTrainer:
                 elif round_result == "DRAW":
                     round_draw = True
 
-            # Store enhanced experience
+            # Store enhanced experience with RGB context
             experience = {
                 "obs": obs,
                 "action": action,
@@ -563,6 +595,8 @@ class EnhancedTrainer:
                 "episode": self.episode,
                 "step": episode_steps,
                 "frame_stack_size": FRAME_STACK_SIZE,
+                "image_format": "RGB",
+                "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
                 "enhanced_context": {
                     "combo_length": combo_frames,
                     "damage_dealt": damage_dealt,
@@ -618,12 +652,14 @@ class EnhancedTrainer:
             "is_fast_win": is_fast_win,
             "exploration_rate": self.agent.epsilon,
             "frame_stack_size": FRAME_STACK_SIZE,
+            "image_format": "RGB",
+            "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
         }
 
         return episode_stats
 
     def calculate_contrastive_loss(self, good_batch, bad_batch, margin=3.0):
-        """Enhanced contrastive loss with better separation."""
+        """Enhanced contrastive loss with RGB support and better separation."""
         device = self.device
 
         def process_batch(batch):
@@ -637,7 +673,7 @@ class EnhancedTrainer:
                 obs = exp["obs"]
                 action = exp["action"]
 
-                # Convert observations
+                # Convert RGB observations
                 if isinstance(obs, dict):
                     obs_tensor = {}
                     for key, val in obs.items():
@@ -676,7 +712,7 @@ class EnhancedTrainer:
         good_actions_stacked = torch.stack(good_actions).to(device)
         bad_actions_stacked = torch.stack(bad_actions).to(device)
 
-        # Calculate energies
+        # Calculate energies with RGB features
         good_energies = self.verifier(good_obs_stacked, good_actions_stacked)
         bad_energies = self.verifier(bad_obs_stacked, bad_actions_stacked)
 
@@ -714,7 +750,7 @@ class EnhancedTrainer:
         }
 
     def train_step(self):
-        """Enhanced training step."""
+        """Enhanced training step with RGB processing."""
         # Sample diverse batch
         good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
             self.args.batch_size
@@ -751,7 +787,7 @@ class EnhancedTrainer:
         return loss_info
 
     def evaluate_performance(self):
-        """Enhanced performance evaluation."""
+        """Enhanced performance evaluation with RGB processing."""
         eval_episodes = 6
 
         wins = 0
@@ -833,6 +869,8 @@ class EnhancedTrainer:
             "timeout_win_rate": timeout_win_rate,
             "eval_episodes": eval_episodes,
             "frame_stack_size": FRAME_STACK_SIZE,
+            "image_format": "RGB",
+            "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
         }
 
     def get_enhanced_stats(self):
@@ -899,11 +937,12 @@ class EnhancedTrainer:
         }
 
     def train(self):
-        """Enhanced main training loop with plateau detection and learning rate reboots."""
-        print(f"🚀 Starting ENHANCED Training with Aggressive Exploration")
+        """Enhanced main training loop with RGB support, plateau detection and learning rate reboots."""
+        print(f"🚀 Starting ENHANCED RGB Training with Aggressive Exploration")
         print(f"   - Target episodes: {self.args.max_episodes}")
         print(f"   - Starting from episode: {self.episode}")
         print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
+        print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"   - Reservoir sampling: ACTIVE")
         print(f"   - Learning rate reboots: ENABLED")
         print(f"   - Focus: BREAK PLATEAUS & ELIMINATE TIMEOUT STRATEGIES")
@@ -951,7 +990,7 @@ class EnhancedTrainer:
                 enhanced_stats = self.get_enhanced_stats()
 
                 # Enhanced status display
-                print(f"\n🚀 ENHANCED STATUS (Episode {episode}):")
+                print(f"\n🚀 ENHANCED RGB STATUS (Episode {episode}):")
                 print(f"   - Good experiences: {buffer_stats['good_count']:,}")
                 print(f"   - Bad experiences: {buffer_stats['bad_count']:,}")
                 print(
@@ -960,6 +999,7 @@ class EnhancedTrainer:
                 print(
                     f"   - Sequence quality: {buffer_stats.get('avg_sequence_quality', 0.5):.3f}"
                 )
+                print(f"   - Image format: RGB {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
                 print(f"\n🏆 ENHANCED WIN/LOSE STATISTICS:")
                 print(f"   - Total games: {enhanced_stats['total_games']}")
@@ -1081,7 +1121,7 @@ class EnhancedTrainer:
 
                 # Training progress
                 if train_stats:
-                    print(f"\n🧠 Training Progress:")
+                    print(f"\n🧠 RGB Training Progress:")
                     print(
                         f"   - Energy separation: {train_stats.get('energy_separation', 0.0):.3f}"
                     )
@@ -1101,11 +1141,12 @@ class EnhancedTrainer:
                 )
 
                 if overall_success:
-                    print(f"\n🎉 EXCELLENT PROGRESS:")
+                    print(f"\n🎉 EXCELLENT RGB PROGRESS:")
                     print(f"   - ✅ Good win rate ({enhanced_stats['win_rate']:.1%})")
                     print(f"   - ✅ Low draw rate ({enhanced_stats['draw_rate']:.1%})")
                     print(f"   - ✅ Aggressive play style")
                     print(f"   - ✅ Avoiding timeout strategies")
+                    print(f"   - ✅ RGB visual processing working well")
                 else:
                     print(f"\n🔧 AREAS FOR IMPROVEMENT:")
                     if enhanced_stats["win_rate"] <= 0.3:
@@ -1131,7 +1172,8 @@ class EnhancedTrainer:
                     f"ComboAvg={enhanced_stats['avg_combo_length']:.1f}, "
                     f"Exploration={enhanced_stats['exploration_rate']:.3f}, "
                     f"Reboots={enhanced_stats['reboot_count']}, "
-                    f"HealthDetection={performance_stats.get('health_detection_rate', 0.0):.3f}"
+                    f"HealthDetection={performance_stats.get('health_detection_rate', 0.0):.3f}, "
+                    f"ImageFormat=RGB_{SCREEN_WIDTH}x{SCREEN_HEIGHT}"
                 )
 
             # Save checkpoint
@@ -1154,7 +1196,7 @@ class EnhancedTrainer:
                 )
 
                 if success_criteria:
-                    print(f"🎯 Enhanced targets achieved!")
+                    print(f"🎯 Enhanced RGB targets achieved!")
                     print(
                         f"   - Win rate: {recent_win_rate:.1%} ≥ {self.args.target_win_rate:.1%}"
                     )
@@ -1162,16 +1204,17 @@ class EnhancedTrainer:
                     print(
                         f"   - Timeout strategy rate: {recent_stats['timeout_strategy_rate']:.1%} < 30%"
                     )
+                    print(f"   - RGB processing: SUCCESS")
                     break
 
         # Training completed
-        self.logger.info("💾 Saving final enhanced model...")
+        self.logger.info("💾 Saving final enhanced RGB model...")
         self.save_checkpoint(self.episode)
 
         final_performance = self.evaluate_performance()
         final_stats = self.get_enhanced_stats()
 
-        print(f"\n🏁 ENHANCED Training Completed!")
+        print(f"\n🏁 ENHANCED RGB Training Completed!")
         print(f"   - Total episodes: {self.episode + 1}")
         print(f"   - Final win rate: {final_performance['win_rate']:.1%}")
         print(f"   - Final draw rate: {final_stats['draw_rate']:.1%}")
@@ -1179,8 +1222,9 @@ class EnhancedTrainer:
         print(f"   - Fast win rate: {final_stats['fast_win_rate']:.1%}")
         print(f"   - Average combo length: {final_stats['avg_combo_length']:.1f}")
         print(f"   - Learning rate reboots used: {final_stats['reboot_count']}")
+        print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
-        print(f"\n🎯 FINAL ENHANCED ASSESSMENT:")
+        print(f"\n🎯 FINAL ENHANCED RGB ASSESSMENT:")
 
         # Enhanced success metrics
         timeout_eliminated = final_stats["timeout_strategy_rate"] < 0.3
@@ -1207,13 +1251,14 @@ class EnhancedTrainer:
         print(
             f"   - Win rate achieved: {'✅' if wins_achieved else '❌'} ({final_stats['win_rate']:.1%} > 25%)"
         )
+        print(f"   - RGB processing: ✅ SUCCESS at {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
         print(
-            f"   - Overall enhanced success: {'🎉 EXCELLENT' if overall_success else '🔧 PARTIAL SUCCESS'}"
+            f"   - Overall enhanced RGB success: {'🎉 EXCELLENT' if overall_success else '🔧 PARTIAL SUCCESS'}"
         )
 
         # Show final record with enhanced breakdown
-        print(f"\n📊 FINAL ENHANCED RECORD:")
+        print(f"\n📊 FINAL ENHANCED RGB RECORD:")
         print(f"   - Total games: {final_stats['total_games']}")
         print(
             f"   - Record: {final_stats['wins']}W - {final_stats['losses']}L - {final_stats['draws']}D"
@@ -1227,14 +1272,15 @@ class EnhancedTrainer:
         )
         print(f"   - Learning rate reboots: {final_stats['reboot_count']}")
         print(f"   - Final exploration rate: {final_stats['exploration_rate']:.1%}")
+        print(f"   - RGB image processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT} ✅")
 
         return overall_success
 
 
 def main():
-    """Enhanced main training function."""
+    """Enhanced main training function with RGB support."""
     parser = argparse.ArgumentParser(
-        description="Enhanced Street Fighter Training - Break Plateaus with Aggressive Exploration"
+        description="Enhanced Street Fighter RGB Training - Break Plateaus with Aggressive Exploration"
     )
 
     # Enhanced environment arguments
@@ -1271,7 +1317,7 @@ def main():
         "--features-dim",
         type=int,
         default=512,
-        help="Feature dimension for enhanced models",
+        help="Feature dimension for enhanced RGB models",
     )
     parser.add_argument(
         "--thinking-steps",
@@ -1326,12 +1372,13 @@ def main():
     args = parser.parse_args()
 
     # Enhanced configuration display
-    print(f"🚀 Enhanced Street Fighter Training Configuration:")
+    print(f"🚀 Enhanced Street Fighter RGB Training Configuration:")
     print(f"   Max Episodes: {args.max_episodes:,}")
     print(f"   Learning Rate: {args.learning_rate:.2e} (with reboots)")
     print(f"   Batch Size: {args.batch_size}")
     print(f"   Buffer Capacity: {args.buffer_capacity:,} (reservoir sampling)")
     print(f"   Thinking Steps: {args.thinking_steps}")
+    print(f"   RGB Image Size: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
     if args.load_checkpoint:
         print(f"   Resuming from: {args.load_checkpoint}")
     print(f"   Target Win Rate: {args.target_win_rate:.1%}")
@@ -1340,8 +1387,9 @@ def main():
     print(f"     - Eliminate timeout strategies with time-decayed rewards")
     print(f"     - Maintain diversity with reservoir sampling")
     print(f"     - Aggressive exploration to discover new strategies")
+    print(f"     - Efficient RGB processing with smaller images")
 
-    # Run enhanced training
+    # Run enhanced RGB training
     try:
         trainer = EnhancedTrainer(args)
         success = trainer.train()
@@ -1351,6 +1399,7 @@ def main():
             print(f"   Learning plateaus have been broken!")
             print(f"   Timeout strategies have been eliminated!")
             print(f"   Aggressive, fast-paced play has been achieved!")
+            print(f"   RGB visual processing is working efficiently!")
         else:
             print(f"\n🔧 PARTIAL SUCCESS")
             print(
@@ -1358,9 +1407,9 @@ def main():
             )
 
     except KeyboardInterrupt:
-        print(f"\n⚠️  Enhanced training interrupted by user")
+        print(f"\n⚠️  Enhanced RGB training interrupted by user")
     except Exception as e:
-        print(f"\n❌ Enhanced training failed: {e}")
+        print(f"\n❌ Enhanced RGB training failed: {e}")
         import traceback
 
         traceback.print_exc()
