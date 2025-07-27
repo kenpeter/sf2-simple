@@ -1,3 +1,5 @@
+cnn + Energy base thinking + Energy base transformer plays street fighter 2 with 55% win rate
+
 
 <img width="1219" height="914" alt="win" src="https://github.com/user-attachments/assets/d6f981f5-9386-4ee4-be90-8682f5acca9e" />
 
