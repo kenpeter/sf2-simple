@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-🛡️ ENHANCED WRAPPER - Breaks Learning Plateaus with Aggressive Exploration
+🛡️ ENHANCED WRAPPER - Breaks Learning Plateaus with Aggressive Exploration + Threading Support
 Key Improvements:
 1. Time-decayed winning bonuses (fast wins >>> slow wins)
 2. Aggressive epsilon-greedy exploration
 3. Reservoir sampling for experience diversity
 4. Enhanced temporal awareness with 8-frame stacking
+5. THREAD-SAFE UI INTEGRATION for live monitoring
 """
 
 import cv2
@@ -28,6 +29,9 @@ from pathlib import Path
 import random
 import time
 import copy
+import threading
+import queue
+import pygame
 
 # --- FIX for TypeError in retro.make ---
 _original_retro_make = retro.make
@@ -68,9 +72,497 @@ print(f"   - Time-decayed rewards: ENABLED")
 print(f"   - Aggressive exploration: ACTIVE")
 print(f"   - Reservoir sampling: ENABLED")
 print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
+print(f"   - Threading support: ENABLED")
 
 
-# Keep utility functions from original
+# ============================================================================
+# THREAD-SAFE UI COMPONENTS
+# ============================================================================
+
+
+class ThreadSafeGameUI:
+    """🎮 Thread-safe game UI for watching training progress."""
+
+    def __init__(self, window_width=1200, window_height=800):
+        self.window_width = window_width
+        self.window_height = window_height
+        self.game_width = 320
+        self.game_height = 224
+
+        # Scale factor for game display
+        self.scale_factor = min(
+            (window_width - 400) // self.game_width,
+            (window_height - 200) // self.game_height,
+        )
+
+        self.scaled_width = self.game_width * self.scale_factor
+        self.scaled_height = self.game_height * self.scale_factor
+
+        # Thread-safe communication
+        self.frame_queue = queue.Queue(maxsize=5)
+        self.stats_queue = queue.Queue(maxsize=10)
+        self.control_queue = queue.Queue()
+
+        # UI state
+        self.running = True
+        self.paused = False
+        self.latest_frame = None
+        self.latest_stats = {}
+        self.performance_history = deque(maxlen=100)
+
+        # Initialize pygame
+        pygame.init()
+        self.screen = pygame.display.set_mode((window_width, window_height))
+        pygame.display.set_caption("🚀 Enhanced Street Fighter Training - Live View")
+
+        # Fonts
+        self.font_large = pygame.font.Font(None, 36)
+        self.font_medium = pygame.font.Font(None, 24)
+        self.font_small = pygame.font.Font(None, 18)
+
+        # Colors
+        self.colors = {
+            "background": (20, 20, 30),
+            "panel": (40, 40, 50),
+            "text": (255, 255, 255),
+            "success": (50, 255, 50),
+            "warning": (255, 200, 50),
+            "error": (255, 100, 100),
+            "accent": (100, 150, 255),
+            "win": (50, 255, 100),
+            "lose": (255, 100, 100),
+            "draw": (200, 200, 100),
+        }
+
+        print(f"🎮 Game UI initialized: {window_width}x{window_height}")
+
+    def add_frame(self, frame):
+        """Add new frame to display queue (thread-safe)."""
+        try:
+            if self.frame_queue.full():
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            self.frame_queue.put_nowait(frame.copy())
+        except queue.Full:
+            pass
+
+    def add_stats(self, stats):
+        """Add new stats to display queue (thread-safe)."""
+        try:
+            if self.stats_queue.full():
+                try:
+                    self.stats_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            self.stats_queue.put_nowait(stats.copy())
+        except queue.Full:
+            pass
+
+    def get_controls(self):
+        """Get control commands from UI thread (thread-safe)."""
+        commands = []
+        try:
+            while True:
+                command = self.control_queue.get_nowait()
+                commands.append(command)
+        except queue.Empty:
+            pass
+        return commands
+
+    def process_frame(self, frame):
+        """Process and scale frame for display."""
+        if frame is None:
+            return None
+
+        # Handle different frame formats
+        if len(frame.shape) == 3:
+            if frame.shape[0] == 3:  # CHW format
+                frame = np.transpose(frame, (1, 2, 0))
+            # Convert RGB to BGR for OpenCV/Pygame
+            if frame.shape[2] == 3:
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        # Scale frame
+        scaled_frame = cv2.resize(frame, (self.scaled_width, self.scaled_height))
+
+        # Convert to pygame surface
+        if len(scaled_frame.shape) == 3:
+            scaled_frame = np.transpose(scaled_frame, (1, 0, 2))
+        else:
+            scaled_frame = np.transpose(scaled_frame, (1, 0))
+
+        return pygame.surfarray.make_surface(scaled_frame)
+
+    def draw_text(self, text, x, y, font, color="text", align="left"):
+        """Draw text with alignment options."""
+        text_surface = font.render(str(text), True, self.colors[color])
+        text_rect = text_surface.get_rect()
+
+        if align == "center":
+            text_rect.center = (x, y)
+        elif align == "right":
+            text_rect.right = x
+            text_rect.y = y
+        else:  # left
+            text_rect.x = x
+            text_rect.y = y
+
+        self.screen.blit(text_surface, text_rect)
+        return text_rect.bottom + 5
+
+    def draw_progress_bar(self, x, y, width, height, value, max_value, color="accent"):
+        """Draw a progress bar."""
+        # Background
+        pygame.draw.rect(self.screen, (60, 60, 70), (x, y, width, height))
+
+        # Progress
+        if max_value > 0:
+            progress_width = int((value / max_value) * width)
+            pygame.draw.rect(
+                self.screen, self.colors[color], (x, y, progress_width, height)
+            )
+
+        # Border
+        pygame.draw.rect(self.screen, self.colors["text"], (x, y, width, height), 2)
+
+    def draw_performance_graph(self, x, y, width, height):
+        """Draw performance history graph."""
+        if len(self.performance_history) < 2:
+            return
+
+        # Background
+        pygame.draw.rect(self.screen, self.colors["panel"], (x, y, width, height))
+
+        # Draw grid
+        for i in range(5):
+            grid_y = y + (i * height // 4)
+            pygame.draw.line(
+                self.screen, (80, 80, 90), (x, grid_y), (x + width, grid_y)
+            )
+
+        # Draw performance line
+        points = []
+        for i, perf in enumerate(self.performance_history):
+            point_x = x + (i * width // max(1, len(self.performance_history) - 1))
+            point_y = y + height - int(perf * height)
+            points.append((point_x, point_y))
+
+        if len(points) > 1:
+            pygame.draw.lines(self.screen, self.colors["accent"], False, points, 2)
+
+        # Border
+        pygame.draw.rect(self.screen, self.colors["text"], (x, y, width, height), 2)
+
+    def draw_recent_results(self, x, y, results):
+        """Draw recent match results as colored circles."""
+        if not results:
+            return
+
+        circle_size = 12
+        spacing = 16
+
+        for i, result in enumerate(results[-20:]):
+            circle_x = x + (i * spacing)
+            circle_y = y + circle_size
+
+            if result == "WIN":
+                color = self.colors["win"]
+            elif result == "LOSE":
+                color = self.colors["lose"]
+            elif result == "DRAW":
+                color = self.colors["draw"]
+            else:
+                color = (100, 100, 100)
+
+            pygame.draw.circle(
+                self.screen, color, (circle_x, circle_y), circle_size // 2
+            )
+            pygame.draw.circle(
+                self.screen,
+                self.colors["text"],
+                (circle_x, circle_y),
+                circle_size // 2,
+                1,
+            )
+
+    def update_display(self):
+        """Update the main display."""
+        # Clear screen
+        self.screen.fill(self.colors["background"])
+
+        # Update frame from queue
+        try:
+            while True:
+                self.latest_frame = self.frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        # Update stats from queue
+        try:
+            while True:
+                new_stats = self.stats_queue.get_nowait()
+                self.latest_stats.update(new_stats)
+                if "win_rate" in new_stats:
+                    self.performance_history.append(new_stats["win_rate"])
+        except queue.Empty:
+            pass
+
+        # Draw game frame
+        game_surface = self.process_frame(self.latest_frame)
+        if game_surface:
+            game_x = 20
+            game_y = 50
+            self.screen.blit(game_surface, (game_x, game_y))
+
+            # Frame border
+            pygame.draw.rect(
+                self.screen,
+                self.colors["accent"],
+                (game_x - 2, game_y - 2, self.scaled_width + 4, self.scaled_height + 4),
+                2,
+            )
+
+        # Draw title
+        title_y = self.draw_text(
+            "🚀 Enhanced Street Fighter Training - Live View",
+            self.window_width // 2,
+            20,
+            self.font_large,
+            "accent",
+            "center",
+        )
+
+        # Draw status panel
+        panel_x = self.scaled_width + 60
+        panel_y = 50
+        panel_width = self.window_width - panel_x - 20
+
+        # Training status
+        status_color = "success" if not self.paused else "warning"
+        status_text = "🟢 TRAINING ACTIVE" if not self.paused else "⏸️ PAUSED"
+        self.draw_text(status_text, panel_x, panel_y, self.font_medium, status_color)
+
+        # Episode info
+        y_pos = panel_y + 40
+        if "episode" in self.latest_stats:
+            y_pos = self.draw_text(
+                f"Episode: {self.latest_stats['episode']:,}",
+                panel_x,
+                y_pos,
+                self.font_medium,
+            )
+
+        if "total_steps" in self.latest_stats:
+            y_pos = self.draw_text(
+                f"Total Steps: {self.latest_stats['total_steps']:,}",
+                panel_x,
+                y_pos,
+                self.font_small,
+            )
+
+        # Performance metrics
+        y_pos += 10
+        y_pos = self.draw_text(
+            "📊 Performance:", panel_x, y_pos, self.font_medium, "accent"
+        )
+
+        if "win_rate" in self.latest_stats:
+            win_rate = self.latest_stats["win_rate"]
+            color = (
+                "success"
+                if win_rate > 0.3
+                else "warning" if win_rate > 0.1 else "error"
+            )
+            y_pos = self.draw_text(
+                f"Win Rate: {win_rate:.1%}", panel_x, y_pos, self.font_small, color
+            )
+
+        if "recent_win_rate" in self.latest_stats:
+            recent_win_rate = self.latest_stats["recent_win_rate"]
+            color = (
+                "success"
+                if recent_win_rate > 0.3
+                else "warning" if recent_win_rate > 0.1 else "error"
+            )
+            y_pos = self.draw_text(
+                f"Recent Win Rate: {recent_win_rate:.1%}",
+                panel_x,
+                y_pos,
+                self.font_small,
+                color,
+            )
+
+        if "total_games" in self.latest_stats:
+            total = self.latest_stats["total_games"]
+            wins = self.latest_stats.get("wins", 0)
+            losses = self.latest_stats.get("losses", 0)
+            draws = self.latest_stats.get("draws", 0)
+            y_pos = self.draw_text(
+                f"Record: {wins}W-{losses}L-{draws}D ({total} total)",
+                panel_x,
+                y_pos,
+                self.font_small,
+            )
+
+        # Enhanced metrics
+        y_pos += 10
+        y_pos = self.draw_text(
+            "⚡ Aggression Metrics:", panel_x, y_pos, self.font_medium, "accent"
+        )
+
+        if "fast_win_rate" in self.latest_stats:
+            fast_rate = self.latest_stats["fast_win_rate"]
+            color = "success" if fast_rate > 0.3 else "warning"
+            y_pos = self.draw_text(
+                f"Fast Win Rate: {fast_rate:.1%}",
+                panel_x,
+                y_pos,
+                self.font_small,
+                color,
+            )
+
+        if "timeout_strategy_rate" in self.latest_stats:
+            timeout_rate = self.latest_stats["timeout_strategy_rate"]
+            color = "success" if timeout_rate < 0.3 else "error"
+            y_pos = self.draw_text(
+                f"Timeout Strategy: {timeout_rate:.1%}",
+                panel_x,
+                y_pos,
+                self.font_small,
+                color,
+            )
+
+        if "avg_combo_length" in self.latest_stats:
+            combo_length = self.latest_stats["avg_combo_length"]
+            color = "success" if combo_length > 1.5 else "warning"
+            y_pos = self.draw_text(
+                f"Avg Combo Length: {combo_length:.1f}",
+                panel_x,
+                y_pos,
+                self.font_small,
+                color,
+            )
+
+        # Exploration info
+        y_pos += 10
+        y_pos = self.draw_text(
+            "🎯 Learning:", panel_x, y_pos, self.font_medium, "accent"
+        )
+
+        if "exploration_rate" in self.latest_stats:
+            exploration = self.latest_stats["exploration_rate"]
+            y_pos = self.draw_text(
+                f"Exploration: {exploration:.1%}", panel_x, y_pos, self.font_small
+            )
+
+        if "reboot_count" in self.latest_stats:
+            reboots = self.latest_stats["reboot_count"]
+            y_pos = self.draw_text(
+                f"LR Reboots: {reboots}", panel_x, y_pos, self.font_small
+            )
+
+        # Buffer info
+        if "buffer_stats" in self.latest_stats:
+            buffer_stats = self.latest_stats["buffer_stats"]
+            y_pos += 10
+            y_pos = self.draw_text(
+                "💾 Experience Buffer:", panel_x, y_pos, self.font_medium, "accent"
+            )
+
+            total_size = buffer_stats.get("total_size", 0)
+            good_count = buffer_stats.get("good_count", 0)
+            bad_count = buffer_stats.get("bad_count", 0)
+
+            y_pos = self.draw_text(
+                f"Total: {total_size:,} ({good_count:,} good, {bad_count:,} bad)",
+                panel_x,
+                y_pos,
+                self.font_small,
+            )
+
+            if "action_diversity" in buffer_stats:
+                diversity = buffer_stats["action_diversity"]
+                color = "success" if diversity > 0.3 else "warning"
+                y_pos = self.draw_text(
+                    f"Action Diversity: {diversity:.3f}",
+                    panel_x,
+                    y_pos,
+                    self.font_small,
+                    color,
+                )
+
+        # Recent results visualization
+        if "recent_results" in self.latest_stats:
+            y_pos += 20
+            y_pos = self.draw_text(
+                "📈 Recent Results:", panel_x, y_pos, self.font_medium, "accent"
+            )
+            self.draw_recent_results(
+                panel_x, y_pos, self.latest_stats["recent_results"]
+            )
+
+        # Performance graph
+        graph_y = y_pos + 50
+        if graph_y + 120 < self.window_height - 50:
+            self.draw_text(
+                "📊 Win Rate History:", panel_x, graph_y, self.font_medium, "accent"
+            )
+            self.draw_performance_graph(panel_x, graph_y + 25, panel_width - 20, 100)
+
+        # Controls help
+        help_y = self.window_height - 80
+        self.draw_text("Controls:", panel_x, help_y, self.font_small, "accent")
+        help_y = self.draw_text("SPACE: Pause/Resume", panel_x, help_y, self.font_small)
+        help_y = self.draw_text("Q: Quit", panel_x, help_y, self.font_small)
+        help_y = self.draw_text("S: Save Checkpoint", panel_x, help_y, self.font_small)
+
+        # Update display
+        pygame.display.flip()
+
+    def handle_events(self):
+        """Handle pygame events."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+                self.control_queue.put("quit")
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    self.paused = not self.paused
+                    command = "pause" if self.paused else "resume"
+                    self.control_queue.put(command)
+                    print(f"🎮 Training {'paused' if self.paused else 'resumed'}")
+
+                elif event.key == pygame.K_q:
+                    self.running = False
+                    self.control_queue.put("quit")
+
+                elif event.key == pygame.K_s:
+                    self.control_queue.put("save")
+                    print("🎮 Save checkpoint requested")
+
+    def run(self):
+        """Main UI loop."""
+        clock = pygame.time.Clock()
+
+        print("🎮 Starting game UI thread...")
+
+        while self.running:
+            self.handle_events()
+            self.update_display()
+            clock.tick(30)  # 30 FPS
+
+        pygame.quit()
+        print("🎮 Game UI thread ended")
+
+
+# ============================================================================
+# UTILITY FUNCTIONS (unchanged)
+# ============================================================================
+
+
 def safe_divide(numerator, denominator, default=0.0):
     """Safe division that prevents NaN and handles edge cases."""
     try:
@@ -217,6 +709,11 @@ def ensure_feature_dimension(features, target_dim):
         return features[:target_dim].astype(np.float32)
 
 
+# ============================================================================
+# CORE COMPONENTS (unchanged but with UI integration hooks)
+# ============================================================================
+
+
 class EnhancedRewardCalculator:
     """🚀 ENHANCED reward calculator with time-decayed bonuses and aggression incentives."""
 
@@ -227,14 +724,14 @@ class EnhancedRewardCalculator:
         self.step_count = 0
 
         # ENHANCED: More aggressive reward structure
-        self.max_damage_reward = 1.5  # Increased from 1.0
-        self.base_winning_bonus = 4.0  # Increased from 3.0
-        self.health_advantage_bonus = 0.8  # Increased from 0.5
+        self.max_damage_reward = 1.5
+        self.base_winning_bonus = 4.0
+        self.health_advantage_bonus = 0.8
 
         # NEW: Aggression incentives
         self.combo_bonus_multiplier = 2.0
         self.fast_damage_bonus = 1.0
-        self.timeout_penalty_multiplier = 3.0  # Heavy penalty for timeouts
+        self.timeout_penalty_multiplier = 3.0
 
         self.round_won = False
         self.round_lost = False
@@ -302,9 +799,7 @@ class EnhancedRewardCalculator:
 
         # Penalty for taking damage (slightly reduced to encourage aggression)
         if player_damage_taken > 0:
-            damage_penalty = (
-                -(player_damage_taken / MAX_HEALTH) * 0.5
-            )  # Reduced from 0.6
+            damage_penalty = -(player_damage_taken / MAX_HEALTH) * 0.5
             reward += damage_penalty
             reward_breakdown["damage_taken"] = damage_penalty
 
@@ -328,9 +823,7 @@ class EnhancedRewardCalculator:
                 ) / MAX_FIGHT_STEPS
 
                 # Exponential scaling for aggressive fast play
-                time_multiplier = 1 + 3 * (
-                    time_bonus_factor**2
-                )  # Up to 4x bonus for fast wins
+                time_multiplier = 1 + 3 * (time_bonus_factor**2)
 
                 if opponent_health <= 0:
                     # Perfect KO with time bonus
@@ -351,7 +844,7 @@ class EnhancedRewardCalculator:
                 reward_breakdown["time_multiplier"] = time_multiplier
 
                 # SPEED BONUS: Extra reward for very fast wins
-                if self.step_count < MAX_FIGHT_STEPS * 0.3:  # Win in first 30% of fight
+                if self.step_count < MAX_FIGHT_STEPS * 0.3:
                     speed_bonus = self.base_winning_bonus * 0.5
                     reward += speed_bonus
                     reward_breakdown["speed_bonus"] = speed_bonus
@@ -361,15 +854,15 @@ class EnhancedRewardCalculator:
                 self.round_draw = False
 
             elif opponent_health > player_health:
-                # Loss penalties (unchanged but noted)
+                # Loss penalties
                 if player_health <= 0:
-                    loss_penalty = -2.5  # Slightly increased
+                    loss_penalty = -2.5
                     reward_breakdown["defeat_type"] = "knockout"
                 elif opponent_health > player_health + 20:
-                    loss_penalty = -2.0  # Slightly increased
+                    loss_penalty = -2.0
                     reward_breakdown["defeat_type"] = "decisive"
                 else:
-                    loss_penalty = -1.2  # Slightly increased
+                    loss_penalty = -1.2
                     reward_breakdown["defeat_type"] = "close"
 
                 reward += loss_penalty
@@ -380,7 +873,7 @@ class EnhancedRewardCalculator:
 
             else:
                 # TRUE DRAW - HEAVILY PENALIZED
-                draw_penalty = -1.5  # Tripled from -0.5
+                draw_penalty = -1.5
                 reward += draw_penalty
                 reward_breakdown["draw"] = draw_penalty
                 reward_breakdown["result_type"] = "draw"
@@ -390,7 +883,7 @@ class EnhancedRewardCalculator:
 
             # TIMEOUT PENALTY: Massive penalty for defensive play
             if "timeout" in termination_reason:
-                timeout_penalty = -2.0 * self.timeout_penalty_multiplier  # Up to -6.0
+                timeout_penalty = -2.0 * self.timeout_penalty_multiplier
                 reward += timeout_penalty
                 reward_breakdown["timeout_penalty"] = timeout_penalty
 
@@ -399,12 +892,12 @@ class EnhancedRewardCalculator:
                 damage_ratio = safe_divide(
                     self.total_damage_dealt, self.total_damage_taken + 1, 1.0
                 )
-                damage_ratio_bonus = (damage_ratio - 1.0) * 0.8  # Increased from 0.5
+                damage_ratio_bonus = (damage_ratio - 1.0) * 0.8
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
         # ENHANCED step penalty - encourages faster play
-        step_penalty = -0.008  # Increased from -0.005
+        step_penalty = -0.008
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
 
@@ -440,7 +933,6 @@ class EnhancedRewardCalculator:
         self.last_damage_frame = -1
 
 
-# Keep the HealthDetector class unchanged (it's working well)
 class HealthDetector:
     """🔍 Advanced health detection system."""
 
@@ -654,9 +1146,7 @@ class SimplifiedFeatureTracker:
         self.opponent_health_history = deque(maxlen=self.history_length)
         self.action_history = deque(maxlen=self.history_length)
         self.reward_history = deque(maxlen=self.history_length)
-        self.damage_history = deque(
-            maxlen=self.history_length
-        )  # NEW: Track damage patterns
+        self.damage_history = deque(maxlen=self.history_length)
         self.last_action = 0
         self.combo_count = 0
 
@@ -672,7 +1162,7 @@ class SimplifiedFeatureTracker:
         ) - reward_breakdown.get("damage_taken", 0.0)
         self.reward_history.append(np.clip(reward_signal, -1.0, 1.0))
 
-        # NEW: Track damage patterns for better temporal features
+        # Track damage patterns for better temporal features
         damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
         self.damage_history.append(damage_dealt)
 
@@ -681,7 +1171,7 @@ class SimplifiedFeatureTracker:
             if action == self.last_action:
                 self.combo_count += 1
             else:
-                self.combo_count = max(0, self.combo_count - 1)  # Gradual decay
+                self.combo_count = max(0, self.combo_count - 1)
         else:
             self.combo_count = max(0, self.combo_count - 1)
 
@@ -710,8 +1200,8 @@ class SimplifiedFeatureTracker:
             damage_hist.insert(0, 0.0)
 
         # Add temporal sequences
-        features.extend(player_hist)  # 8 features
-        features.extend(opponent_hist)  # 8 features
+        features.extend(player_hist)
+        features.extend(opponent_hist)
 
         # Enhanced derived temporal features
         current_player_health = player_hist[-1] if player_hist else 1.0
@@ -730,17 +1220,15 @@ class SimplifiedFeatureTracker:
             else 0.0
         )
 
-        # NEW: Damage momentum features
-        recent_damage = sum(damage_hist[-4:]) / 4.0  # Average recent damage
+        # Damage momentum features
+        recent_damage = sum(damage_hist[-4:]) / 4.0
         damage_acceleration = (
             damage_hist[-1] - damage_hist[-2] if len(damage_hist) >= 2 else 0.0
         )
 
         # Action patterns and aggression indicators
         recent_actions = action_hist[-4:]
-        action_diversity = (
-            len(set([int(a * 55) for a in recent_actions])) / 4.0
-        )  # Normalized action diversity
+        action_diversity = len(set([int(a * 55) for a in recent_actions])) / 4.0
 
         features.extend(
             [
@@ -751,9 +1239,9 @@ class SimplifiedFeatureTracker:
                 opponent_trend,
                 self.last_action / 55.0,
                 min(self.combo_count / 5.0, 1.0),
-                recent_damage,  # NEW
-                damage_acceleration,  # NEW
-                action_diversity,  # NEW
+                recent_damage,
+                damage_acceleration,
+                action_diversity,
             ]
         )
 
@@ -763,7 +1251,7 @@ class SimplifiedFeatureTracker:
 
 
 class StreetFighterDiscreteActions:
-    """🎮 Action mapping - UNCHANGED."""
+    """🎮 Action mapping."""
 
     def __init__(self):
         self.action_map = {
@@ -838,10 +1326,13 @@ class StreetFighterDiscreteActions:
 
 
 class EnhancedStreetFighterWrapper(gym.Wrapper):
-    """🚀 ENHANCED Street Fighter wrapper with aggressive exploration and time-decayed rewards."""
+    """🚀 ENHANCED Street Fighter wrapper with aggressive exploration, time-decayed rewards, and UI integration."""
 
-    def __init__(self, env):
+    def __init__(self, env, ui=None):
         super().__init__(env)
+
+        # UI integration
+        self.ui = ui
 
         # Initialize enhanced components
         self.reward_calculator = EnhancedRewardCalculator()
@@ -883,6 +1374,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
+        print(f"   - UI integration: {'ENABLED' if ui else 'DISABLED'}")
 
     def _initialize_frame_stack(self, initial_frame):
         """Initialize frame stack with the first frame."""
@@ -961,7 +1453,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         return observation, info
 
     def step(self, action):
-        """Enhanced step function with time-decayed rewards and aggression incentives."""
+        """Enhanced step function with time-decayed rewards, aggression incentives, and UI integration."""
         self.step_count += 1
 
         # Convert action
@@ -972,6 +1464,15 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Process and add visual frame to stack
         processed_frame = self._process_visual_frame(obs)
         self.frame_stack.append(processed_frame)
+
+        # Send frame to UI if available
+        if self.ui and hasattr(processed_frame, "shape"):
+            # Send latest frame for UI display
+            display_frame = processed_frame
+            if len(display_frame.shape) == 3 and display_frame.shape[0] == 3:
+                # Convert CHW to HWC for display
+                display_frame = np.transpose(display_frame, (1, 2, 0))
+            self.ui.add_frame(display_frame)
 
         # Enhanced health detection
         player_health, opponent_health = self.health_detector.get_health(
@@ -1132,7 +1633,7 @@ class SimpleCNN(nn.Module):
         self.visual_cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 64, kernel_size=8, stride=4, padding=2),
             nn.ReLU(),
-            nn.BatchNorm2d(64),  # NEW: Batch normalization for stability
+            nn.BatchNorm2d(64),
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(128),
@@ -1153,7 +1654,7 @@ class SimpleCNN(nn.Module):
         # Enhanced vector processing with better temporal modeling
         self.vector_lstm = nn.LSTM(
             input_size=vector_feature_count,
-            hidden_size=128,  # Increased from 64
+            hidden_size=128,
             num_layers=2,
             batch_first=True,
             dropout=0.2,
@@ -1222,7 +1723,7 @@ class SimpleVerifier(nn.Module):
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 128),
             nn.ReLU(),
-            nn.BatchNorm1d(128),  # NEW: Better normalization
+            nn.BatchNorm1d(128),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -1233,7 +1734,7 @@ class SimpleVerifier(nn.Module):
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),  # NEW: Better normalization
+            nn.BatchNorm1d(512),
             nn.Dropout(0.3),
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -1246,7 +1747,7 @@ class SimpleVerifier(nn.Module):
             nn.Linear(64, 1),
         )
 
-        self.energy_scale = 0.7  # Slightly increased for better separation
+        self.energy_scale = 0.7
 
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
@@ -1367,7 +1868,7 @@ class AggressiveAgent:
 
                 with torch.no_grad():
                     # Enhanced gradient descent with adaptive learning rate
-                    step_size = self.thinking_lr * (0.85**step)  # More aggressive decay
+                    step_size = self.thinking_lr * (0.85**step)
                     candidate_action = candidate_action - step_size * gradients
                     candidate_action = F.softmax(candidate_action, dim=-1)
                     candidate_action.requires_grad_(True)
@@ -1424,19 +1925,22 @@ class AggressiveAgent:
 
 
 def make_enhanced_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
+    game="StreetFighterIISpecialChampionEdition-Genesis",
+    state="ken_bison_12.state",
+    ui=None,
 ):
-    """Create enhanced Street Fighter environment."""
+    """Create enhanced Street Fighter environment with optional UI integration."""
     try:
         env = retro.make(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
         )
-        env = EnhancedStreetFighterWrapper(env)
+        env = EnhancedStreetFighterWrapper(env, ui=ui)
 
         print(f"   ✅ Enhanced environment created")
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
+        print(f"   - UI integration: {'ENABLED' if ui else 'DISABLED'}")
         return env
 
     except Exception as e:
@@ -1526,6 +2030,8 @@ __all__ = [
     "SimpleCNN",
     "SimpleVerifier",
     "AggressiveAgent",
+    # UI Components
+    "ThreadSafeGameUI",
     # Utilities
     "safe_divide",
     "safe_std",
@@ -1546,4 +2052,5 @@ print(f"   - ✅ Aggressive exploration: ENABLED")
 print(f"   - ✅ Enhanced temporal awareness: ACTIVE")
 print(f"   - ✅ Combo and speed incentives: ENABLED")
 print(f"   - ✅ Timeout penalties: HEAVY")
+print(f"   - ✅ Threading support: INTEGRATED")
 print(f"🎯 Ready to break learning plateaus and eliminate timeout strategies!")
