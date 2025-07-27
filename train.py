@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-🚀 ENHANCED TRAINING - Breaks Learning Plateaus with Multiple Strategies + Threading Support
+🚀 ENHANCED TRAINING - Breaks Learning Plateaus with Multiple Strategies
 Key Improvements:
 1. Time-decayed winning bonuses (fast wins >>> slow wins)
 2. Aggressive epsilon-greedy exploration (25% random actions)
 3. Reservoir sampling for experience diversity
 4. Learning rate reboots when performance stagnates
 5. Enhanced reward shaping against timeout strategies
-6. INTEGRATED THREADING SUPPORT for live UI monitoring
 """
 
 import torch
@@ -22,7 +21,6 @@ from pathlib import Path
 import logging
 from datetime import datetime
 import random
-import threading
 
 # Import the ENHANCED wrapper components
 try:
@@ -32,7 +30,6 @@ try:
         SimpleVerifier,
         AggressiveAgent,
         SimpleCNN,
-        ThreadSafeGameUI,
         safe_mean,
         safe_std,
         safe_divide,
@@ -43,10 +40,9 @@ try:
 
     print("✅ Successfully imported enhanced wrapper components")
     print(f"✅ Aggressive exploration and time-decayed rewards: ACTIVE")
-    print(f"✅ Threading support: INTEGRATED")
 except ImportError as e:
     print(f"❌ Failed to import enhanced wrapper: {e}")
-    print("Make sure wrapper.py is in the same directory")
+    print("Make sure enhanced_wrapper.py is in the same directory")
     exit(1)
 
 
@@ -83,7 +79,9 @@ class ReservoirExperienceBuffer:
         is_good_experience = (
             win_result == "WIN"
             or (reward > 0.2 and temporal_quality > 0.4)
-            or (diversity_score > 0.7 and temporal_quality > 0.3)
+            or (
+                diversity_score > 0.7 and temporal_quality > 0.3
+            )  # High diversity experiences
         )
 
         # Add experience using reservoir sampling
@@ -105,6 +103,7 @@ class ReservoirExperienceBuffer:
             reservoir.append(experience)
         else:
             # Reservoir is full - randomly replace an existing experience
+            # This gives ALL experiences (including early discoveries) a chance to survive
             random_index = random.randint(0, len(reservoir) - 1)
             reservoir[random_index] = experience
 
@@ -249,23 +248,18 @@ class ReservoirExperienceBuffer:
 
 
 class EnhancedTrainer:
-    """🚀 Enhanced trainer with learning rate reboots, plateau detection, and UI integration."""
+    """🚀 Enhanced trainer with learning rate reboots and plateau detection."""
 
-    def __init__(self, args, ui=None):
+    def __init__(self, args):
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.ui = ui
-
-        # Threading control
-        self.should_quit = False
-        self.paused = False
 
         # Setup directories
         self._setup_directories()
 
-        # Initialize ENHANCED environment with UI integration
+        # Initialize ENHANCED environment
         print(f"🚀 Initializing ENHANCED environment with aggressive exploration...")
-        self.env = make_enhanced_env(ui=ui)
+        self.env = make_enhanced_env()
 
         # Verify enhanced system
         if args.verify_health:
@@ -306,7 +300,7 @@ class EnhancedTrainer:
         )
 
         # NEW: Learning rate reboot system
-        self.lr_reboot_threshold = 0.02
+        self.lr_reboot_threshold = 0.02  # Reboot when performance stagnates
         self.performance_history = deque(maxlen=20)
         self.last_reboot_episode = 0
         self.reboot_count = 0
@@ -320,7 +314,7 @@ class EnhancedTrainer:
         self.wins = 0
         self.losses = 0
         self.draws = 0
-        self.recent_results = deque(maxlen=40)
+        self.recent_results = deque(maxlen=40)  # Increased for better tracking
         self.win_rate_history = deque(maxlen=100)
         self.recent_losses = deque(maxlen=100)
 
@@ -345,7 +339,6 @@ class EnhancedTrainer:
         print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
         print(f"   - Reservoir sampling: ENABLED")
         print(f"   - Plateau detection: ACTIVE")
-        print(f"   - UI integration: {'ENABLED' if ui else 'DISABLED'}")
 
     def _setup_directories(self):
         """Create necessary directories."""
@@ -365,32 +358,6 @@ class EnhancedTrainer:
             handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
         )
         self.logger = logging.getLogger(__name__)
-
-    def check_ui_controls(self):
-        """Check for UI control commands."""
-        if not self.ui:
-            return
-
-        commands = self.ui.get_controls()
-        for command in commands:
-            if command == "pause":
-                self.paused = True
-                print("⏸️ Training paused by UI")
-            elif command == "resume":
-                self.paused = False
-                print("▶️ Training resumed by UI")
-            elif command == "quit":
-                self.should_quit = True
-                print("🛑 Training stop requested by UI")
-            elif command == "save":
-                self.save_checkpoint(self.episode)
-                print("💾 Checkpoint saved by UI request")
-
-    def wait_while_paused(self):
-        """Wait while training is paused."""
-        while self.paused and not self.should_quit:
-            time.sleep(0.1)
-            self.check_ui_controls()
 
     def detect_learning_plateau(self):
         """Detect if learning has plateaued and needs a reboot."""
@@ -436,7 +403,9 @@ class EnhancedTrainer:
         self.last_reboot_episode = self.episode
 
         # Reset learning rate to initial value (or slightly higher for shock)
-        new_lr = self.initial_learning_rate * (1.2**self.reboot_count)
+        new_lr = self.initial_learning_rate * (
+            1.2**self.reboot_count
+        )  # Gradually increase
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = new_lr
 
@@ -446,7 +415,7 @@ class EnhancedTrainer:
         )
 
         # Boost exploration temporarily
-        self.agent.epsilon = min(0.4, self.agent.epsilon * 2.0)
+        self.agent.epsilon = min(0.4, self.agent.epsilon * 2.0)  # Double exploration
 
         self.logger.info(f"🚀 LEARNING RATE REBOOT #{self.reboot_count}")
         self.logger.info(f"   - New LR: {new_lr:.2e}")
@@ -523,16 +492,7 @@ class EnhancedTrainer:
                 self.logger.warning(f"⚠️ Checkpoint file not found. Starting fresh.")
 
     def run_episode(self):
-        """Run enhanced episode with aggressive exploration and UI integration."""
-        # Check for UI controls
-        self.check_ui_controls()
-        if self.should_quit:
-            return None
-
-        self.wait_while_paused()
-        if self.should_quit:
-            return None
-
+        """Run enhanced episode with aggressive exploration."""
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -547,23 +507,14 @@ class EnhancedTrainer:
         round_draw = False
         termination_reason = "ongoing"
 
-        # Enhanced tracking
+        # NEW: Enhanced tracking
         max_combo_length = 0
         total_damage_dealt = 0.0
         is_fast_win = False
 
         while (
-            not done
-            and not truncated
-            and episode_steps < self.args.max_episode_steps
-            and not self.should_quit
+            not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
-            # Check for pause/quit during episode
-            self.check_ui_controls()
-            self.wait_while_paused()
-            if self.should_quit:
-                break
-
             # Enhanced agent prediction with aggressive exploration
             action, thinking_info = self.agent.predict(obs, deterministic=False)
 
@@ -589,9 +540,11 @@ class EnhancedTrainer:
 
                 if round_result == "WIN":
                     round_won = True
+                    # Check if it's a fast win
                     if episode_steps < MAX_FIGHT_STEPS * 0.5:
                         is_fast_win = True
                         self.fast_wins += 1
+                    # Check for timeout win (bad strategy)
                     if "timeout" in termination_reason:
                         self.timeout_wins += 1
                 elif round_result == "LOSE":
@@ -620,9 +573,6 @@ class EnhancedTrainer:
 
             episode_experiences.append(experience)
             obs = next_obs
-
-        if self.should_quit:
-            return None
 
         # Update enhanced statistics
         if round_won:
@@ -740,12 +690,12 @@ class EnhancedTrainer:
         # Enhanced regularization
         energy_reg = 0.01 * (good_energies.pow(2).mean() + bad_energies.pow(2).mean())
 
-        # Diversity regularization to encourage variety
+        # NEW: Diversity regularization to encourage variety
         good_energy_var = good_energies.var()
         bad_energy_var = bad_energies.var()
         diversity_reg = 0.005 * (good_energy_var + bad_energy_var)
 
-        # Exploration bonus regularization
+        # NEW: Exploration bonus regularization
         exploration_bonus = 0.0
         for exp in good_batch + bad_batch:
             if exp.get("thinking_info", {}).get("exploration", False):
@@ -827,7 +777,6 @@ class EnhancedTrainer:
                 not done
                 and not truncated
                 and episode_steps < self.args.max_episode_steps
-                and not self.should_quit
             ):
                 action, thinking_info = self.agent.predict(obs, deterministic=True)
                 obs, reward, done, truncated, info = self.env.step(action)
@@ -949,70 +898,29 @@ class EnhancedTrainer:
             "reboot_count": self.reboot_count,
         }
 
-    def send_stats_to_ui(self, episode_stats=None):
-        """Send comprehensive stats to UI."""
-        if not self.ui:
-            return
-
-        try:
-            enhanced_stats = self.get_enhanced_stats()
-            buffer_stats = self.experience_buffer.get_stats()
-
-            # Combine all stats for UI
-            ui_stats = enhanced_stats.copy()
-            ui_stats.update(
-                {
-                    "episode": self.episode,
-                    "total_steps": self.total_steps,
-                    "buffer_stats": buffer_stats,
-                }
-            )
-
-            # Add episode-specific stats if provided
-            if episode_stats:
-                ui_stats.update(episode_stats)
-
-            self.ui.add_stats(ui_stats)
-        except Exception as e:
-            print(f"⚠️ Error sending stats to UI: {e}")
-
     def train(self):
-        """Enhanced main training loop with plateau detection, learning rate reboots, and UI integration."""
-        print(
-            f"🚀 Starting ENHANCED Training with Aggressive Exploration and UI Integration"
-        )
+        """Enhanced main training loop with plateau detection and learning rate reboots."""
+        print(f"🚀 Starting ENHANCED Training with Aggressive Exploration")
         print(f"   - Target episodes: {self.args.max_episodes}")
         print(f"   - Starting from episode: {self.episode}")
         print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
         print(f"   - Reservoir sampling: ACTIVE")
         print(f"   - Learning rate reboots: ENABLED")
-        print(f"   - UI integration: {'ENABLED' if self.ui else 'DISABLED'}")
         print(f"   - Focus: BREAK PLATEAUS & ELIMINATE TIMEOUT STRATEGIES")
 
         training_start_time = time.time()
 
         for episode in range(self.episode, self.args.max_episodes):
-            if self.should_quit:
-                print("🛑 Training stopped by UI request")
-                break
-
             self.episode = episode
             episode_start_time = time.time()
 
             # Run enhanced episode
             episode_stats = self.run_episode()
-            if episode_stats is None:  # Quit requested
-                break
-
-            # Send basic stats to UI frequently
-            if self.ui and episode % 3 == 0:
-                self.send_stats_to_ui(episode_stats)
 
             # Enhanced training step
             if (
                 len(self.experience_buffer.good_experiences)
                 >= self.args.batch_size // 4
-                and not self.paused
             ):
                 train_stats = self.train_step()
                 if train_stats:
@@ -1038,59 +946,180 @@ class EnhancedTrainer:
                 if self.detect_learning_plateau():
                     self.reboot_learning_rate()
 
-                # Send comprehensive stats to UI
-                if self.ui:
-                    enhanced_stats = self.get_enhanced_stats()
-                    buffer_stats = self.experience_buffer.get_stats()
+                # Get comprehensive stats
+                buffer_stats = self.experience_buffer.get_stats()
+                enhanced_stats = self.get_enhanced_stats()
 
-                    ui_stats = enhanced_stats.copy()
-                    ui_stats.update(
-                        {
-                            "episode": episode,
-                            "total_steps": self.total_steps,
-                            "buffer_stats": buffer_stats,
-                            "performance_stats": performance_stats,
-                        }
-                    )
-                    self.ui.add_stats(ui_stats)
+                # Enhanced status display
+                print(f"\n🚀 ENHANCED STATUS (Episode {episode}):")
+                print(f"   - Good experiences: {buffer_stats['good_count']:,}")
+                print(f"   - Bad experiences: {buffer_stats['bad_count']:,}")
+                print(
+                    f"   - Experience diversity: {buffer_stats.get('action_diversity', 0.0):.3f}"
+                )
+                print(
+                    f"   - Sequence quality: {buffer_stats.get('avg_sequence_quality', 0.5):.3f}"
+                )
 
-                # Enhanced status display (reduced frequency for console)
-                if episode % (self.args.eval_frequency * 2) == 0:
-                    enhanced_stats = self.get_enhanced_stats()
+                print(f"\n🏆 ENHANCED WIN/LOSE STATISTICS:")
+                print(f"   - Total games: {enhanced_stats['total_games']}")
+                print(
+                    f"   - Record: {enhanced_stats['wins']}W - {enhanced_stats['losses']}L - {enhanced_stats['draws']}D"
+                )
+                print(f"   - Overall win rate: {enhanced_stats['win_rate']:.1%}")
+                print(
+                    f"   - Recent win rate (last 20): {enhanced_stats['recent_win_rate']:.1%}"
+                )
+                print(f"   - Draw rate: {enhanced_stats['draw_rate']:.1%}")
 
-                    print(f"\n🚀 ENHANCED STATUS (Episode {episode}):")
-                    print(
-                        f"   - Win Rate: {enhanced_stats['win_rate']:.1%} (Recent: {enhanced_stats['recent_win_rate']:.1%})"
-                    )
-                    print(f"   - Fast Win Rate: {enhanced_stats['fast_win_rate']:.1%}")
-                    print(
-                        f"   - Timeout Strategy Rate: {enhanced_stats['timeout_strategy_rate']:.1%}"
-                    )
-                    print(f"   - Draw Rate: {enhanced_stats['draw_rate']:.1%}")
-                    print(
-                        f"   - Avg Combo Length: {enhanced_stats['avg_combo_length']:.1f}"
-                    )
-                    print(
-                        f"   - Exploration Rate: {enhanced_stats['exploration_rate']:.1%}"
-                    )
-                    print(f"   - LR Reboots: {enhanced_stats['reboot_count']}")
+                print(f"\n⚡ AGGRESSION & SPEED METRICS:")
+                print(f"   - Fast win rate: {enhanced_stats['fast_win_rate']:.1%}")
+                print(
+                    f"   - Timeout strategy rate: {enhanced_stats['timeout_strategy_rate']:.1%}"
+                )
+                print(
+                    f"   - Average combo length: {enhanced_stats['avg_combo_length']:.1f}"
+                )
+                print(
+                    f"   - Average fight duration: {enhanced_stats['avg_speed']:.0f} steps"
+                )
 
-                    # Show recent results pattern
-                    recent_results_str = "".join(
-                        [
-                            (
-                                "🏆"
-                                if r == "WIN"
-                                else (
-                                    "💀"
-                                    if r == "LOSE"
-                                    else "🤝" if r == "DRAW" else "❓"
-                                )
-                            )
-                            for r in enhanced_stats["recent_results"][-10:]
-                        ]
+                print(f"\n🎯 EXPLORATION & LEARNING:")
+                print(
+                    f"   - Current exploration rate: {enhanced_stats['exploration_rate']:.1%}"
+                )
+                print(f"   - Learning rate reboots: {enhanced_stats['reboot_count']}")
+                print(f"   - Agent thinking steps: {self.agent.thinking_steps}")
+
+                # Enhanced results pattern
+                recent_results_str = "".join(
+                    [
+                        (
+                            "🏆"
+                            if r == "WIN"
+                            else "💀" if r == "LOSE" else "🤝" if r == "DRAW" else "❓"
+                        )
+                        for r in enhanced_stats["recent_results"][-20:]
+                    ]
+                )
+                print(f"   - Recent pattern: {recent_results_str}")
+
+                # Termination analysis
+                if enhanced_stats["recent_terminations"]:
+                    timeout_terms = sum(
+                        1
+                        for term in enhanced_stats["recent_terminations"]
+                        if "timeout" in term
                     )
-                    print(f"   - Recent Pattern: {recent_results_str}")
+                    ko_terms = sum(
+                        1
+                        for term in enhanced_stats["recent_terminations"]
+                        if "ko" in term
+                    )
+                    print(
+                        f"   - Recent terminations: {dict(enhanced_stats['recent_terminations'])}"
+                    )
+                    print(f"   - KO vs Timeout ratio: {ko_terms}:{timeout_terms}")
+
+                print(f"\n🔍 HEALTH DETECTION:")
+                print(
+                    f"   - Detection rate: {performance_stats.get('health_detection_rate', 0.0):.1%}"
+                )
+                print(
+                    f"   - Last episode health: P{episode_stats.get('player_health', MAX_HEALTH)} vs O{episode_stats.get('opponent_health', MAX_HEALTH)}"
+                )
+
+                # Enhanced plateau status
+                if len(self.performance_history) >= 10:
+                    recent_perf_std = safe_std(
+                        list(self.performance_history)[-10:], 0.0
+                    )
+                    if recent_perf_std < self.lr_reboot_threshold:
+                        print(f"\n⚠️  PLATEAU WARNING:")
+                        print(
+                            f"   - Performance variance: {recent_perf_std:.4f} (threshold: {self.lr_reboot_threshold})"
+                        )
+                        print(
+                            f"   - Episodes since last reboot: {episode - self.last_reboot_episode}"
+                        )
+                    else:
+                        print(f"\n✅ LEARNING ACTIVE:")
+                        print(f"   - Performance variance: {recent_perf_std:.4f}")
+
+                # Enhanced success assessment
+                timeout_problem = enhanced_stats["timeout_strategy_rate"] > 0.6
+                draw_problem = enhanced_stats["draw_rate"] > 0.3
+                aggression_problem = enhanced_stats["avg_combo_length"] < 2.0
+
+                print(f"\n🎯 PROBLEM ASSESSMENT:")
+                if timeout_problem:
+                    print(
+                        f"   🚨 TIMEOUT STRATEGY PROBLEM: {enhanced_stats['timeout_strategy_rate']:.1%} of wins are timeouts"
+                    )
+                else:
+                    print(
+                        f"   ✅ Timeout strategy under control: {enhanced_stats['timeout_strategy_rate']:.1%}"
+                    )
+
+                if draw_problem:
+                    print(
+                        f"   🚨 DRAW RATE TOO HIGH: {enhanced_stats['draw_rate']:.1%}"
+                    )
+                else:
+                    print(
+                        f"   ✅ Draw rate acceptable: {enhanced_stats['draw_rate']:.1%}"
+                    )
+
+                if aggression_problem:
+                    print(
+                        f"   🚨 LOW AGGRESSION: Average combos {enhanced_stats['avg_combo_length']:.1f}"
+                    )
+                else:
+                    print(
+                        f"   ✅ Good aggression: Average combos {enhanced_stats['avg_combo_length']:.1f}"
+                    )
+
+                # Training progress
+                if train_stats:
+                    print(f"\n🧠 Training Progress:")
+                    print(
+                        f"   - Energy separation: {train_stats.get('energy_separation', 0.0):.3f}"
+                    )
+                    print(
+                        f"   - Learning rate: {train_stats.get('learning_rate', 0.0):.2e}"
+                    )
+                    print(
+                        f"   - Exploration bonus: {train_stats.get('exploration_bonus', 0.0):.4f}"
+                    )
+
+                # Enhanced success criteria
+                overall_success = (
+                    enhanced_stats["win_rate"] > 0.3
+                    and enhanced_stats["draw_rate"] < 0.3
+                    and enhanced_stats["timeout_strategy_rate"] < 0.4
+                    and enhanced_stats["avg_combo_length"] > 1.5
+                )
+
+                if overall_success:
+                    print(f"\n🎉 EXCELLENT PROGRESS:")
+                    print(f"   - ✅ Good win rate ({enhanced_stats['win_rate']:.1%})")
+                    print(f"   - ✅ Low draw rate ({enhanced_stats['draw_rate']:.1%})")
+                    print(f"   - ✅ Aggressive play style")
+                    print(f"   - ✅ Avoiding timeout strategies")
+                else:
+                    print(f"\n🔧 AREAS FOR IMPROVEMENT:")
+                    if enhanced_stats["win_rate"] <= 0.3:
+                        print(
+                            f"   - 📈 Need higher win rate (current: {enhanced_stats['win_rate']:.1%})"
+                        )
+                    if enhanced_stats["draw_rate"] >= 0.3:
+                        print(
+                            f"   - 📉 Need lower draw rate (current: {enhanced_stats['draw_rate']:.1%})"
+                        )
+                    if enhanced_stats["timeout_strategy_rate"] >= 0.4:
+                        print(
+                            f"   - ⚡ Need more aggressive play (timeout rate: {enhanced_stats['timeout_strategy_rate']:.1%})"
+                        )
 
                 # Enhanced logging
                 self.logger.info(
@@ -1141,19 +1170,6 @@ class EnhancedTrainer:
 
         final_performance = self.evaluate_performance()
         final_stats = self.get_enhanced_stats()
-
-        # Send final stats to UI
-        if self.ui:
-            final_ui_stats = final_stats.copy()
-            final_ui_stats.update(
-                {
-                    "episode": self.episode,
-                    "total_steps": self.total_steps,
-                    "final_performance": final_performance,
-                    "training_complete": True,
-                }
-            )
-            self.ui.add_stats(final_ui_stats)
 
         print(f"\n🏁 ENHANCED Training Completed!")
         print(f"   - Total episodes: {self.episode + 1}")
@@ -1212,34 +1228,13 @@ class EnhancedTrainer:
         print(f"   - Learning rate reboots: {final_stats['reboot_count']}")
         print(f"   - Final exploration rate: {final_stats['exploration_rate']:.1%}")
 
-        return final_stats
-
-
-def training_thread(args, ui):
-    """Training thread function."""
-    try:
-        print("🚀 Starting training thread...")
-        trainer = EnhancedTrainer(args, ui)
-        final_stats = trainer.train()
-        print("✅ Training thread completed")
-        return final_stats
-    except KeyboardInterrupt:
-        print("⚠️ Training thread interrupted")
-    except Exception as e:
-        print(f"❌ Training thread error: {e}")
-        import traceback
-
-        traceback.print_exc()
-    finally:
-        # Signal UI to close
-        if ui:
-            ui.control_queue.put("quit")
+        return overall_success
 
 
 def main():
-    """Enhanced main training function with integrated threading support."""
+    """Enhanced main training function."""
     parser = argparse.ArgumentParser(
-        description="Enhanced Street Fighter Training - Break Plateaus with Aggressive Exploration + Threading"
+        description="Enhanced Street Fighter Training - Break Plateaus with Aggressive Exploration"
     )
 
     # Enhanced environment arguments
@@ -1324,16 +1319,8 @@ def main():
     parser.add_argument(
         "--verify-health", action="store_true", help="Verify system at start"
     )
-
-    # UI and threading arguments
     parser.add_argument(
-        "--headless", action="store_true", help="Run without UI (original mode)"
-    )
-    parser.add_argument(
-        "--window-width", type=int, default=1200, help="UI window width"
-    )
-    parser.add_argument(
-        "--window-height", type=int, default=800, help="UI window height"
+        "--render", action="store_true", help="Enable rendering during training"
     )
 
     args = parser.parse_args()
@@ -1345,7 +1332,6 @@ def main():
     print(f"   Batch Size: {args.batch_size}")
     print(f"   Buffer Capacity: {args.buffer_capacity:,} (reservoir sampling)")
     print(f"   Thinking Steps: {args.thinking_steps}")
-    print(f"   Mode: {'Headless' if args.headless else 'Live UI + Threading'}")
     if args.load_checkpoint:
         print(f"   Resuming from: {args.load_checkpoint}")
     print(f"   Target Win Rate: {args.target_win_rate:.1%}")
@@ -1355,85 +1341,29 @@ def main():
     print(f"     - Maintain diversity with reservoir sampling")
     print(f"     - Aggressive exploration to discover new strategies")
 
-    if args.headless:
-        # Run original training without UI
-        print(f"🚀 Running in headless mode (no UI)")
-        try:
-            trainer = EnhancedTrainer(args, ui=None)
-            final_stats = trainer.train()
-
-            if final_stats:
-                # Enhanced success assessment
-                timeout_eliminated = final_stats["timeout_strategy_rate"] < 0.3
-                draws_controlled = final_stats["draw_rate"] < 0.3
-                aggression_achieved = final_stats["avg_combo_length"] > 1.5
-                wins_achieved = final_stats["win_rate"] > 0.25
-
-                overall_success = (
-                    timeout_eliminated
-                    and draws_controlled
-                    and aggression_achieved
-                    and wins_achieved
-                )
-
-                if overall_success:
-                    print(f"\n🎉 MISSION ACCOMPLISHED!")
-                    print(f"   Learning plateaus have been broken!")
-                    print(f"   Timeout strategies have been eliminated!")
-                    print(f"   Aggressive, fast-paced play has been achieved!")
-                else:
-                    print(f"\n🔧 PARTIAL SUCCESS")
-                    print(
-                        f"   Significant improvements made, but some goals may need more time"
-                    )
-
-        except KeyboardInterrupt:
-            print(f"\n⚠️  Enhanced training interrupted by user")
-        except Exception as e:
-            print(f"\n❌ Enhanced training failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-        return
-
-    # Initialize UI
-    print("🎮 Initializing game UI...")
-    ui = ThreadSafeGameUI(args.window_width, args.window_height)
-
-    # Start training thread
-    print("🚀 Starting training thread...")
-    trainer_thread = threading.Thread(
-        target=training_thread,
-        args=(args, ui),
-        daemon=True,
-        name="EnhancedTrainingThread",
-    )
-    trainer_thread.start()
-
+    # Run enhanced training
     try:
-        # Run UI in main thread
-        print("🎮 Starting UI main loop...")
-        ui.run()
+        trainer = EnhancedTrainer(args)
+        success = trainer.train()
+
+        if success:
+            print(f"\n🎉 MISSION ACCOMPLISHED!")
+            print(f"   Learning plateaus have been broken!")
+            print(f"   Timeout strategies have been eliminated!")
+            print(f"   Aggressive, fast-paced play has been achieved!")
+        else:
+            print(f"\n🔧 PARTIAL SUCCESS")
+            print(
+                f"   Significant improvements made, but some goals may need more time"
+            )
+
     except KeyboardInterrupt:
-        print("⚠️ UI interrupted")
+        print(f"\n⚠️  Enhanced training interrupted by user")
     except Exception as e:
-        print(f"❌ UI error: {e}")
+        print(f"\n❌ Enhanced training failed: {e}")
         import traceback
 
         traceback.print_exc()
-    finally:
-        # Cleanup
-        print("🧹 Cleaning up...")
-        ui.running = False
-
-        # Wait for training thread to finish (with timeout)
-        trainer_thread.join(timeout=5.0)
-        if trainer_thread.is_alive():
-            print("⚠️ Training thread did not stop gracefully")
-        else:
-            print("✅ Training thread stopped")
-
-    print("🏁 Enhanced multi-threaded training session ended")
 
 
 if __name__ == "__main__":
