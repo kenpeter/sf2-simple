@@ -8,7 +8,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 python train.py \
-   --max-episodes 1500 \
+   --max-episodes 200 \
    --learning-rate 3e-4 \
    --batch-size 28 \
    --features-dim 512 \
@@ -18,6 +18,7 @@ python train.py \
    --eval-frequency 12 \
    --save-frequency 30 \
    --render
+   --resume checkpoints/enhanced_rgb_checkpoint_ep_99.pth
 
 
 

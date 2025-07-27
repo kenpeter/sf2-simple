@@ -60,7 +60,9 @@ MAX_HEALTH = 176
 SCREEN_WIDTH = 160  # Reduced from 320 (half size)
 SCREEN_HEIGHT = 112  # Reduced from 224 (half size)
 VECTOR_FEATURE_DIM = 32
-MAX_FIGHT_STEPS = 1200
+MAX_FIGHT_STEPS = (
+    1200  # Note: This is now only used for reward calculation, not for termination
+)
 FRAME_STACK_SIZE = 8
 
 print(f"🚀 ENHANCED Street Fighter II Configuration (RGB):")
@@ -320,6 +322,7 @@ class EnhancedRewardCalculator:
                 reward_breakdown["health_advantage"] = advantage_bonus
 
         # ENHANCED TERMINAL REWARDS with TIME-DECAYED BONUSES
+        # the done pass from top
         if done:
             termination_reason = info.get("termination_reason", "unknown")
 
@@ -1017,25 +1020,25 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             self.env, info, obs
         )
 
-        # Enhanced termination logic
+        # --- SIMPLIFIED TERMINATION LOGIC ---
+        # A round ends only on KO or when the base environment signals it's over (e.g., timeout).
+        # This removes custom wrapper termination rules like a separate step counter.
+        base_env_done = done
         round_ended = False
         termination_reason = "ongoing"
 
-        # 1. Health-based KO detection
-        if player_health <= 0:
+        # Case 1: Player or Opponent is knocked out.
+        if player_health <= 0 or opponent_health <= 0:
             round_ended = True
-            termination_reason = "player_ko"
-        elif opponent_health <= 0:
-            round_ended = True
-            termination_reason = "opponent_ko"
-        # 2. Health difference based termination
-        elif self.health_detector.is_detection_working():
-            health_diff = abs(player_health - opponent_health)
-            if health_diff >= MAX_HEALTH * 0.7:
-                round_ended = True
-                termination_reason = "decisive_victory"
-        # 3. Step limit with enhanced timeout handling
-        elif self.step_count >= MAX_FIGHT_STEPS:
+            if player_health <= 0 and opponent_health <= 0:
+                termination_reason = "double_ko"
+            elif player_health <= 0:
+                termination_reason = "player_ko"
+            else:  # opponent_health <= 0
+                termination_reason = "opponent_ko"
+
+        # Case 2: If no KO, but the base env says the game is over, it must be a timeout.
+        elif base_env_done:
             round_ended = True
             if abs(player_health - opponent_health) <= 5:
                 termination_reason = "timeout_draw"
@@ -1043,18 +1046,13 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 termination_reason = "timeout_player_wins"
             else:
                 termination_reason = "timeout_opponent_wins"
-        # 4. Force termination if health detection broken
-        elif (
-            not self.health_detector.is_detection_working()
-            and self.step_count >= MAX_FIGHT_STEPS * 0.8
-        ):
-            round_ended = True
-            termination_reason = "timeout_broken_detection"
 
-        # Apply termination
+        # Apply termination if our logic determined the round has ended.
         if round_ended:
             done = True
+            # Using truncated is good practice for early termination or timeouts.
             truncated = True
+        # --- END OF SIMPLIFIED TERMINATION LOGIC ---
 
         # Add step count to info for reward calculator
         info["step_count"] = self.step_count
