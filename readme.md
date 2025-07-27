@@ -7,15 +7,19 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-
 python train.py \
-    --thinking-steps 5 \
-    --max-episodes 10 \
-    --learning-rate 1e-4 \
-    --thinking-lr 0.02 \
-    --verify-health
-    --render
-    --resume checkpoints_fixed/checkpoint_ep_499.pth
+   --max-episodes 1500 \
+   --learning-rate 3e-4 \
+   --batch-size 28 \
+   --features-dim 512 \
+   --thinking-steps 6 \
+   --buffer-capacity 30000 \
+   --target-win-rate 0.6 \
+   --eval-frequency 12 \
+   --save-frequency 30 \
+   --render
+
+
 
   ta.json 
 {
