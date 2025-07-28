@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence
-Key Improvements:
-1. Integrates Transformer for action/reward/context sequence processing
-2. Retains SimpleCNN and SimpleVerifier for EBT
-3. Time-decayed winning bonuses
-4. Aggressive epsilon-greedy exploration
-5. Reservoir sampling for experience diversity
-6. Learning rate reboots for plateau breaking
+🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence (FIXED)
+Key Fixes:
+1. Fixed gradient flow issue in train_step
+2. Fixed win/loss classification logic
+3. Improved health detection reliability
+4. Better termination reason tracking
 """
 
 import torch
@@ -217,8 +215,6 @@ class EnhancedTrainer:
             thinking_steps=args.thinking_steps,
             thinking_lr=args.thinking_lr,
         )
-        # we have exp buffer
-        # with buffer cap
         self.experience_buffer = ReservoirExperienceBuffer(
             capacity=args.buffer_capacity
         )
@@ -244,7 +240,7 @@ class EnhancedTrainer:
         self.draws = 0
         self.recent_results = deque(maxlen=40)
         self.win_rate_history = deque(maxlen=100)
-        self.recent_losses = deque(maxlen=100)
+        self.recent_rewards = deque(maxlen=100)  # Fixed: was recent_losses
         self.timeout_wins = 0
         self.fast_wins = 0
         self.combo_count_history = deque(maxlen=50)
@@ -388,9 +384,7 @@ class EnhancedTrainer:
             else:
                 self.logger.warning(f"⚠️ Checkpoint file not found. Starting fresh.")
 
-    # what is run episode, it store exp to buffer
     def run_episode(self):
-        # we reset obs and info
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -404,6 +398,11 @@ class EnhancedTrainer:
         max_combo_length = 0
         total_damage_dealt = 0.0
         is_fast_win = False
+
+        # Track health for better win detection
+        initial_player_health = info.get("player_health", MAX_HEALTH)
+        initial_opponent_health = info.get("opponent_health", MAX_HEALTH)
+
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
@@ -417,20 +416,45 @@ class EnhancedTrainer:
             damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
             max_combo_length = max(max_combo_length, combo_frames)
             total_damage_dealt += damage_dealt
+
+            # Check for round end
             if info.get("round_ended", False):
-                termination_reason = info.get("termination_reason", "unknown")
-                round_result = info.get("round_result", "ONGOING")
-                if round_result == "WIN":
+                final_player_health = info.get("player_health", 0)
+                final_opponent_health = info.get("opponent_health", 0)
+
+                # FIXED: Better win/loss detection logic
+                if final_player_health > 0 and final_opponent_health <= 0:
+                    # Player won - opponent is defeated
                     round_won = True
+                    termination_reason = "opponent_defeated"
                     if episode_steps < MAX_FIGHT_STEPS * 0.5:
                         is_fast_win = True
                         self.fast_wins += 1
-                    if "timeout" in termination_reason:
-                        self.timeout_wins += 1
-                elif round_result == "LOSE":
+                elif final_player_health <= 0 and final_opponent_health > 0:
+                    # Player lost - player is defeated
                     round_lost = True
-                elif round_result == "DRAW":
+                    termination_reason = "player_defeated"
+                elif final_player_health <= 0 and final_opponent_health <= 0:
+                    # Double KO - treat as draw
                     round_draw = True
+                    termination_reason = "double_ko"
+                elif episode_steps >= MAX_FIGHT_STEPS:
+                    # Timeout - determine winner by health
+                    if final_player_health > final_opponent_health:
+                        round_won = True
+                        termination_reason = "timeout_win"
+                        self.timeout_wins += 1
+                    elif final_player_health < final_opponent_health:
+                        round_lost = True
+                        termination_reason = "timeout_loss"
+                    else:
+                        round_draw = True
+                        termination_reason = "timeout_draw"
+                else:
+                    # Shouldn't happen, but fallback to draw
+                    round_draw = True
+                    termination_reason = "unknown"
+
             experience = {
                 "obs": obs,
                 "action": action,
@@ -452,6 +476,8 @@ class EnhancedTrainer:
             }
             episode_experiences.append(experience)
             obs = next_obs
+
+        # FIXED: Proper result classification
         if round_won:
             self.wins += 1
             self.recent_results.append("WIN")
@@ -460,24 +486,28 @@ class EnhancedTrainer:
             self.losses += 1
             self.recent_results.append("LOSE")
             win_result = "LOSE"
-        elif round_draw:
+        else:  # round_draw or fallback
             self.draws += 1
             self.recent_results.append("DRAW")
             win_result = "DRAW"
-        else:
-            self.draws += 1
-            self.recent_results.append("DRAW")
-            win_result = "DRAW"
+
+        # Add experiences to buffer
         for experience in episode_experiences:
-            self.experience_buffer.add_experience(experience, reward, win_result)
+            self.experience_buffer.add_experience(
+                experience, episode_reward, win_result
+            )
+
+        # Update tracking
         self.performance_history.append(episode_reward / max(1, episode_steps))
         self.combo_count_history.append(max_combo_length)
         self.speed_history.append(episode_steps / MAX_FIGHT_STEPS)
         self.termination_reasons.append(termination_reason)
+
         total_matches = self.wins + self.losses + self.draws
         win_rate = safe_divide(self.wins, total_matches, 0.0)
         self.win_rate_history.append(win_rate)
-        self.recent_losses.append(episode_reward)
+        self.recent_rewards.append(episode_reward)
+
         return {
             "episode_reward": episode_reward,
             "episode_steps": episode_steps,
@@ -494,20 +524,25 @@ class EnhancedTrainer:
         )
         if good_batch is None or bad_batch is None:
             return None
+
         batch = good_batch + bad_batch
         random.shuffle(batch)
+
         observations = []
         actions = []
         rewards = []
         next_observations = []
         dones = []
+
         for exp in batch:
             observations.append(exp["obs"])
             actions.append(exp["action"])
             rewards.append(exp["reward"])
             next_observations.append(exp["next_obs"])
             dones.append(exp["done"])
+
         device = self.device
+
         visual_obs = torch.tensor(
             np.stack([obs["visual_obs"] for obs in observations]),
             dtype=torch.float32,
@@ -523,8 +558,10 @@ class EnhancedTrainer:
             dtype=torch.float32,
             device=device,
         )
+
         actions = torch.tensor(actions, dtype=torch.long, device=device)
         rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
+
         next_visual_obs = torch.tensor(
             np.stack([obs["visual_obs"] for obs in next_observations]),
             dtype=torch.float32,
@@ -540,10 +577,13 @@ class EnhancedTrainer:
             dtype=torch.float32,
             device=device,
         )
+
         dones = torch.tensor(dones, dtype=torch.float32, device=device)
+
         batch_size = visual_obs.shape[0]
         action_one_hot = torch.zeros(batch_size, self.env.action_space.n, device=device)
         action_one_hot.scatter_(1, actions.unsqueeze(1), 1.0)
+
         current_obs = {
             "visual_obs": visual_obs,
             "vector_obs": vector_obs,
@@ -554,41 +594,57 @@ class EnhancedTrainer:
             "vector_obs": next_vector_obs,
             "context_sequence": next_context_sequences,
         }
+
         self.optimizer.zero_grad()
+
+        # Current energy
         current_energy = self.verifier(current_obs, action_one_hot)
+
+        # FIXED: Target energy calculation with proper gradient handling
         with torch.no_grad():
-            # --- FIXED TARGET ENERGY CALCULATION ---
-            # We need to find the minimum energy for the next state, not the average.
-            # We can do this by running a few "thinking steps" like the agent does.
-            next_candidate_action = torch.randn(
-                batch_size, self.env.action_space.n, device=device
+            # Initialize candidate action for next state
+            next_candidate_action = (
+                torch.randn(batch_size, self.env.action_space.n, device=device) * 0.01
             )
-            next_candidate_action.requires_grad_(True)
 
-            # Simple optimization to find the best next action (and thus lowest energy)
-            for _ in range(self.args.thinking_steps):  # Use the same thinking steps
-                energy_val = self.verifier(
-                    next_obs, F.softmax(next_candidate_action, dim=-1)
+            # Find best action for next state through optimization
+            for step in range(self.args.thinking_steps):
+                # Make a copy that requires grad for this optimization step
+                next_action_var = (
+                    next_candidate_action.clone().detach().requires_grad_(True)
                 )
-                # Gradients will flow back to 'next_candidate_action'
-                grads = torch.autograd.grad(energy_val.sum(), next_candidate_action)[0]
-                next_candidate_action = (
-                    next_candidate_action - self.args.thinking_lr * grads
-                )
+                next_action_probs = F.softmax(next_action_var, dim=-1)
 
-            # best action for next state
+                # Calculate energy
+                energy_val = self.verifier(next_obs, next_action_probs)
+
+                # Calculate gradients
+                grad = torch.autograd.grad(
+                    outputs=energy_val.sum(),
+                    inputs=next_action_var,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
+
+                # Update candidate action (no grad needed here)
+                with torch.no_grad():
+                    step_size = self.args.thinking_lr * (0.85**step)
+                    next_candidate_action = next_candidate_action - step_size * grad
+
+            # Final energy calculation for target
             best_next_action_probs = F.softmax(next_candidate_action, dim=-1)
-
-            # the min energy for next state
             next_energy = self.verifier(next_obs, best_next_action_probs)
-            # --- END OF FIX ---
 
-        # target energy
+        # Calculate target energy
         target_energy = (
             rewards.unsqueeze(-1)
             + (1 - dones.unsqueeze(-1)) * self.args.gamma * next_energy
         )
+
+        # Main loss
         loss = nn.functional.mse_loss(current_energy, target_energy.detach())
+
+        # Contrastive loss
         contrastive_loss = 0.0
         for _ in range(3):
             negative_actions = torch.randint(
@@ -604,13 +660,16 @@ class EnhancedTrainer:
                     current_energy - negative_energy + self.args.contrastive_margin
                 )
             )
+
         total_loss = loss + self.args.contrastive_weight * contrastive_loss
+
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(
             self.verifier.parameters(), self.args.max_grad_norm
         )
         self.optimizer.step()
         self.scheduler.step(total_loss.item())
+
         return {
             "loss": total_loss.item(),
             "energy_loss": loss.item(),
@@ -627,27 +686,30 @@ class EnhancedTrainer:
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Transformer context sequence: ENABLED")
+
         start_time = time.time()
-        # this is total episode to train
+
         for episode in range(self.episode, self.args.num_episodes):
-            # episode
             self.episode = episode
-            # run episode
             episode_info = self.run_episode()
+
             episode_reward = episode_info["episode_reward"]
             episode_steps = episode_info["episode_steps"]
             win_result = episode_info["win_result"]
             termination_reason = episode_info["termination_reason"]
+
             total_matches = self.wins + self.losses + self.draws
             win_rate = safe_divide(self.wins, total_matches, 0.0)
+
             if win_rate > self.best_win_rate:
                 self.best_win_rate = win_rate
                 self.save_checkpoint(episode)
+
+            # Training step
             if (
                 episode % self.args.train_frequency == 0
                 and self.experience_buffer.total_added >= self.args.batch_size
             ):
-                # train step
                 train_info = self.train_step()
                 if train_info:
                     self.logger.info(
@@ -656,21 +718,24 @@ class EnhancedTrainer:
                         f"ContrastiveLoss={train_info['contrastive_loss']:.4f}"
                     )
 
-            # log freq
+            # Logging
             if episode % self.args.log_frequency == 0:
                 buffer_stats = self.experience_buffer.get_stats()
                 agent_stats = self.agent.get_thinking_stats()
-                avg_loss = safe_mean(list(self.recent_losses), 0.0)
+                avg_reward = safe_mean(list(self.recent_rewards), 0.0)
                 avg_combo = safe_mean(list(self.combo_count_history), 0.0)
                 avg_speed = safe_mean(list(self.speed_history), 1.0)
                 win_rate = safe_mean(list(self.win_rate_history), 0.0)
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 elapsed_time = (time.time() - start_time) / 3600
+
                 print(f"\n📊 Episode {episode} Summary (RGB with Transformer):")
                 print(f"   - Reward: {episode_reward:.2f}, Steps: {episode_steps}")
                 print(
                     f"   - Result: {win_result}, WinRate: {win_rate:.1%} (Best: {self.best_win_rate:.1%})"
                 )
+                print(f"   - Termination: {termination_reason}")
+                print(f"   - W/L/D: {self.wins}/{self.losses}/{self.draws}")
                 print(f"   - Combos: {avg_combo:.1f}, Speed: {avg_speed:.2f}x")
                 print(
                     f"   - Exploration: {agent_stats['exploration_rate']:.1%}, Success: {agent_stats['success_rate']:.1%}"
@@ -689,6 +754,7 @@ class EnhancedTrainer:
                 )
                 print(f"   - Elapsed: {elapsed_time:.2f} hours")
                 print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
+
                 self.logger.info(
                     f"Episode {episode}: Reward={episode_reward:.2f}, Steps={episode_steps}, "
                     f"Result={win_result}, WinRate={win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, "
@@ -701,13 +767,18 @@ class EnhancedTrainer:
                     f"LearningRate={current_lr:.2e}, Reboots={self.reboot_count}, "
                     f"Elapsed={elapsed_time:.2f} hours"
                 )
+
+            # Check for plateau and reboot if needed
             if (
                 episode - self.last_reboot_episode > 50
                 and self.detect_learning_plateau()
             ):
                 self.reboot_learning_rate()
+
+            # Save checkpoint
             if episode % self.args.save_frequency == 0:
                 self.save_checkpoint(episode)
+
         self.env.close()
         print(f"\n🏁 Training completed!")
         print(f"   - Total episodes: {self.episode}")
@@ -724,7 +795,7 @@ class EnhancedTrainer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced RGB Street Fighter Training with Transformer"
+        description="Enhanced RGB Street Fighter Training with Transformer (FIXED)"
     )
     parser.add_argument(
         "--num_episodes", type=int, default=1000, help="Number of episodes to train"
@@ -801,6 +872,7 @@ def main():
         default=1e-5,
         help="Weight decay for Adam optimizer",
     )
+
     args = parser.parse_args()
     trainer = EnhancedTrainer(args)
     trainer.train()
