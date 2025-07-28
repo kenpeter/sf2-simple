@@ -217,7 +217,7 @@ class EnhancedRewardCalculator:
         self.base_winning_bonus = 5.0
         self.health_advantage_bonus = 0.8
         self.health_preservation_bonus = 2.0
-        self.damage_taken_penalty_multiplier = 1.2
+        self.damage_taken_penalty_multiplier = 2.5
         self.double_ko_penalty = -10.0
         self.combo_bonus_multiplier = 2.0
         self.fast_damage_bonus = 1.0
@@ -279,14 +279,13 @@ class EnhancedRewardCalculator:
                 reward += advantage_bonus
                 reward_breakdown["health_advantage"] = advantage_bonus
         if done:
-            termination_reason = info.get("termination_reason", "unknown")
-            if player_health <= 0 and opponent_health <= 0:
-                reward += self.double_ko_penalty
-                reward_breakdown["double_ko_penalty"] = self.double_ko_penalty
+            if player_health <= 0 and opponent_health > 0:
+                reward += -3.0
+                reward_breakdown["round_lost"] = -3.0
                 self.round_won = False
-                self.round_lost = False
-                self.round_draw = True
-            elif player_health > opponent_health:
+                self.round_lost = True
+                self.round_draw = False
+            elif opponent_health <= 0 and player_health > 0:
                 time_bonus_factor = (
                     MAX_FIGHT_STEPS - self.step_count
                 ) / MAX_FIGHT_STEPS
@@ -306,27 +305,12 @@ class EnhancedRewardCalculator:
                 self.round_won = True
                 self.round_lost = False
                 self.round_draw = False
-            elif opponent_health > player_health:
-                if player_health <= 0:
-                    loss_penalty = -3.0
-                else:
-                    loss_penalty = -2.5
-                reward += loss_penalty
-                reward_breakdown["round_lost"] = loss_penalty
+            else:
+                reward += self.double_ko_penalty
+                reward_breakdown["double_ko_penalty"] = self.double_ko_penalty
                 self.round_won = False
                 self.round_lost = True
                 self.round_draw = False
-            else:
-                draw_penalty = -4.0
-                reward += draw_penalty
-                reward_breakdown["draw"] = draw_penalty
-                self.round_won = False
-                self.round_lost = False
-                self.round_draw = True
-            if "timeout" in termination_reason:
-                timeout_penalty = -2.0 * self.timeout_penalty_multiplier
-                reward += timeout_penalty
-                reward_breakdown["timeout_penalty"] = timeout_penalty
             if self.total_damage_dealt > 0 or self.total_damage_taken > 0:
                 damage_ratio = safe_divide(
                     self.total_damage_dealt, self.total_damage_taken + 1, 1.0
@@ -1115,28 +1099,15 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             self.env, info, obs
         )
         round_ended = False
-        termination_reason = "ongoing"
-        if player_health <= 0 or opponent_health <= 0:
+        if (
+            player_health <= 0
+            or opponent_health <= 0
+            or self.step_count >= MAX_FIGHT_STEPS
+        ):
             round_ended = True
-            if player_health <= 0 and opponent_health <= 0:
-                termination_reason = "double_ko"
-            elif player_health <= 0:
-                termination_reason = "player_ko"
-            else:
-                termination_reason = "opponent_ko"
-        elif self.step_count >= MAX_FIGHT_STEPS:
-            round_ended = True
-            if abs(player_health - opponent_health) <= 5:
-                termination_reason = "timeout_draw"
-            elif player_health > opponent_health:
-                termination_reason = "timeout_player_wins"
-            else:
-                termination_reason = "timeout_opponent_wins"
-        if round_ended:
             done = True
             truncated = True
         info["step_count"] = self.step_count
-        info["termination_reason"] = termination_reason
         info["round_ended"] = round_ended
         info["player_health"] = player_health
         info["opponent_health"] = opponent_health
@@ -1157,7 +1128,6 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 "episode_count": self.episode_count,
                 "step_count": self.step_count,
                 "round_ended": round_ended,
-                "termination_reason": termination_reason,
                 "round_result": round_result,
                 "final_health_diff": player_health - opponent_health,
                 "health_detection_working": self.health_detector.is_detection_working(),
@@ -1184,8 +1154,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             print(
                 f"  {result_emoji}{speed_indicator} Episode {self.episode_count}: {round_result} - "
                 f"Steps: {self.step_count}, Health: {player_health} vs {opponent_health}, "
-                f"TimeBonus: {time_bonus:.1f}x, Combos: {combo_info}, "
-                f"Reason: {termination_reason}"
+                f"TimeBonus: {time_bonus:.1f}x, Combos: {combo_info}"
             )
         return observation, enhanced_reward, done, truncated, info
 
@@ -1257,8 +1226,7 @@ def verify_health_detection(env, episodes=5):
             episode_healths["player"].append(player_health)
             episode_healths["opponent"].append(opponent_health)
             if done:
-                termination_reason = info.get("termination_reason", "unknown")
-                if "timeout" in termination_reason:
+                if step_count >= MAX_FIGHT_STEPS:
                     timeout_wins += 1
                 elif step_count < MAX_FIGHT_STEPS * 0.5:
                     fast_wins += 1

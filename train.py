@@ -216,6 +216,8 @@ class EnhancedTrainer:
             thinking_steps=args.thinking_steps,
             thinking_lr=args.thinking_lr,
         )
+        # we have exp buffer
+        # with buffer cap
         self.experience_buffer = ReservoirExperienceBuffer(
             capacity=args.buffer_capacity
         )
@@ -385,7 +387,9 @@ class EnhancedTrainer:
             else:
                 self.logger.warning(f"⚠️ Checkpoint file not found. Starting fresh.")
 
+    # what is run episode, it store exp to buffer
     def run_episode(self):
+        # we reset obs and info
         obs, info = self.env.reset()
         done = False
         truncated = False
@@ -552,11 +556,33 @@ class EnhancedTrainer:
         self.optimizer.zero_grad()
         current_energy = self.verifier(current_obs, action_one_hot)
         with torch.no_grad():
-            next_action_probs = (
-                torch.ones(batch_size, self.env.action_space.n, device=device)
-                / self.env.action_space.n
+            # --- FIXED TARGET ENERGY CALCULATION ---
+            # We need to find the minimum energy for the next state, not the average.
+            # We can do this by running a few "thinking steps" like the agent does.
+            next_candidate_action = torch.randn(
+                batch_size, self.env.action_space.n, device=device
             )
-            next_energy = self.verifier(next_obs, next_action_probs)
+            next_candidate_action.requires_grad_(True)
+
+            # Simple optimization to find the best next action (and thus lowest energy)
+            for _ in range(self.args.thinking_steps):  # Use the same thinking steps
+                energy_val = self.verifier(
+                    next_obs, F.softmax(next_candidate_action, dim=-1)
+                )
+                # Gradients will flow back to 'next_candidate_action'
+                grads = torch.autograd.grad(energy_val.sum(), next_candidate_action)[0]
+                next_candidate_action = (
+                    next_candidate_action - self.args.thinking_lr * grads
+                )
+
+            # best action for next state
+            best_next_action_probs = F.softmax(next_candidate_action, dim=-1)
+
+            # the min energy for next state
+            next_energy = self.verifier(next_obs, best_next_action_probs)
+            # --- END OF FIX ---
+
+        # target energy
         target_energy = (
             rewards.unsqueeze(-1)
             + (1 - dones.unsqueeze(-1)) * self.args.gamma * next_energy
@@ -601,8 +627,11 @@ class EnhancedTrainer:
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Transformer context sequence: ENABLED")
         start_time = time.time()
+        # this is total episode to train
         for episode in range(self.episode, self.args.num_episodes):
+            # episode
             self.episode = episode
+            # run episode
             episode_info = self.run_episode()
             episode_reward = episode_info["episode_reward"]
             episode_steps = episode_info["episode_steps"]
@@ -617,6 +646,7 @@ class EnhancedTrainer:
                 episode % self.args.train_frequency == 0
                 and self.experience_buffer.total_added >= self.args.batch_size
             ):
+                # train step
                 train_info = self.train_step()
                 if train_info:
                     self.logger.info(
@@ -624,6 +654,8 @@ class EnhancedTrainer:
                         f"EnergyLoss={train_info['energy_loss']:.4f}, "
                         f"ContrastiveLoss={train_info['contrastive_loss']:.4f}"
                     )
+
+            # log freq
             if episode % self.args.log_frequency == 0:
                 buffer_stats = self.experience_buffer.get_stats()
                 agent_stats = self.agent.get_thinking_stats()

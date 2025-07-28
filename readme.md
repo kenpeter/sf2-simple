@@ -8,7 +8,7 @@
 __win rate at 55%!!!!!!!!!!!!!!__
 
 
-python train.py --num_episodes 1000 --batch_size 64 --learning_rate 1e-4 --features_dim 256 --thinking_steps 6 --thinking_lr 0.025 --buffer_capacity 30000 --gamma 0.99 --contrastive_margin 1.0 --contrastive_weight 0.5 --max_grad_norm 1.0 --train_frequency 4 --log_frequency 10 --save_frequency 30 --max_episode_steps 3000 --verify_health
+python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --features_dim 256 --thinking_steps 6 --thinking_lr 0.025 --buffer_capacity 30000 --gamma 0.99 --contrastive_margin 1.0 --contrastive_weight 0.5 --max_grad_norm 1.0 --train_frequency 1 --log_frequency 10 --save_frequency 30 --max_episode_steps 3000 --verify_health
 
 
 
