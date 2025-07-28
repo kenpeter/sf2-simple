@@ -601,48 +601,56 @@ class EnhancedTrainer:
         current_energy = self.verifier(current_obs, action_one_hot)
 
         # FIXED: Target energy calculation with proper gradient handling
-        with torch.no_grad():
-            # Initialize candidate action for next state
-            next_candidate_action = (
-                torch.randn(batch_size, self.env.action_space.n, device=device) * 0.01
-            )
-
-            # Find best action for next state through optimization
-            for step in range(self.args.thinking_steps):
-                # Make a copy that requires grad for this optimization step
-                next_action_var = (
-                    next_candidate_action.clone().detach().requires_grad_(True)
-                )
-                next_action_probs = F.softmax(next_action_var, dim=-1)
-
-                # Calculate energy
-                energy_val = self.verifier(next_obs, next_action_probs)
-
-                # Calculate gradients
-                grad = torch.autograd.grad(
-                    outputs=energy_val.sum(),
-                    inputs=next_action_var,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
-
-                # Update candidate action (no grad needed here)
-                with torch.no_grad():
-                    step_size = self.args.thinking_lr * (0.85**step)
-                    next_candidate_action = next_candidate_action - step_size * grad
-
-            # Final energy calculation for target
-            best_next_action_probs = F.softmax(next_candidate_action, dim=-1)
-            next_energy = self.verifier(next_obs, best_next_action_probs)
-
-        # Calculate target energy
-        target_energy = (
-            rewards.unsqueeze(-1)
-            + (1 - dones.unsqueeze(-1)) * self.args.gamma * next_energy
+        # Step 1: Initialize candidate action outside no_grad context
+        next_candidate_action = (
+            torch.randn(batch_size, self.env.action_space.n, device=device) * 0.01
         )
 
+        # Step 2: Optimize the candidate action (this needs gradients)
+        best_next_candidate = next_candidate_action.clone()
+        best_energy = float("inf")
+
+        for step in range(self.args.thinking_steps):
+            # Create a variable that requires gradients
+            next_action_var = next_candidate_action.clone().requires_grad_(True)
+            next_action_probs = F.softmax(next_action_var, dim=-1)
+
+            # Calculate energy (this creates the computation graph)
+            energy_val = self.verifier(next_obs, next_action_probs)
+
+            # Track best solution
+            with torch.no_grad():
+                current_energy_val = energy_val.mean().item()
+                if current_energy_val < best_energy:
+                    best_energy = current_energy_val
+                    best_next_candidate = next_action_var.clone().detach()
+
+            # Calculate gradients (now the computation graph exists)
+            grad = torch.autograd.grad(
+                outputs=energy_val.sum(),
+                inputs=next_action_var,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
+
+            # Update candidate action (no grad needed here)
+            with torch.no_grad():
+                step_size = self.args.thinking_lr * (0.85**step)
+                next_candidate_action = next_candidate_action - step_size * grad
+
+        # Step 3: Calculate final target energy with no_grad
+        with torch.no_grad():
+            best_next_action_probs = F.softmax(best_next_candidate, dim=-1)
+            next_energy = self.verifier(next_obs, best_next_action_probs)
+
+            # Calculate target energy
+            target_energy = (
+                rewards.unsqueeze(-1)
+                + (1 - dones.unsqueeze(-1)) * self.args.gamma * next_energy
+            )
+
         # Main loss
-        loss = nn.functional.mse_loss(current_energy, target_energy.detach())
+        loss = nn.functional.mse_loss(current_energy, target_energy)
 
         # Contrastive loss
         contrastive_loss = 0.0
