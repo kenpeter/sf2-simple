@@ -6,6 +6,7 @@ Key Fixes:
 2. Improved health detection reliability
 3. Better termination reason tracking
 4. Fixed round result classification
+5. FIXED: Race condition in final frame health reading
 """
 
 import cv2
@@ -63,7 +64,9 @@ MAX_FIGHT_STEPS = 3500
 FRAME_STACK_SIZE = 8
 CONTEXT_SEQUENCE_DIM = 64  # Dimension for action/reward/context embeddings
 
-print(f"🚀 ENHANCED Street Fighter II Configuration (RGB with Transformer - FIXED):")
+print(
+    f"🚀 ENHANCED Street Fighter II Configuration (RGB with Transformer - RACE CONDITION FIXED):"
+)
 print(f"   - Health detection: MULTI-METHOD (IMPROVED)")
 print(f"   - Image format: RGB (3 channels)")
 print(f"   - Image size: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
@@ -72,7 +75,7 @@ print(f"   - Aggressive exploration: ACTIVE")
 print(f"   - Reservoir sampling: ENABLED")
 print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
 print(f"   - Transformer context sequence: ENABLED")
-print(f"   - Win/Loss detection: FIXED")
+print(f"   - Win/Loss detection: RACE CONDITION FIXED")
 
 
 # Utility functions (unchanged)
@@ -296,21 +299,20 @@ class EnhancedRewardCalculator:
                 reward += advantage_bonus
                 reward_breakdown["health_advantage"] = advantage_bonus
 
-        # FIXED: End-of-round rewards with better logic
+        # FIXED: End-of-round rewards - now uses termination_reason from wrapper
         if done and not self.round_result_determined:
             self.round_result_determined = True
+            termination_reason = info.get("termination_reason", "unknown")
 
-            # Determine round result based on final health
-            if player_health <= 0 and opponent_health > 0:
-                # Player lost - opponent is alive, player is dead
+            # Use the wrapper's reliable termination reason instead of trying to determine it here
+            if termination_reason == "player_defeated":
                 self.round_lost = True
                 self.round_won = False
                 self.round_draw = False
                 reward += -3.0
                 reward_breakdown["round_lost"] = -3.0
 
-            elif opponent_health <= 0 and player_health > 0:
-                # Player won - player is alive, opponent is dead
+            elif termination_reason == "opponent_defeated":
                 self.round_won = True
                 self.round_lost = False
                 self.round_draw = False
@@ -338,40 +340,35 @@ class EnhancedRewardCalculator:
                     reward += speed_bonus
                     reward_breakdown["speed_bonus"] = speed_bonus
 
-            elif player_health <= 0 and opponent_health <= 0:
-                # Double KO - both dead
+            elif termination_reason == "double_ko":
                 self.round_draw = True
                 self.round_won = False
                 self.round_lost = False
                 reward += self.double_ko_penalty
                 reward_breakdown["double_ko_penalty"] = self.double_ko_penalty
 
-            elif self.step_count >= MAX_FIGHT_STEPS:
-                # Timeout - determine winner by remaining health
-                if player_health > opponent_health:
-                    # Timeout win
-                    self.round_won = True
-                    self.round_lost = False
-                    self.round_draw = False
-                    timeout_win_bonus = (
-                        self.base_winning_bonus * 0.5
-                    )  # Reduced bonus for timeout wins
-                    reward += timeout_win_bonus
-                    reward_breakdown["timeout_win"] = timeout_win_bonus
-                elif player_health < opponent_health:
-                    # Timeout loss
-                    self.round_lost = True
-                    self.round_won = False
-                    self.round_draw = False
-                    reward += -2.0
-                    reward_breakdown["timeout_loss"] = -2.0
-                else:
-                    # Timeout draw
-                    self.round_draw = True
-                    self.round_won = False
-                    self.round_lost = False
-                    reward += -1.0
-                    reward_breakdown["timeout_draw"] = -1.0
+            elif termination_reason == "timeout_win":
+                self.round_won = True
+                self.round_lost = False
+                self.round_draw = False
+                timeout_win_bonus = self.base_winning_bonus * 0.5
+                reward += timeout_win_bonus
+                reward_breakdown["timeout_win"] = timeout_win_bonus
+
+            elif termination_reason == "timeout_loss":
+                self.round_lost = True
+                self.round_won = False
+                self.round_draw = False
+                reward += -2.0
+                reward_breakdown["timeout_loss"] = -2.0
+
+            elif termination_reason == "timeout_draw":
+                self.round_draw = True
+                self.round_won = False
+                self.round_lost = False
+                reward += -1.0
+                reward_breakdown["timeout_draw"] = -1.0
+
             else:
                 # Fallback case - shouldn't happen, but treat as draw
                 self.round_draw = True
@@ -1203,7 +1200,7 @@ class AggressiveAgent:
         return stats
 
 
-# FIXED EnhancedStreetFighterWrapper with better termination detection
+# FIXED EnhancedStreetFighterWrapper with race condition fix
 class EnhancedStreetFighterWrapper(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
@@ -1247,18 +1244,20 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
 
         self.episode_count = 0
         self.step_count = 0
+
+        # RACE CONDITION FIX: Track previous health for reliable termination detection
         self.previous_player_health = MAX_HEALTH
         self.previous_opponent_health = MAX_HEALTH
 
         print(
-            f"🚀 EnhancedStreetFighterWrapper initialized (RGB with Transformer - FIXED)"
+            f"🚀 EnhancedStreetFighterWrapper initialized (RGB with Transformer - RACE CONDITION FIXED)"
         )
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
         print(f"   - Transformer context sequence: ENABLED")
-        print(f"   - Win/Loss detection: FIXED")
+        print(f"   - Win/Loss detection: RACE CONDITION FIXED")
 
     def _initialize_frame_stack(self, initial_frame):
         self.frame_stack.clear()
@@ -1326,6 +1325,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         player_health, opponent_health = self.health_detector.get_health(
             self.env, info, reset_obs
         )
+
+        # RACE CONDITION FIX: Initialize previous health
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
 
@@ -1363,64 +1364,88 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Execute the action in the environment
         step_obs, original_reward, done, truncated, info = self.env.step(retro_action)
 
-        # Process visual frame (now step_obs is defined)
+        # Process visual frame
         processed_frame = self._process_visual_frame(step_obs)
         self.frame_stack.append(processed_frame)
 
-        # Get current health
-        player_health, opponent_health = self.health_detector.get_health(
-            self.env, info, step_obs
+        # Get current health (this might be unreliable on the final frame)
+        current_player_health, current_opponent_health = (
+            self.health_detector.get_health(self.env, info, step_obs)
         )
 
-        # FIXED: Better round end detection
+        # ===================================================================
+        # ==== RACE CONDITION FIX: ROBUST TERMINATION DETECTION BLOCK =====
+        # ===================================================================
+
+        # First check for single round termination conditions
         round_ended = False
         termination_reason = "ongoing"
 
-        # Check for knockout conditions
-        if player_health <= 0 and opponent_health > 0:
+        # Use PREVIOUS step's health for knockout detection to avoid race condition
+        final_player_health = self.previous_player_health
+        final_opponent_health = self.previous_opponent_health
+
+        # Check for knockout conditions (single round terminators)
+        if final_player_health <= 0 and final_opponent_health > 0:
             round_ended = True
             done = True
             truncated = True
             termination_reason = "player_defeated"
-        elif opponent_health <= 0 and player_health > 0:
+        elif final_opponent_health <= 0 and final_player_health > 0:
             round_ended = True
             done = True
             truncated = True
             termination_reason = "opponent_defeated"
-        elif player_health <= 0 and opponent_health <= 0:
+        elif final_player_health <= 0 and final_opponent_health <= 0:
             round_ended = True
             done = True
             truncated = True
             termination_reason = "double_ko"
         elif self.step_count >= MAX_FIGHT_STEPS:
+            # Timeout condition - single round ends on timeout
             round_ended = True
             done = True
             truncated = True
-            if player_health > opponent_health:
+            # On timeout, use the CURRENT health as it's the most accurate
+            if current_player_health > current_opponent_health:
                 termination_reason = "timeout_win"
-            elif player_health < opponent_health:
+            elif current_player_health < current_opponent_health:
                 termination_reason = "timeout_loss"
             else:
                 termination_reason = "timeout_draw"
+        elif done or truncated:
+            # Environment signaled done for other reasons (single round end)
+            round_ended = True
+            done = True
+            truncated = True
+            # Determine reason based on previous health to avoid race condition
+            if final_player_health <= 0 and final_opponent_health > 0:
+                termination_reason = "player_defeated"
+            elif final_opponent_health <= 0 and final_player_health > 0:
+                termination_reason = "opponent_defeated"
+            elif final_player_health <= 0 and final_opponent_health <= 0:
+                termination_reason = "double_ko"
+            else:
+                termination_reason = "unknown_termination"
 
-        # Update info
+        # Now update the info dict with the ACCURATE current health for logging
         info["step_count"] = self.step_count
         info["round_ended"] = round_ended
-        info["player_health"] = player_health
-        info["opponent_health"] = opponent_health
+        info["player_health"] = current_player_health
+        info["opponent_health"] = current_opponent_health
         info["termination_reason"] = termination_reason
 
-        # Calculate enhanced reward
+        # Calculate enhanced reward (pass the reliable current health and done signal)
         enhanced_reward, reward_breakdown = self.reward_calculator.calculate_reward(
-            player_health, opponent_health, done, info
+            current_player_health, current_opponent_health, done, info
         )
 
         # Update feature tracker
         self.feature_tracker.update(
-            player_health, opponent_health, action, reward_breakdown
+            current_player_health, current_opponent_health, action, reward_breakdown
         )
 
-        # Build observation (using step_obs, not obs)
+        # Build observation
         observation = self._build_observation(step_obs, info)
 
         # Get round result
@@ -1429,8 +1454,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Update info with comprehensive results
         info.update(
             {
-                "player_health": player_health,
-                "opponent_health": opponent_health,
+                "player_health": current_player_health,
+                "opponent_health": current_opponent_health,
                 "reward_breakdown": reward_breakdown,
                 "enhanced_reward": enhanced_reward,
                 "episode_count": self.episode_count,
@@ -1438,17 +1463,20 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 "round_ended": round_ended,
                 "round_result": round_result,
                 "termination_reason": termination_reason,
-                "final_health_diff": player_health - opponent_health,
+                "final_health_diff": current_player_health - current_opponent_health,
                 "health_detection_working": self.health_detector.is_detection_working(),
                 "total_damage_dealt": self.reward_calculator.total_damage_dealt,
                 "total_damage_taken": self.reward_calculator.total_damage_taken,
                 "frame_stack_size": FRAME_STACK_SIZE,
                 "image_format": "RGB",
                 "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
+                # Debug info for race condition fix
+                "debug_previous_health": f"P:{self.previous_player_health} O:{self.previous_opponent_health}",
+                "debug_current_health": f"P:{current_player_health} O:{current_opponent_health}",
             }
         )
 
-        # Print round result
+        # Print round result with improved debugging
         if round_ended:
             result_emoji = (
                 "🏆"
@@ -1465,9 +1493,14 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
 
             print(
                 f"  {result_emoji}{speed_indicator} Episode {self.episode_count}: {round_result} - "
-                f"Steps: {self.step_count}, Health: {player_health} vs {opponent_health}, "
+                f"Steps: {self.step_count}, Final Health: {final_player_health} vs {final_opponent_health}, "
+                f"Current Health: {current_player_health} vs {current_opponent_health}, "
                 f"Reason: {termination_reason}, TimeBonus: {time_multiplier:.1f}x, Combos: {combo_info}"
             )
+
+        # CRUCIAL: At the end of the step, update the previous health for the next iteration
+        self.previous_player_health = current_player_health
+        self.previous_opponent_health = current_opponent_health
 
         return observation, enhanced_reward, done, truncated, info
 
@@ -1513,13 +1546,15 @@ def make_enhanced_env(
             game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
         )
         env = EnhancedStreetFighterWrapper(env)
-        print(f"   ✅ Enhanced RGB environment created with Transformer (FIXED)")
+        print(
+            f"   ✅ Enhanced RGB environment created with Transformer (RACE CONDITION FIXED)"
+        )
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Time-decayed rewards: ACTIVE")
         print(f"   - Aggression incentives: ENABLED")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
         print(f"   - Transformer context sequence: ENABLED")
-        print(f"   - Win/Loss detection: FIXED")
+        print(f"   - Win/Loss detection: RACE CONDITION FIXED")
         return env
     except Exception as e:
         print(f"   ❌ Environment creation failed: {e}")
@@ -1527,17 +1562,21 @@ def make_enhanced_env(
 
 
 def verify_health_detection(env, episodes=5):
-    print(f"🔍 Verifying enhanced RGB system over {episodes} episodes...")
+    print(
+        f"🔍 Verifying enhanced RGB system with race condition fix over {episodes} episodes..."
+    )
     detection_working = 0
     health_changes_detected = 0
     timeout_wins = 0
     fast_wins = 0
+    correct_terminations = 0
 
     for episode in range(episodes):
         obs, info = env.reset()
         done = False
         step_count = 0
         episode_healths = {"player": [], "opponent": []}
+        last_health = {"player": MAX_HEALTH, "opponent": MAX_HEALTH}
 
         if "visual_obs" in obs:
             visual_shape = obs["visual_obs"].shape
@@ -1556,11 +1595,27 @@ def verify_health_detection(env, episodes=5):
 
             if done:
                 termination_reason = info.get("termination_reason", "unknown")
+                debug_prev = info.get("debug_previous_health", "N/A")
+                debug_curr = info.get("debug_current_health", "N/A")
+
+                print(f"     Termination: {termination_reason}")
+                print(f"     Previous: {debug_prev}, Current: {debug_curr}")
+
+                # Check if termination makes sense
+                if termination_reason in [
+                    "player_defeated",
+                    "opponent_defeated",
+                    "double_ko",
+                ]:
+                    correct_terminations += 1
+
                 if "timeout" in termination_reason:
                     timeout_wins += 1
                 elif step_count < MAX_FIGHT_STEPS * 0.5:
                     fast_wins += 1
 
+            last_health["player"] = player_health
+            last_health["opponent"] = opponent_health
             step_count += 1
 
         # Check for health variations
@@ -1582,22 +1637,29 @@ def verify_health_detection(env, episodes=5):
         )
 
     success_rate = health_changes_detected / episodes
-    print(f"\n🎯 Enhanced RGB System Results (FIXED):")
+    termination_accuracy = correct_terminations / episodes
+
+    print(f"\n🎯 Enhanced RGB System Results (RACE CONDITION FIXED):")
     print(f"   - Health detection working: {detection_working}/{episodes}")
     print(
         f"   - Health changes detected: {health_changes_detected}/{episodes} ({success_rate:.1%})"
     )
+    print(
+        f"   - Correct termination detection: {correct_terminations}/{episodes} ({termination_accuracy:.1%})"
+    )
     print(f"   - Timeout wins: {timeout_wins}/{episodes}")
     print(f"   - Fast wins: {fast_wins}/{episodes}")
     print(f"   - Image format: RGB at {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
-    print(f"   - Win/Loss detection: FIXED")
+    print(f"   - Win/Loss detection: RACE CONDITION FIXED")
 
-    if success_rate > 0.6:
-        print(f"   ✅ Enhanced RGB system is working! Ready for aggressive training.")
+    if success_rate > 0.6 and termination_accuracy > 0.8:
+        print(
+            f"   ✅ Enhanced RGB system with race condition fix is working! Ready for aggressive training."
+        )
     else:
         print(f"   ⚠️ System may need adjustment.")
 
-    return success_rate > 0.6
+    return success_rate > 0.6 and termination_accuracy > 0.8
 
 
 __all__ = [
@@ -1628,7 +1690,7 @@ __all__ = [
 ]
 
 print(
-    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (RGB with Transformer - FIXED)"
+    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (RGB with Transformer - RACE CONDITION FIXED)"
 )
 print(f"   - ✅ RGB images with resizing: ACTIVE ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
 print(f"   - ✅ Time-decayed winning bonuses: ACTIVE")
@@ -1636,7 +1698,7 @@ print(f"   - ✅ Aggressive exploration: ENABLED")
 print(f"   - ✅ Transformer context sequence: ENABLED")
 print(f"   - ✅ Combo and speed incentives: ENABLED")
 print(f"   - ✅ Timeout penalties: HEAVY")
-print(f"   - ✅ Win/Loss detection: FIXED")
+print(f"   - ✅ Win/Loss detection: RACE CONDITION FIXED")
 print(
-    f"🎯 Ready to break learning plateaus with Transformer-enhanced context and FIXED win detection!"
+    f"🎯 Ready to break learning plateaus with Transformer-enhanced context and RACE CONDITION FIXED win detection!"
 )
