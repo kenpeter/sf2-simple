@@ -22,6 +22,7 @@ from pathlib import Path
 import logging
 from datetime import datetime
 import random
+import torch.nn.functional as F
 
 try:
     from wrapper import (
