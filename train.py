@@ -245,7 +245,6 @@ class EnhancedTrainer:
         self.fast_wins = 0
         self.combo_count_history = deque(maxlen=50)
         self.speed_history = deque(maxlen=50)
-        self.termination_reasons = deque(maxlen=200)
         self.setup_logging()
         self.load_checkpoint()
         print(f"🚀 Enhanced RGB Trainer initialized with Transformer")
@@ -280,23 +279,18 @@ class EnhancedTrainer:
         recent_performance = list(self.performance_history)[-10:]
         performance_std = safe_std(recent_performance, 0.0)
         is_stagnant = performance_std < self.lr_reboot_threshold
-        recent_terminations = list(self.termination_reasons)[-20:]
-        timeout_ratio = sum(
-            1 for term in recent_terminations if "timeout" in term
-        ) / max(1, len(recent_terminations))
-        timeout_dominance = timeout_ratio > 0.7
         early_performance = safe_mean(recent_performance[:5], 0.0)
         late_performance = safe_mean(recent_performance[-5:], 0.0)
         no_improvement = late_performance <= early_performance + 0.01
         should_reboot = (
             is_stagnant
-            and (timeout_dominance or no_improvement)
+            and no_improvement
             and self.episode - self.last_reboot_episode > 50
         )
         if should_reboot:
             self.logger.info(
                 f"🔄 Plateau detected: std={performance_std:.4f}, "
-                f"timeout_ratio={timeout_ratio:.2f}, improvement={late_performance-early_performance:.4f}"
+                f"improvement={late_performance-early_performance:.4f}"
             )
         return should_reboot
 
@@ -394,14 +388,13 @@ class EnhancedTrainer:
         round_won = False
         round_lost = False
         round_draw = False
-        termination_reason = "ongoing"
         max_combo_length = 0
         total_damage_dealt = 0.0
         is_fast_win = False
 
         # Track health for better win detection
-        initial_player_health = info.get("player_health", MAX_HEALTH)
-        initial_opponent_health = info.get("opponent_health", MAX_HEALTH)
+        initial_player_health = info.get("agent_hp", MAX_HEALTH)
+        initial_opponent_health = info.get("enemy_hp", MAX_HEALTH)
 
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
@@ -411,49 +404,23 @@ class EnhancedTrainer:
             episode_reward += reward
             episode_steps += 1
             self.total_steps += 1
-            reward_breakdown = info.get("reward_breakdown", {})
-            combo_frames = reward_breakdown.get("combo_frames", 0)
-            damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
-            max_combo_length = max(max_combo_length, combo_frames)
-            total_damage_dealt += damage_dealt
 
-            # Check for round end
-            if info.get("round_ended", False):
-                final_player_health = info.get("player_health", 0)
-                final_opponent_health = info.get("opponent_health", 0)
+            final_player_health = info.get("agent_hp", 0)
+            final_opponent_health = info.get("enemy_hp", 0)
 
-                # FIXED: Better win/loss detection logic
-                if final_player_health > 0 and final_opponent_health <= 0:
-                    # Player won - opponent is defeated
-                    round_won = True
-                    termination_reason = "opponent_defeated"
-                    if episode_steps < MAX_FIGHT_STEPS * 0.5:
-                        is_fast_win = True
-                        self.fast_wins += 1
-                elif final_player_health <= 0 and final_opponent_health > 0:
-                    # Player lost - player is defeated
-                    round_lost = True
-                    termination_reason = "player_defeated"
-                elif final_player_health <= 0 and final_opponent_health <= 0:
-                    # Double KO - treat as draw
-                    round_draw = True
-                    termination_reason = "double_ko"
-                elif episode_steps >= MAX_FIGHT_STEPS:
-                    # Timeout - determine winner by health
-                    if final_player_health > final_opponent_health:
-                        round_won = True
-                        termination_reason = "timeout_win"
-                        self.timeout_wins += 1
-                    elif final_player_health < final_opponent_health:
-                        round_lost = True
-                        termination_reason = "timeout_loss"
-                    else:
-                        round_draw = True
-                        termination_reason = "timeout_draw"
-                else:
-                    # Shouldn't happen, but fallback to draw
-                    round_draw = True
-                    termination_reason = "unknown"
+            # FIXED: Better win/loss detection logic
+            if final_player_health > 0 and final_opponent_health <= 0:
+                # Player won - opponent is defeated
+                round_won = True
+                if episode_steps < MAX_FIGHT_STEPS * 0.5:
+                    is_fast_win = True
+                    self.fast_wins += 1
+            elif final_player_health <= 0 and final_opponent_health > 0:
+                # Player lost - player is defeated
+                round_lost = True
+            else:
+                # Draw case
+                round_draw = True
 
             experience = {
                 "obs": obs,
@@ -468,8 +435,6 @@ class EnhancedTrainer:
                 "image_format": "RGB",
                 "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
                 "enhanced_context": {
-                    "combo_length": combo_frames,
-                    "damage_dealt": damage_dealt,
                     "is_exploration": thinking_info.get("exploration", False),
                     "episode_progress": episode_steps / MAX_FIGHT_STEPS,
                 },
@@ -499,9 +464,7 @@ class EnhancedTrainer:
 
         # Update tracking
         self.performance_history.append(episode_reward / max(1, episode_steps))
-        self.combo_count_history.append(max_combo_length)
         self.speed_history.append(episode_steps / MAX_FIGHT_STEPS)
-        self.termination_reasons.append(termination_reason)
 
         total_matches = self.wins + self.losses + self.draws
         win_rate = safe_divide(self.wins, total_matches, 0.0)
@@ -512,8 +475,6 @@ class EnhancedTrainer:
             "episode_reward": episode_reward,
             "episode_steps": episode_steps,
             "win_result": win_result,
-            "termination_reason": termination_reason,
-            "max_combo_length": max_combo_length,
             "total_damage_dealt": total_damage_dealt,
             "is_fast_win": is_fast_win,
         }
@@ -704,7 +665,6 @@ class EnhancedTrainer:
             episode_reward = episode_info["episode_reward"]
             episode_steps = episode_info["episode_steps"]
             win_result = episode_info["win_result"]
-            termination_reason = episode_info["termination_reason"]
 
             total_matches = self.wins + self.losses + self.draws
             win_rate = safe_divide(self.wins, total_matches, 0.0)
@@ -731,7 +691,6 @@ class EnhancedTrainer:
                 buffer_stats = self.experience_buffer.get_stats()
                 agent_stats = self.agent.get_thinking_stats()
                 avg_reward = safe_mean(list(self.recent_rewards), 0.0)
-                avg_combo = safe_mean(list(self.combo_count_history), 0.0)
                 avg_speed = safe_mean(list(self.speed_history), 1.0)
                 win_rate = safe_mean(list(self.win_rate_history), 0.0)
                 current_lr = self.optimizer.param_groups[0]["lr"]
@@ -742,9 +701,8 @@ class EnhancedTrainer:
                 print(
                     f"   - Result: {win_result}, WinRate: {win_rate:.1%} (Best: {self.best_win_rate:.1%})"
                 )
-                print(f"   - Termination: {termination_reason}")
                 print(f"   - W/L/D: {self.wins}/{self.losses}/{self.draws}")
-                print(f"   - Combos: {avg_combo:.1f}, Speed: {avg_speed:.2f}x")
+                print(f"   - Speed: {avg_speed:.2f}x")
                 print(
                     f"   - Exploration: {agent_stats['exploration_rate']:.1%}, Success: {agent_stats['success_rate']:.1%}"
                 )
@@ -766,7 +724,7 @@ class EnhancedTrainer:
                 self.logger.info(
                     f"Episode {episode}: Reward={episode_reward:.2f}, Steps={episode_steps}, "
                     f"Result={win_result}, WinRate={win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, "
-                    f"AvgCombo={avg_combo:.1f}, AvgSpeed={avg_speed:.2f}, "
+                    f"AvgSpeed={avg_speed:.2f}, "
                     f"Exploration={agent_stats['exploration_rate']:.1%}, "
                     f"BufferSize={buffer_stats['total_size']}, "
                     f"GoodRatio={buffer_stats['good_ratio']:.2f}, "

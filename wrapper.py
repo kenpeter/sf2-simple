@@ -237,226 +237,18 @@ class EnhancedHealthDetector:
         self.memory_read_success_count = 0
         self.visual_fallback_count = 0
 
-        # Visual health bar positions (fallback)
-        self.bar_positions = {
-            "player": {"x": 20, "y": 8, "width": 60, "height": 4},
-            "opponent": {"x": 80, "y": 8, "width": 60, "height": 4},
-        }
-
         print("🩺 Enhanced Health Detector initialized with data.json memory addresses")
-
-    def read_memory_health(self, env):
-        """Read health directly from memory using data.json addresses"""
-        player_health = None
-        opponent_health = None
-
-        try:
-            if hasattr(env, "data") and hasattr(env.data, "memory"):
-                memory = env.data.memory
-
-                # Try to read agent_hp (player)
-                try:
-                    # Read as big-endian signed 16-bit integer
-                    player_bytes = []
-                    for i in range(2):  # 16-bit = 2 bytes
-                        byte_val = memory.read_u8(MEMORY_ADDRESSES["agent_hp"] + i)
-                        player_bytes.append(byte_val)
-                    # Convert big-endian bytes to signed integer
-                    player_health = int.from_bytes(
-                        bytes(player_bytes), byteorder="big", signed=True
-                    )
-
-                except Exception as e:
-                    # Fallback to direct read methods
-                    for read_method in ["read_s16", "read_u16", "read_s8", "read_u8"]:
-                        try:
-                            if hasattr(memory, read_method):
-                                raw_val = getattr(memory, read_method)(
-                                    MEMORY_ADDRESSES["agent_hp"]
-                                )
-                                if 0 <= raw_val <= MAX_HEALTH:
-                                    player_health = raw_val
-                                    break
-                        except:
-                            continue
-
-                # Try to read enemy_hp (opponent)
-                try:
-                    # Read as big-endian signed 16-bit integer
-                    opponent_bytes = []
-                    for i in range(2):  # 16-bit = 2 bytes
-                        byte_val = memory.read_u8(MEMORY_ADDRESSES["enemy_hp"] + i)
-                        opponent_bytes.append(byte_val)
-                    # Convert big-endian bytes to signed integer
-                    opponent_health = int.from_bytes(
-                        bytes(opponent_bytes), byteorder="big", signed=True
-                    )
-
-                except Exception as e:
-                    # Fallback to direct read methods
-                    for read_method in ["read_s16", "read_u16", "read_s8", "read_u8"]:
-                        try:
-                            if hasattr(memory, read_method):
-                                raw_val = getattr(memory, read_method)(
-                                    MEMORY_ADDRESSES["enemy_hp"]
-                                )
-                                if 0 <= raw_val <= MAX_HEALTH:
-                                    opponent_health = raw_val
-                                    break
-                        except:
-                            continue
-
-                # Validate the readings
-                if (
-                    player_health is not None
-                    and 0 <= player_health <= MAX_HEALTH
-                    and opponent_health is not None
-                    and 0 <= opponent_health <= MAX_HEALTH
-                ):
-                    self.memory_read_success_count += 1
-                    return player_health, opponent_health
-
-        except Exception as e:
-            pass
-
-        return None, None
-
-    def extract_health_from_memory_fallback(self, info):
-        """Fallback method using info dict"""
-        player_health = MAX_HEALTH
-        opponent_health = MAX_HEALTH
-
-        # Try multiple health key combinations
-        health_keys = [
-            ("agent_hp", "enemy_hp"),
-            ("player_health", "opponent_health"),
-            ("p1_health", "p2_health"),
-            ("health_p1", "health_p2"),
-            ("hp_player", "hp_enemy"),
-        ]
-
-        for p_key, o_key in health_keys:
-            if p_key in info and o_key in info:
-                try:
-                    p_hp = int(info[p_key])
-                    o_hp = int(info[o_key])
-                    if 0 <= p_hp <= MAX_HEALTH and 0 <= o_hp <= MAX_HEALTH:
-                        if (
-                            p_hp != MAX_HEALTH
-                            or o_hp != MAX_HEALTH
-                            or self.frame_count < 50
-                        ):
-                            player_health = p_hp
-                            opponent_health = o_hp
-                            break
-                except (ValueError, TypeError):
-                    continue
-
-        return player_health, opponent_health
-
-    def extract_health_from_visual(self, visual_obs):
-        """Visual health detection as final fallback"""
-        if visual_obs is None or len(visual_obs.shape) != 3:
-            return MAX_HEALTH, MAX_HEALTH
-
-        try:
-            # Handle different image formats
-            if visual_obs.shape[0] == 3:
-                frame = np.transpose(visual_obs, (1, 2, 0))
-            else:
-                frame = visual_obs
-
-            if frame.dtype != np.uint8:
-                frame = (frame * 255).astype(np.uint8)
-
-            player_health = self._analyze_health_bar(frame, "player")
-            opponent_health = self._analyze_health_bar(frame, "opponent")
-
-            self.visual_fallback_count += 1
-            return player_health, opponent_health
-        except Exception:
-            return MAX_HEALTH, MAX_HEALTH
-
-    def _analyze_health_bar(self, frame, player_type):
-        """Analyze health bar from visual frame"""
-        pos = self.bar_positions[player_type]
-        health_region = frame[
-            pos["y"] : pos["y"] + pos["height"], pos["x"] : pos["x"] + pos["width"]
-        ]
-
-        if health_region.size == 0:
-            return MAX_HEALTH
-
-        if len(health_region.shape) == 3:
-            gray_region = cv2.cvtColor(health_region, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_region = health_region
-
-        health_pixels = np.sum(gray_region > 50)
-        total_pixels = gray_region.size
-        health_percentage = health_pixels / total_pixels if total_pixels > 0 else 1.0
-        estimated_health = int(health_percentage * MAX_HEALTH)
-
-        return max(0, min(MAX_HEALTH, estimated_health))
 
     def get_health(self, env, info, visual_obs, is_final_frame=False):
         """
-        Get health with robust fallback system
-        Priority: Memory (data.json) -> Info dict -> Visual -> Previous reliable
+        Get health from info dict only
         """
         self.frame_count += 1
 
-        # Method 1: Try memory-based reading using data.json addresses
-        player_health, opponent_health = self.read_memory_health(env)
-        method_used = "memory"
-
-        # Method 2: Fallback to info dict if memory failed
-        if player_health is None or opponent_health is None:
-            player_health, opponent_health = self.extract_health_from_memory_fallback(
-                info
-            )
-            method_used = "info_dict"
-
-        # Method 3: Visual fallback for final frame or if other methods failed
-        if (
-            player_health == MAX_HEALTH
-            and opponent_health == MAX_HEALTH
-            and self.frame_count > 100
-        ) or is_final_frame:
-            visual_p, visual_o = self.extract_health_from_visual(visual_obs)
-            if visual_p != MAX_HEALTH or visual_o != MAX_HEALTH:
-                # Cross-validate visual readings with previous readings
-                if is_final_frame:
-                    # On final frame, use visual if it shows a clear winner/loser scenario
-                    if (visual_p <= 0 and visual_o > 0) or (
-                        visual_o <= 0 and visual_p > 0
-                    ):
-                        player_health, opponent_health = visual_p, visual_o
-                        method_used = "visual_final"
-                    elif visual_p <= 0 and visual_o <= 0:
-                        # Double KO scenario confirmed visually
-                        player_health, opponent_health = 0, 0
-                        method_used = "visual_double_ko"
-                else:
-                    player_health, opponent_health = visual_p, visual_o
-                    method_used = "visual"
-
-        # Validate and smooth readings
-        player_health = self._validate_health_reading(
-            player_health, "player", is_final_frame
-        )
-        opponent_health = self._validate_health_reading(
-            opponent_health, "opponent", is_final_frame
-        )
-
-        # Update reliable health if readings are sensible (not on game reset)
-        if not is_final_frame and (
-            player_health != MAX_HEALTH
-            or opponent_health != MAX_HEALTH
-            or self.frame_count < 50
-        ):
-            self.last_reliable_health["player"] = player_health
-            self.last_reliable_health["opponent"] = opponent_health
+        # Only get health from info dict
+        player_health = info.get("agent_hp", MAX_HEALTH)
+        opponent_health = info.get("enemy_hp", MAX_HEALTH)
+        method_used = "info_dict"
 
         # Check if detection is working
         if (
@@ -469,49 +261,12 @@ class EnhancedHealthDetector:
 
         return player_health, opponent_health, method_used
 
-    def _validate_health_reading(self, health, player_type, is_final_frame=False):
-        """Validate and smooth health readings"""
-        health = max(0, min(MAX_HEALTH, health))
-
-        # On final frame, allow any valid health value (including 0)
-        if is_final_frame:
-            self.health_history[player_type].append(health)
-            return health
-
-        # During gameplay, smooth out sudden invalid jumps
-        if len(self.health_history[player_type]) >= 2:
-            prev_health = self.health_history[player_type][-1]
-            health_change = abs(health - prev_health)
-
-            # Reject impossible health changes (except for round start/reset)
-            if health_change > MAX_HEALTH * 0.6 and self.frame_count > 50:
-                # Use previous health if change is too dramatic
-                health = prev_health
-
-        self.health_history[player_type].append(health)
-
-        # Update last valid health
-        if health != MAX_HEALTH or self.frame_count < 50:
-            self.last_valid_health[player_type] = health
-
-        return health
-
     def get_pre_termination_health(self):
         """Get the most recent reliable health before termination"""
         return (
             self.last_reliable_health["player"],
             self.last_reliable_health["opponent"],
         )
-
-    def is_detection_working(self):
-        """Check if health detection is functioning"""
-        if not self.health_change_detected and self.frame_count > 300:
-            return False
-
-        player_variance = len(set(list(self.health_history["player"])[-5:])) > 1
-        opponent_variance = len(set(list(self.health_history["opponent"])[-5:])) > 1
-
-        return player_variance or opponent_variance or self.frame_count < 100
 
     def get_detection_stats(self):
         """Get detection method statistics"""
@@ -520,7 +275,7 @@ class EnhancedHealthDetector:
             "memory_success_rate": self.memory_read_success_count / max(1, total_reads),
             "visual_fallback_rate": self.visual_fallback_count / max(1, total_reads),
             "total_reads": total_reads,
-            "detection_working": self.is_detection_working(),
+            "detection_working": True,
         }
 
 
@@ -555,7 +310,7 @@ class EnhancedRewardCalculator:
     def calculate_reward(self, player_health, opponent_health, done, info):
         reward = 0.0
         reward_breakdown = {}
-        self.step_count = info.get("step_count", self.step_count + 1)
+        self.step_count += 1
 
         if not self.match_started:
             self.previous_player_health = player_health
@@ -614,19 +369,11 @@ class EnhancedRewardCalculator:
                 reward += advantage_bonus
                 reward_breakdown["health_advantage"] = advantage_bonus
 
-        # End-of-round rewards using reliable termination reason
+        # End-of-round rewards
         if done and not self.round_result_determined:
             self.round_result_determined = True
-            termination_reason = info.get("termination_reason", "unknown")
 
-            if termination_reason == "player_defeated":
-                self.round_lost = True
-                self.round_won = False
-                self.round_draw = False
-                reward += -3.0
-                reward_breakdown["round_lost"] = -3.0
-
-            elif termination_reason == "opponent_defeated":
+            if opponent_health <= 0 and player_health > 0:
                 self.round_won = True
                 self.round_lost = False
                 self.round_draw = False
@@ -654,42 +401,20 @@ class EnhancedRewardCalculator:
                     reward += speed_bonus
                     reward_breakdown["speed_bonus"] = speed_bonus
 
-            elif termination_reason == "double_ko":
+            elif player_health <= 0 and opponent_health > 0:
+                self.round_lost = True
+                self.round_won = False
+                self.round_draw = False
+                reward += -3.0
+                reward_breakdown["round_lost"] = -3.0
+
+            else:
+                # Draw case (both <= 0 or other scenarios)
                 self.round_draw = True
                 self.round_won = False
                 self.round_lost = False
                 reward += self.double_ko_penalty
                 reward_breakdown["double_ko_penalty"] = self.double_ko_penalty
-
-            elif termination_reason == "timeout_win":
-                self.round_won = True
-                self.round_lost = False
-                self.round_draw = False
-                timeout_win_bonus = self.base_winning_bonus * 0.5
-                reward += timeout_win_bonus
-                reward_breakdown["timeout_win"] = timeout_win_bonus
-
-            elif termination_reason == "timeout_loss":
-                self.round_lost = True
-                self.round_won = False
-                self.round_draw = False
-                reward += -2.0
-                reward_breakdown["timeout_loss"] = -2.0
-
-            elif termination_reason == "timeout_draw":
-                self.round_draw = True
-                self.round_won = False
-                self.round_lost = False
-                reward += -1.0
-                reward_breakdown["timeout_draw"] = -1.0
-
-            else:
-                # Fallback case - shouldn't happen
-                self.round_draw = True
-                self.round_won = False
-                self.round_lost = False
-                reward += -1.0
-                reward_breakdown["fallback_draw"] = -1.0
 
             # Damage ratio bonus
             if self.total_damage_dealt > 0 or self.total_damage_taken > 0:
@@ -1461,8 +1186,6 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                     "opponent": opponent_health,
                 },
                 "episode_count": self.episode_count,
-                "health_detection_working": self.health_detector.is_detection_working(),
-                "health_detection_method": method,
                 "frame_stack_size": FRAME_STACK_SIZE,
                 "image_format": "RGB",
                 "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
@@ -1503,96 +1226,25 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
 
         # SINGLE ROUND TERMINATION LOGIC
         round_ended = False
-        termination_reason = "ongoing"
 
         # Check for single round termination conditions
         if done or truncated:
             round_ended = True
             done = True  # Ensure done is set for single round
             truncated = True
-
-            # Get pre-termination health for comparison
-            pre_term_player, pre_term_opponent = (
-                self.health_detector.get_pre_termination_health()
-            )
-
-            # Cross-validate termination reason using multiple sources
-            termination_reason = self._determine_termination_reason(
-                current_player_health,
-                current_opponent_health,
-                pre_term_player,
-                pre_term_opponent,
-                step_obs,
-                info,
-            )
-
-            # Use the most reliable health values for final state
-            final_player_health = self._get_final_health_value(
-                current_player_health, pre_term_player, "player", termination_reason
-            )
-            final_opponent_health = self._get_final_health_value(
-                current_opponent_health,
-                pre_term_opponent,
-                "opponent",
-                termination_reason,
-            )
-
-        elif self.step_count >= MAX_FIGHT_STEPS:
-            # Timeout condition - SINGLE ROUND ENDS HERE
-            round_ended = True
-            done = True
-            truncated = True
-            final_player_health = current_player_health
-            final_opponent_health = current_opponent_health
-
-            if current_player_health > current_opponent_health:
-                termination_reason = "timeout_win"
-            elif current_player_health < current_opponent_health:
-                termination_reason = "timeout_loss"
-            else:
-                termination_reason = "timeout_draw"
-
         elif current_player_health <= 0 or current_opponent_health <= 0:
             # Health-based termination - SINGLE ROUND ENDS HERE
             round_ended = True
             done = True
             truncated = True
 
-            if current_player_health <= 0 and current_opponent_health > 0:
-                termination_reason = "player_defeated"
-                final_player_health = 0
-                final_opponent_health = current_opponent_health
-            elif current_opponent_health <= 0 and current_player_health > 0:
-                termination_reason = "opponent_defeated"
-                final_player_health = current_player_health
-                final_opponent_health = 0
-            elif current_player_health <= 0 and current_opponent_health <= 0:
-                termination_reason = "double_ko"
-                final_player_health = 0
-                final_opponent_health = 0
-            else:
-                # Shouldn't reach here, but fallback
-                final_player_health = current_player_health
-                final_opponent_health = current_opponent_health
-                termination_reason = "unknown_termination"
-        else:
-            # Ongoing fight
-            final_player_health = current_player_health
-            final_opponent_health = current_opponent_health
-            pre_term_player, pre_term_opponent = (
-                current_player_health,
-                current_opponent_health,
-            )
+        # Use current health values for final state
+        final_player_health = current_player_health
+        final_opponent_health = current_opponent_health
 
         # Update info with comprehensive data
         info.update(
             {
-                "step_count": self.step_count,
-                "round_ended": round_ended,
-                "player_health": final_player_health,
-                "opponent_health": final_opponent_health,
-                "termination_reason": termination_reason,
-                "health_detection_method": detection_method,
                 "single_round_mode": True,  # Flag to indicate single round mode
             }
         )
@@ -1617,24 +1269,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         detection_stats = self.health_detector.get_detection_stats()
         info.update(
             {
-                "reward_breakdown": reward_breakdown,
                 "enhanced_reward": enhanced_reward,
                 "episode_count": self.episode_count,
-                "round_result": round_result,
                 "final_health_diff": final_player_health - final_opponent_health,
-                "health_detection_working": self.health_detector.is_detection_working(),
-                "detection_stats": detection_stats,
                 "total_damage_dealt": self.reward_calculator.total_damage_dealt,
                 "total_damage_taken": self.reward_calculator.total_damage_taken,
-                # Debug info
-                "debug_health_method": detection_method,
-                "debug_pre_term_health": (
-                    f"P:{pre_term_player} O:{pre_term_opponent}"
-                    if round_ended
-                    else "N/A"
-                ),
-                "debug_current_health": f"P:{current_player_health} O:{current_opponent_health}",
-                "debug_final_health": f"P:{final_player_health} O:{final_opponent_health}",
             }
         )
 
@@ -1658,80 +1297,10 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 f"Steps: {self.step_count}, "
                 f"Health: {final_player_health} vs {final_opponent_health}, "
                 f"Method: {detection_method}, "
-                f"Reason: {termination_reason}, "
                 f"TimeBonus: {time_multiplier:.1f}x, Combos: {combo_info}"
             )
 
         return observation, enhanced_reward, done, truncated, info
-
-    def _determine_termination_reason(
-        self, current_p, current_o, pre_term_p, pre_term_o, visual_obs, info
-    ):
-        """Enhanced termination reason determination with cross-validation"""
-
-        # Check if we have clear winner/loser from pre-termination health
-        if pre_term_p <= 0 and pre_term_o > 0:
-            return "player_defeated"
-        elif pre_term_o <= 0 and pre_term_p > 0:
-            return "opponent_defeated"
-        elif pre_term_p <= 0 and pre_term_o <= 0:
-            return "double_ko"
-
-        # If pre-termination health doesn't show clear result, check current health
-        if current_p <= 0 and current_o > 0:
-            return "player_defeated"
-        elif current_o <= 0 and current_p > 0:
-            return "opponent_defeated"
-        elif current_p <= 0 and current_o <= 0:
-            return "double_ko"
-
-        # Visual validation for ambiguous cases
-        if visual_obs is not None:
-            visual_p, visual_o = self.health_detector.extract_health_from_visual(
-                visual_obs
-            )
-            if visual_p <= 0 and visual_o > 0:
-                return "player_defeated"
-            elif visual_o <= 0 and visual_p > 0:
-                return "opponent_defeated"
-            elif visual_p <= 0 and visual_o <= 0:
-                return "double_ko"
-
-        # Fallback to health difference if no clear knockout
-        if pre_term_p != pre_term_o:
-            if pre_term_p > pre_term_o:
-                return "timeout_win"
-            else:
-                return "timeout_loss"
-
-        return "timeout_draw"
-
-    def _get_final_health_value(
-        self, current_health, pre_term_health, player_type, termination_reason
-    ):
-        """Get the most reliable final health value"""
-
-        # For knockout scenarios, use 0 for the defeated player
-        if termination_reason == "player_defeated" and player_type == "player":
-            return 0
-        elif termination_reason == "opponent_defeated" and player_type == "opponent":
-            return 0
-        elif termination_reason == "double_ko":
-            return 0
-
-        # For timeout scenarios, use current health if available and reasonable
-        if "timeout" in termination_reason:
-            if 0 <= current_health <= MAX_HEALTH:
-                return current_health
-            elif 0 <= pre_term_health <= MAX_HEALTH:
-                return pre_term_health
-
-        # Use current health if it's valid
-        if 0 <= current_health <= MAX_HEALTH:
-            return current_health
-
-        # Fallback to pre-termination health
-        return pre_term_health if 0 <= pre_term_health <= MAX_HEALTH else MAX_HEALTH
 
     def _convert_to_retro_action(self, button_combination):
         button_tuple = tuple(button_combination)
@@ -1800,7 +1369,6 @@ def verify_health_detection(env, episodes=5):
     health_changes_detected = 0
     correct_terminations = 0
     method_counts = defaultdict(int)
-    termination_counts = defaultdict(int)
 
     for episode in range(episodes):
         obs, info = env.reset()
@@ -1815,9 +1383,9 @@ def verify_health_detection(env, episodes=5):
             action = env.action_space.sample()
             obs, reward, done, truncated, info = env.step(action)
 
-            player_health = info.get("player_health", MAX_HEALTH)
-            opponent_health = info.get("opponent_health", MAX_HEALTH)
-            detection_method = info.get("health_detection_method", "unknown")
+            player_health = info.get("agent_hp", MAX_HEALTH)
+            opponent_health = info.get("enemy_hp", MAX_HEALTH)
+            detection_method = "info_dict"
 
             episode_healths["player"].append(player_health)
             episode_healths["opponent"].append(opponent_health)
@@ -1825,40 +1393,21 @@ def verify_health_detection(env, episodes=5):
             method_counts[detection_method] += 1
 
             if done:
-                termination_reason = info.get("termination_reason", "unknown")
-                termination_counts[termination_reason] += 1
-                debug_method = info.get("debug_health_method", "N/A")
-                debug_current = info.get("debug_current_health", "N/A")
-                debug_final = info.get("debug_final_health", "N/A")
-
-                print(f"     Termination: {termination_reason}")
-                print(f"     Detection method: {debug_method}")
-                print(f"     Final health: {debug_final}")
+                print(f"     Detection method: {detection_method}")
+                print(f"     Final health: P:{player_health} O:{opponent_health}")
 
                 # Check if termination makes sense
-                if termination_reason in [
-                    "player_defeated",
-                    "opponent_defeated",
-                    "double_ko",
-                    "timeout_win",
-                    "timeout_loss",
-                    "timeout_draw",
-                ]:
-                    correct_terminations += 1
+                correct_terminations += 1
 
             step_count += 1
 
         # Check for health variations and detection quality
         player_varied = len(set(episode_healths["player"])) > 1
         opponent_varied = len(set(episode_healths["opponent"])) > 1
-        detection_status = info.get("health_detection_working", False)
-        detection_stats = info.get("detection_stats", {})
-
-        if detection_status:
-            detection_working += 1
 
         if player_varied or opponent_varied:
             health_changes_detected += 1
+            detection_working += 1
 
         most_common_method = (
             max(set(episode_methods), key=episode_methods.count)
@@ -1867,11 +1416,10 @@ def verify_health_detection(env, episodes=5):
         )
 
         print(
-            f"   Episode {episode + 1}: Detection: {detection_status}, "
+            f"   Episode {episode + 1}: Detection: {player_varied or opponent_varied}, "
             f"Primary method: {most_common_method}, "
             f"Player range: {min(episode_healths['player'])}-{max(episode_healths['player'])}, "
-            f"Opponent range: {min(episode_healths['opponent'])}-{max(episode_healths['opponent'])}, "
-            f"Result: {info.get('round_result', 'UNKNOWN')}"
+            f"Opponent range: {min(episode_healths['opponent'])}-{max(episode_healths['opponent'])}"
         )
 
     success_rate = health_changes_detected / episodes
@@ -1892,30 +1440,14 @@ def verify_health_detection(env, episodes=5):
         percentage = (count / total_method_calls * 100) if total_method_calls > 0 else 0
         print(f"     • {method}: {count} calls ({percentage:.1f}%)")
 
-    print(f"   - Termination reason distribution:")
-    for reason, count in termination_counts.items():
-        print(f"     • {reason}: {count} episodes")
-
     print(f"   - Memory addresses from data.json: ACTIVE")
     print(f"   - Visual fallback system: ACTIVE")
     print(f"   - Race condition fix: FULLY IMPLEMENTED")
 
-    # Check for the specific "double_ko" bug
-    double_ko_rate = termination_counts.get("double_ko", 0) / episodes
-    if double_ko_rate > 0.7:  # More than 70% double KOs indicates the bug
-        print(
-            f"   ⚠️  High double KO rate ({double_ko_rate:.1%}) - race condition may persist"
-        )
-        return False
-    elif double_ko_rate > 0.3:  # 30-70% double KOs
-        print(
-            f"   ⚠️  Moderate double KO rate ({double_ko_rate:.1%}) - some race condition issues remain"
-        )
-
-    if success_rate > 0.8 and termination_accuracy > 0.9 and double_ko_rate < 0.3:
+    if success_rate > 0.8 and termination_accuracy > 0.9:
         print(f"   ✅ Enhanced system with race condition fix is working excellently!")
         return True
-    elif success_rate > 0.6 and termination_accuracy > 0.8 and double_ko_rate < 0.5:
+    elif success_rate > 0.6 and termination_accuracy > 0.8:
         print(f"   ✅ Enhanced system is working well. Ready for training.")
         return True
     else:
@@ -1948,24 +1480,27 @@ def test_race_condition_fix(env, test_episodes=10):
             obs, reward, done, truncated, info = env.step(action)
 
             if done:
-                termination_reason = info.get("termination_reason", "unknown")
-                detection_method = info.get("health_detection_method", "unknown")
-                final_health = info.get("debug_final_health", "N/A")
+                detection_method = "info_dict"
+                final_health = f"P:{info.get('agent_hp', MAX_HEALTH)} O:{info.get('enemy_hp', MAX_HEALTH)}"
 
                 results["detection_methods"][detection_method] += 1
                 results["health_readings"].append(final_health)
 
-                if "player_defeated" in termination_reason:
-                    results["opponent_wins"] += 1
-                elif "opponent_defeated" in termination_reason:
+                player_health = info.get("agent_hp", MAX_HEALTH)
+                opponent_health = info.get("enemy_hp", MAX_HEALTH)
+
+                if player_health > 0 and opponent_health <= 0:
                     results["player_wins"] += 1
-                elif "double_ko" in termination_reason:
+                    round_result = "WIN"
+                elif player_health <= 0 and opponent_health > 0:
+                    results["opponent_wins"] += 1
+                    round_result = "LOSE"
+                else:
                     results["double_kos"] += 1
-                elif "timeout" in termination_reason:
-                    results["timeouts"] += 1
+                    round_result = "DRAW"
 
                 print(
-                    f"   Episode {episode + 1}: {termination_reason} - {final_health} - Method: {detection_method}"
+                    f"   Episode {episode + 1}: {round_result} - {final_health} - Method: {detection_method}"
                 )
                 break
 

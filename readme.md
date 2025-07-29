@@ -30,6 +30,8 @@ python train.py \
 
 
 
+python train.py --num_episodes 2000 --batch_size 128 --learning_rate 2e-4 --thinking_steps 8 --buffer_capacity 50000 --train_frequency 2 --log_frequency 5
+
 
 # data.json 
 {
