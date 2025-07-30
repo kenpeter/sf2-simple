@@ -241,7 +241,7 @@ class EnhancedHealthDetector:
 
     def get_health(self, env, info, visual_obs, is_final_frame=False):
         """
-        Get health from info dict only
+        Get health from info dict only, with proper bounds checking
         """
         self.frame_count += 1
 
@@ -249,6 +249,24 @@ class EnhancedHealthDetector:
         player_health = info.get("agent_hp", MAX_HEALTH)
         opponent_health = info.get("enemy_hp", MAX_HEALTH)
         method_used = "info_dict"
+
+        # Fix negative health values - clamp to 0 minimum
+        player_health = max(0, player_health)
+        opponent_health = max(0, opponent_health)
+
+        # Ensure health doesn't exceed maximum
+        player_health = min(MAX_HEALTH, player_health)
+        opponent_health = min(MAX_HEALTH, opponent_health)
+
+        # Update history
+        self.health_history["player"].append(player_health)
+        self.health_history["opponent"].append(opponent_health)
+
+        # Update last reliable health if values are reasonable
+        if 0 <= player_health <= MAX_HEALTH:
+            self.last_reliable_health["player"] = player_health
+        if 0 <= opponent_health <= MAX_HEALTH:
+            self.last_reliable_health["opponent"] = opponent_health
 
         # Check if detection is working
         if (
@@ -891,7 +909,7 @@ class SimpleVerifier(nn.Module):
         return energy
 
 
-# AggressiveAgent with thinking optimization
+# AggressiveAgent with thinking optimization - FIXED
 class AggressiveAgent:
     def __init__(
         self,
@@ -904,8 +922,12 @@ class AggressiveAgent:
         self.thinking_lr = thinking_lr
         self.action_dim = verifier.action_dim
         self.epsilon = 0.40
-        self.epsilon_decay = 0.999
-        self.min_epsilon = 0.10
+        self.epsilon_decay = 0.9995  # Fixed: slower decay
+        self.min_epsilon = 0.15  # Fixed: higher minimum
+
+        # Add action tracking for diversity
+        self.action_counts = defaultdict(int)
+        self.total_actions = 0
 
         self.stats = {
             "total_predictions": 0,
@@ -934,9 +956,20 @@ class AggressiveAgent:
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # Exploration vs exploitation
+        # Fixed: Better exploration strategy with action diversity
         if not deterministic and np.random.random() < self.epsilon:
-            action_idx = np.random.randint(0, self.action_dim)
+            # Bias toward less-used actions for diversity
+            action_probs = np.ones(self.action_dim)
+            for action_idx in range(self.action_dim):
+                count = self.action_counts[action_idx]
+                # Reduce probability for frequently used actions
+                action_probs[action_idx] = 1.0 / (1.0 + count * 0.1)
+
+            action_probs = action_probs / action_probs.sum()
+            action_idx = np.random.choice(self.action_dim, p=action_probs)
+
+            self.action_counts[action_idx] += 1
+            self.total_actions += 1
             self.stats["exploration_actions"] += 1
             self.stats["total_predictions"] += 1
 
@@ -945,25 +978,34 @@ class AggressiveAgent:
                 "final_energy": 0.0,
                 "exploration": True,
                 "epsilon": self.epsilon,
+                "action_diversity": len(self.action_counts)
+                / max(1, self.total_actions),
             }
             return action_idx, thinking_info
 
         self.stats["exploitation_actions"] += 1
 
-        # Initialize candidate action
+        # Initialize candidate action with better initialization
         if deterministic:
             candidate_action = (
                 torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
             )
         else:
-            candidate_action = (
-                torch.randn(batch_size, self.action_dim, device=device) * 0.01
-            )
-            candidate_action = F.softmax(candidate_action, dim=-1)
+            # Add bias toward less-used actions in exploitation too
+            action_probs = np.ones(self.action_dim)
+            for action_idx in range(self.action_dim):
+                count = self.action_counts[action_idx]
+                action_probs[action_idx] = 1.0 / (1.0 + count * 0.05)
+
+            action_probs = action_probs / action_probs.sum()
+            candidate_action = torch.from_numpy(action_probs).float().to(device)
+            candidate_action = candidate_action.unsqueeze(0).repeat(batch_size, 1)
+            # Add small noise
+            candidate_action += torch.randn_like(candidate_action) * 0.01
 
         candidate_action.requires_grad_(True)
 
-        # Thinking optimization
+        # Thinking optimization with better convergence
         best_energy = float("inf")
         best_action = candidate_action.clone().detach()
 
@@ -975,6 +1017,7 @@ class AggressiveAgent:
                 if current_energy < best_energy:
                     best_energy = current_energy
                     best_action = candidate_action.clone().detach()
+                    self.stats["successful_optimizations"] += 1
 
                 # Calculate gradients
                 gradients = torch.autograd.grad(
@@ -984,9 +1027,9 @@ class AggressiveAgent:
                     retain_graph=False,
                 )[0]
 
-                # Update candidate action
+                # Update candidate action with adaptive step size
                 with torch.no_grad():
-                    step_size = self.thinking_lr * (0.85**step)
+                    step_size = self.thinking_lr * (0.9**step)  # Fixed: slower decay
                     candidate_action = candidate_action - step_size * gradients
                     candidate_action = F.softmax(candidate_action, dim=-1)
                     candidate_action.requires_grad_(True)
@@ -995,21 +1038,25 @@ class AggressiveAgent:
                 candidate_action = best_action
                 break
 
-        # Final action selection
+        # Final action selection with better sampling
         with torch.no_grad():
             final_action_probs = F.softmax(candidate_action, dim=-1)
 
             if deterministic:
                 action_idx = torch.argmax(final_action_probs, dim=-1)
             else:
-                if torch.rand(1).item() < 0.15:
-                    action_idx = torch.randint(
-                        0, self.action_dim, (batch_size,), device=device
-                    )
-                else:
-                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
+                # Fixed: Use temperature sampling for better exploration
+                temperature = 0.8
+                scaled_probs = F.softmax(final_action_probs / temperature, dim=-1)
+                action_idx = torch.multinomial(scaled_probs, 1).squeeze(-1)
 
-        # Update epsilon
+        # Update action tracking
+        final_action = action_idx.item() if batch_size == 1 else action_idx
+        if isinstance(final_action, int):
+            self.action_counts[final_action] += 1
+            self.total_actions += 1
+
+        # Update epsilon more conservatively
         if not deterministic:
             self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
@@ -1021,9 +1068,10 @@ class AggressiveAgent:
             "energy_improvement": best_energy < 0,
             "exploration": False,
             "epsilon": self.epsilon,
+            "action_diversity": len(self.action_counts) / max(1, self.total_actions),
         }
 
-        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
+        return final_action, thinking_info
 
     def get_thinking_stats(self) -> Dict:
         stats = self.stats.copy()
@@ -1039,6 +1087,7 @@ class AggressiveAgent:
             stats["exploration_rate"] = 0.0
 
         stats["current_epsilon"] = self.epsilon
+        stats["action_diversity"] = len(self.action_counts) / max(1, self.total_actions)
         return stats
 
 
@@ -1571,4 +1620,5 @@ print(
 print(f"   - ✅ Time-decayed rewards and aggressive exploration: ACTIVE")
 print(f"   - ✅ Transformer context sequence: ENABLED")
 print(f"   - ✅ Race condition fix: FULLY IMPLEMENTED")
+print(f"   - ✅ Action diversity and exploration fixes: ACTIVE")
 print(f"🎯 Ready for robust SINGLE ROUND training with accurate win/loss detection!")
