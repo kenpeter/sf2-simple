@@ -725,120 +725,6 @@ class EnhancedTrainer:
             "contrastive_loss": contrastive_loss.item(),
         }
 
-    def train(self):
-        print(f"🎮 Starting ENHANCED RGB training with Transformer (SYNC FIXED)...")
-        print(f"   - Total episodes: {self.args.num_episodes}")
-        print(f"   - Batch size: {self.args.batch_size}")
-        print(f"   - Initial learning rate: {self.args.learning_rate:.2e}")
-        print(f"   - Weight decay: {self.args.weight_decay:.2e}")
-        print(f"   - Initial exploration: {self.agent.epsilon:.1%}")
-        print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
-        print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
-        print(f"   - Transformer context sequence: ENABLED")
-        print(f"   - Episode-data synchronization: FIXED")
-
-        start_time = time.time()
-
-        for episode in range(self.episode, self.args.num_episodes):
-            # SYNC FIX: Store episode state BEFORE running episode
-            pre_episode_state = {
-                "wins": self.wins,
-                "losses": self.losses,
-                "draws": self.draws,
-                "timestamp": time.time(),
-            }
-
-            self.episode = episode
-            episode_info = self.run_episode()
-
-            # SYNC FIX: Store this episode's complete data immediately
-            post_episode_state = {
-                "wins": self.wins,
-                "losses": self.losses,
-                "draws": self.draws,
-                "timestamp": time.time(),
-            }
-
-            # Calculate changes for this specific episode
-            wins_this_episode = post_episode_state["wins"] - pre_episode_state["wins"]
-            losses_this_episode = (
-                post_episode_state["losses"] - pre_episode_state["losses"]
-            )
-            draws_this_episode = (
-                post_episode_state["draws"] - pre_episode_state["draws"]
-            )
-
-            # Store complete episode data
-            self.episode_data[episode] = {
-                "reward": episode_info["episode_reward"],
-                "steps": episode_info["episode_steps"],
-                "result": episode_info["win_result"],
-                "wins_total": post_episode_state["wins"],
-                "losses_total": post_episode_state["losses"],
-                "draws_total": post_episode_state["draws"],
-                "wins_change": wins_this_episode,
-                "losses_change": losses_this_episode,
-                "draws_change": draws_this_episode,
-                "timestamp": post_episode_state["timestamp"],
-            }
-
-            episode_reward = episode_info["episode_reward"]
-            episode_steps = episode_info["episode_steps"]
-            win_result = episode_info["win_result"]
-
-            total_matches = self.wins + self.losses + self.draws
-            win_rate = safe_divide(self.wins, total_matches, 0.0)
-
-            if win_rate > self.best_win_rate:
-                self.best_win_rate = win_rate
-                self.save_checkpoint(episode)
-
-            # Training step
-            if (
-                episode % self.args.train_frequency == 0
-                and self.experience_buffer.total_added >= self.args.batch_size
-            ):
-                train_info = self.train_step()
-                if train_info:
-                    self.logger.info(
-                        f"Episode {episode}: Loss={train_info['loss']:.4f}, "
-                        f"EnergyLoss={train_info['energy_loss']:.4f}, "
-                        f"ContrastiveLoss={train_info['contrastive_loss']:.4f}"
-                    )
-
-            # SYNC FIX: Immediate logging with correct data
-            if episode % self.args.log_frequency == 0:
-                self._log_synchronized_summary(episode)
-
-            # Check for plateau and reboot if needed
-            if (
-                episode - self.last_reboot_episode > 75
-                and self.detect_learning_plateau()
-            ):
-                self.reboot_learning_rate()
-
-            # Save checkpoint
-            if episode % self.args.save_frequency == 0:
-                self.save_checkpoint(episode)
-
-        self.env.close()
-        final_win_rate = safe_divide(
-            self.wins, self.wins + self.losses + self.draws, 0.0
-        )
-        print(f"\n🏁 Training completed!")
-        print(f"   - Total episodes: {self.episode}")
-        print(f"   - Final win rate: {final_win_rate:.1%}")
-        print(f"   - Best win rate: {self.best_win_rate:.1%}")
-        print(f"   - Total steps: {self.total_steps}")
-        print(f"   - Fast wins: {self.fast_wins}, Timeouts: {self.timeout_wins}")
-        print(f"   - Learning rate reboots: {self.reboot_count}")
-        print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
-        print(f"   - Transformer context sequence: ENABLED")
-        print(f"   - Episode synchronization: VERIFIED ✅")
-        self.logger.info(
-            f"Training completed: Episodes={self.episode}, WinRate={final_win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, Reboots={self.reboot_count}"
-        )
-
     def _log_synchronized_summary(self, episode):
         """SYNC FIX: Log with data that actually corresponds to the episode number"""
         if episode not in self.episode_data:
@@ -1077,7 +963,7 @@ def main():
     parser.add_argument(
         "--train_frequency",
         type=int,
-        default=2,
+        default=1,
         help="Train every N episodes (REDUCED)",
     )
     parser.add_argument(

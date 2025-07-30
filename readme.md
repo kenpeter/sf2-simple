@@ -16,7 +16,7 @@ python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --featur
 
 # cli 
 python train.py \
---num_episodes 100 \
+--num_episodes 500 \
 --batch_size 64 \
 --learning_rate 5e-4 \
 --features_dim 256 \
@@ -33,6 +33,8 @@ python train.py \
 --max_episode_steps 3500 \
 --weight_decay 5e-6 \
 --tau 0.005
+--load_checkpoint checkpoints/enhanced_rgb_checkpoint_ep_9.pth
+
 
 # data.json 
 {
