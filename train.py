@@ -225,6 +225,7 @@ class EnhancedTrainer:
             features_dim=args.features_dim,
         ).to(self.device)
         self.target_verifier.load_state_dict(self.verifier.state_dict())
+        # network into eval mode so frozen
         self.target_verifier.eval()  # Target network is only for inference
 
         self.agent = AggressiveAgent(
@@ -711,6 +712,7 @@ class EnhancedTrainer:
 
         # MODIFIED: Update the target network via polyak averaging
         with torch.no_grad():
+            # copy finished student to the target
             for target_param, param in zip(
                 self.target_verifier.parameters(), self.verifier.parameters()
             ):
@@ -963,7 +965,7 @@ def main():
     parser.add_argument(
         "--train_frequency",
         type=int,
-        default=1,
+        default=2,
         help="Train every N episodes (REDUCED)",
     )
     parser.add_argument(
