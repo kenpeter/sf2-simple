@@ -444,7 +444,9 @@ class EnhancedRewardCalculator:
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
         # Step penalty to encourage faster resolution
-        step_penalty = -0.01
+        step_penalty = (
+            -0.001
+        )  # MODIFIED: Reduced penalty to allow for more patient strategies
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
 

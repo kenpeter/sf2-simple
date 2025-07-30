@@ -128,13 +128,16 @@ class ReservoirExperienceBuffer:
         return np.clip(diversity, 0.0, 1.0)
 
     def sample_balanced_batch(self, batch_size):
+        # MODIFIED: Sample 40% "good" and 60% "bad" to better learn from mistakes
+        good_count = int(batch_size * 0.4)
+        bad_count = batch_size - good_count
+
         if (
-            len(self.good_experiences) < batch_size // 4
-            or len(self.bad_experiences) < batch_size // 4
+            len(self.good_experiences) < good_count
+            or len(self.bad_experiences) < bad_count
         ):
-            return None, None
-        good_count = batch_size // 2
-        bad_count = batch_size // 2
+            return None, None  # Wait for enough diverse samples to be collected
+
         good_batch = self._sample_with_diversity_bias(self.good_experiences, good_count)
         bad_batch = self._sample_with_diversity_bias(self.bad_experiences, bad_count)
         return good_batch, bad_batch
@@ -205,11 +208,25 @@ class EnhancedTrainer:
         )
         print(f"   - Image size: {SCREEN_WIDTH} x {SCREEN_HEIGHT}")
         print(f"🧠 Initializing enhanced RGB models with Transformer...")
+
+        # we have verifier
         self.verifier = SimpleVerifier(
             observation_space=self.env.observation_space,
             action_space=self.env.action_space,
             features_dim=args.features_dim,
         ).to(self.device)
+
+        # MODIFIED: Create a target network for stable learning
+
+        # we have target verifier, for stable learning
+        self.target_verifier = SimpleVerifier(
+            observation_space=self.env.observation_space,
+            action_space=self.env.action_space,
+            features_dim=args.features_dim,
+        ).to(self.device)
+        self.target_verifier.load_state_dict(self.verifier.state_dict())
+        self.target_verifier.eval()  # Target network is only for inference
+
         self.agent = AggressiveAgent(
             verifier=self.verifier,
             thinking_steps=args.thinking_steps,
@@ -258,7 +275,8 @@ class EnhancedTrainer:
         print(f"   - Learning rate: {args.learning_rate:.2e} (with reboots)")
         print(f"   - Weight decay: {args.weight_decay:.2e}")
         print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
-        print(f"   - Reservoir sampling: ENABLED")
+        print(f"   - Reservoir sampling: ENABLED (40/60 Good/Bad Ratio)")
+        print(f"   - Stable Learning: Target Network ENABLED (tau={args.tau})")
         print(f"   - Plateau detection: ACTIVE (Fixed)")
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
@@ -350,6 +368,7 @@ class EnhancedTrainer:
         state = {
             "episode": episode,
             "verifier_state_dict": self.verifier.state_dict(),
+            "target_verifier_state_dict": self.target_verifier.state_dict(),  # MODIFIED: Save target network
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "wins": self.wins,
@@ -380,6 +399,16 @@ class EnhancedTrainer:
                 )
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
                 self.verifier.load_state_dict(checkpoint["verifier_state_dict"])
+                # MODIFIED: Load target network
+                if "target_verifier_state_dict" in checkpoint:
+                    self.target_verifier.load_state_dict(
+                        checkpoint["target_verifier_state_dict"]
+                    )
+                else:  # For backwards compatibility with old checkpoints
+                    self.target_verifier.load_state_dict(
+                        checkpoint["verifier_state_dict"]
+                    )
+
                 self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
                 if "scheduler_state_dict" in checkpoint:
                     self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -608,8 +637,8 @@ class EnhancedTrainer:
             next_action_var = next_candidate_action.clone().requires_grad_(True)
             next_action_probs = F.softmax(next_action_var, dim=-1)
 
-            # Calculate energy
-            energy_val = self.verifier(next_obs, next_action_probs)
+            # Calculate energy using the STABLE TARGET NETWORK
+            energy_val = self.target_verifier(next_obs, next_action_probs)
 
             # Track best solution
             with torch.no_grad():
@@ -639,10 +668,10 @@ class EnhancedTrainer:
                 # If gradient computation fails, use best so far
                 break
 
-        # Calculate final target energy with no_grad
+        # Calculate final target energy with no_grad, using the STABLE TARGET NETWORK
         with torch.no_grad():
             best_next_action_probs = F.softmax(best_next_candidate, dim=-1)
-            next_energy = self.verifier(next_obs, best_next_action_probs)
+            next_energy = self.target_verifier(next_obs, best_next_action_probs)
 
             # Calculate target energy
             target_energy = (
@@ -679,6 +708,15 @@ class EnhancedTrainer:
             self.verifier.parameters(), self.args.max_grad_norm * 0.5
         )
         self.optimizer.step()
+
+        # MODIFIED: Update the target network via polyak averaging
+        with torch.no_grad():
+            for target_param, param in zip(
+                self.target_verifier.parameters(), self.verifier.parameters()
+            ):
+                target_param.data.mul_(1.0 - self.args.tau)
+                target_param.data.add_(self.args.tau * param.data)
+
         self.scheduler.step(total_loss.item())
 
         return {
@@ -847,7 +885,7 @@ class EnhancedTrainer:
         )
         print(f"   - ActionDiversity: {agent_stats.get('action_diversity', 0.0):.3f}")
         print(
-            f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_count']}, Bad: {buffer_stats['bad_count']})"
+            f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%})"
         )
         print(
             f"   - Diversity: {buffer_stats['avg_diversity']:.2f}, ActionDiversity: {buffer_stats['action_diversity']:.3f}"
@@ -1074,6 +1112,13 @@ def main():
         default=5e-6,  # REDUCED
         help="Weight decay for Adam optimizer",
     )
+    # MODIFIED: Added tau for target network updates
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=0.005,
+        help="Polyak averaging factor for target network update",
+    )
 
     args = parser.parse_args()
 
@@ -1086,6 +1131,7 @@ def main():
     print(f"   - Contrastive weight: {args.contrastive_weight:.2f} (REDUCED)")
     print(f"   - Weight decay: {args.weight_decay:.2e} (REDUCED)")
     print(f"   - Max grad norm: {args.max_grad_norm:.1f} (INCREASED)")
+    print(f"   - Target Network Tau: {args.tau} (ADDED for stable learning)")
     print(f"   - Episode-data synchronization: ENABLED ✅")
 
     trainer = EnhancedTrainer(args)
