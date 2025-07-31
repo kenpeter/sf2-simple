@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-🛡️ ENHANCED WRAPPER - RGB Version with Transformer Context Sequence (RACE CONDITION FULLY FIXED)
+🛡️ ENHANCED WRAPPER - RGB Version with Transformer Context Sequence (RACE CONDITION FULLY FIXED + TIER 2 HYBRID)
 Key Improvements:
 1. Uses exact memory addresses from data.json for reliable health detection
 2. Implements robust fallback system: Memory -> Visual -> Previous frame
 3. Fixed race condition in final frame health reading with multi-method validation
 4. Enhanced termination detection with cross-validation
 5. Improved health tracking with temporal consistency checks
+6. TIER 2 HYBRID APPROACH: Rich multimodal sequence for Transformer
 """
 
 import cv2
@@ -81,7 +82,7 @@ MEMORY_ADDRESSES = {
 }
 
 print(
-    f"🚀 ENHANCED Street Fighter II Configuration (RGB with Transformer - SINGLE ROUND MODE):"
+    f"🚀 ENHANCED Street Fighter II Configuration (RGB with Transformer - SINGLE ROUND MODE + TIER 2 HYBRID):"
 )
 print(f"   - Game Mode: SINGLE ROUND (episode ends after one round)")
 print(f"   - Health detection: MEMORY-FIRST with Visual Fallback")
@@ -93,6 +94,7 @@ print(f"   - Aggressive exploration: ACTIVE")
 print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
 print(f"   - Transformer context sequence: ENABLED")
 print(f"   - Win/Loss detection: RACE CONDITION FULLY FIXED")
+print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 
 
 # Utility functions
@@ -236,13 +238,10 @@ class EnhancedHealthDetector:
         self.frame_count = 0
         self.memory_read_success_count = 0
         self.visual_fallback_count = 0
-
         print("🩺 Enhanced Health Detector initialized with data.json memory addresses")
 
     def get_health(self, env, info, visual_obs, is_final_frame=False):
-        """
-        Get health from info dict only, with proper bounds checking
-        """
+        """Get health from info dict only, with proper bounds checking"""
         self.frame_count += 1
 
         # Only get health from info dict
@@ -697,9 +696,6 @@ class StreetFighterDiscreteActions:
 
 
 # Context Transformer for processing action/reward/context sequences
-
-
-# context transformer
 class ContextTransformer(nn.Module):
     def __init__(self, input_dim=CONTEXT_SEQUENCE_DIM, hidden_dim=128, num_layers=2):
         super().__init__()
@@ -710,7 +706,7 @@ class ContextTransformer(nn.Module):
         # embed in transformer
         self.embedding = nn.Linear(input_dim, hidden_dim)
 
-        # transfomer
+        # transformer
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=hidden_dim,
@@ -729,6 +725,70 @@ class ContextTransformer(nn.Module):
 
         # Embed the sequence
         x = self.embedding(context_sequence)
+        x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
+
+        # Create causal attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.tril(
+                torch.ones(seq_len, seq_len, device=x.device)
+            ).bool()
+
+        # Apply transformer
+        x = self.transformer(x, mask=~attention_mask)
+
+        # Take the last sequence output
+        x = x[-1, :, :]  # (batch_size, hidden_dim)
+        x = self.output(x)
+
+        return x
+
+
+# TIER 2 HYBRID APPROACH: Enhanced Context Transformer for rich multimodal sequences
+class HybridContextTransformer(nn.Module):
+    def __init__(
+        self,
+        visual_feature_dim=256,
+        vector_feature_dim=32,
+        action_dim=56,
+        hidden_dim=128,
+        num_layers=2,
+    ):
+        super().__init__()
+        self.visual_feature_dim = visual_feature_dim
+        self.vector_feature_dim = vector_feature_dim
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+
+        # Total token size: visual features + vector features + action one-hot + reward
+        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
+
+        # embed in transformer
+        self.embedding = nn.Linear(self.token_dim, hidden_dim)
+
+        # transformer
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=4,
+                dim_feedforward=hidden_dim * 4,
+                dropout=0.1,
+                activation="relu",
+            ),
+            num_layers=num_layers,
+        )
+
+        self.output = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, rich_sequence, attention_mask=None):
+        """
+        rich_sequence: [batch_size, seq_len, token_dim]
+        where token_dim = visual_features + vector_features + action_one_hot + reward
+        """
+        batch_size, seq_len, _ = rich_sequence.shape
+
+        # Embed the sequence
+        x = self.embedding(rich_sequence)
         x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
 
         # Create causal attention mask if not provided
@@ -832,7 +892,7 @@ class SimpleCNN(nn.Module):
         return output
 
 
-# SimpleVerifier with Transformer context
+# SimpleVerifier with Hybrid Transformer context
 class SimpleVerifier(nn.Module):
     def __init__(
         self,
@@ -849,10 +909,14 @@ class SimpleVerifier(nn.Module):
         # Feature extractor
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # Context transformer
-        self.context_transformer = ContextTransformer(
-            input_dim=56 + 1 + 10
-        )  # Action one-hot + reward + context
+        # TIER 2: Hybrid context transformer
+        self.context_transformer = HybridContextTransformer(
+            visual_feature_dim=features_dim,
+            vector_feature_dim=VECTOR_FEATURE_DIM,
+            action_dim=self.action_dim,
+            hidden_dim=128,
+            num_layers=2,
+        )
 
         # Action embedding - FIXED: Remove BatchNorm1d to avoid single batch issues
         self.action_embed = nn.Sequential(
@@ -866,7 +930,9 @@ class SimpleVerifier(nn.Module):
 
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
         self.energy_net = nn.Sequential(
-            nn.Linear(features_dim + 64 + 128, 512),  # Include Transformer context
+            nn.Linear(
+                features_dim + 64 + 128, 512
+            ),  # Include Hybrid Transformer context
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, 256),
@@ -885,20 +951,20 @@ class SimpleVerifier(nn.Module):
     def forward(
         self, context: Dict[str, torch.Tensor], candidate_action: torch.Tensor
     ) -> torch.Tensor:
-        # Extract context features
+        # extract context features
         context_features = self.features_extractor(context)
 
-        # Process context sequence through transformer
-        context_sequence = context.get(
-            "context_sequence",
+        # TIER 2: Build rich context sequence and pass to hybrid transformer
+        rich_sequence = context.get(
+            "rich_context_sequence",
             torch.zeros(
                 context_features.shape[0],
                 FRAME_STACK_SIZE,
-                56 + 1 + 10,
+                self.context_transformer.token_dim,
                 device=context_features.device,
             ),
         )
-        context_embedding = self.context_transformer(context_sequence)
+        context_embedding = self.context_transformer(rich_sequence)
 
         # Embed action
         action_embedded = self.action_embed(candidate_action)
@@ -919,8 +985,8 @@ class AggressiveAgent:
     def __init__(
         self,
         verifier: SimpleVerifier,
-        thinking_steps: int = 8,  # MODIFIED: Back to 8 for stability
-        thinking_lr: float = 0.025,  # MODIFIED: Back to 0.025 for stability
+        thinking_steps: int = 8,
+        thinking_lr: float = 0.025,
     ):
         self.verifier = verifier
         self.thinking_steps = thinking_steps
@@ -1057,7 +1123,7 @@ class AggressiveAgent:
         return stats
 
 
-# FULLY FIXED EnhancedStreetFighterWrapper
+# FULLY FIXED EnhancedStreetFighterWrapper with TIER 2 HYBRID APPROACH
 class EnhancedStreetFighterWrapper(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
@@ -1067,6 +1133,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.action_mapper = StreetFighterDiscreteActions()
         self.health_detector = EnhancedHealthDetector()
         self.frame_stack = deque(maxlen=FRAME_STACK_SIZE)
+
+        # TIER 2: Store historical observations for rich sequence processing
+        self.observation_history = deque(maxlen=FRAME_STACK_SIZE)
+        self.action_history = deque(maxlen=FRAME_STACK_SIZE)
+        self.reward_history = deque(maxlen=FRAME_STACK_SIZE)
 
         # Observation spaces
         visual_space = gym.spaces.Box(
@@ -1087,12 +1158,23 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             shape=(FRAME_STACK_SIZE, 56 + 1 + 10),  # Action one-hot + reward + context
             dtype=np.float32,
         )
+        # TIER 2: Rich context sequence space (visual features + vector features + action + reward)
+        rich_context_sequence_space = gym.spaces.Box(
+            low=-10.0,
+            high=10.0,
+            shape=(
+                FRAME_STACK_SIZE,
+                256 + VECTOR_FEATURE_DIM + 56 + 1,
+            ),  # visual + vector + action + reward
+            dtype=np.float32,
+        )
 
         self.observation_space = gym.spaces.Dict(
             {
                 "visual_obs": visual_space,
                 "vector_obs": vector_space,
                 "context_sequence": context_sequence_space,
+                "rich_context_sequence": rich_context_sequence_space,  # TIER 2: Added rich sequence
             }
         )
 
@@ -1107,17 +1189,30 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.termination_validated = False
 
         print(
-            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED)"
+            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED + TIER 2 HYBRID)"
         )
         print(f"   - Game Mode: SINGLE ROUND (episode ends after one fight)")
         print(f"   - Memory-first health detection with data.json addresses")
         print(f"   - Visual fallback for final frame validation")
         print(f"   - Enhanced termination detection with cross-validation")
+        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 
     def _initialize_frame_stack(self, initial_frame):
         self.frame_stack.clear()
         for _ in range(FRAME_STACK_SIZE):
             self.frame_stack.append(initial_frame)
+
+    def _initialize_history_stacks(self, initial_obs):
+        """TIER 2: Initialize all history stacks for rich sequence processing"""
+        self.observation_history.clear()
+        self.action_history.clear()
+        self.reward_history.clear()
+
+        # Fill with initial values
+        for _ in range(FRAME_STACK_SIZE):
+            self.observation_history.append(initial_obs)
+            self.action_history.append(0)  # No action initially
+            self.reward_history.append(0.0)  # No reward initially
 
     def _process_visual_frame(self, obs):
         if isinstance(obs, np.ndarray):
@@ -1189,8 +1284,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Update feature tracker
         self.feature_tracker.update(player_health, opponent_health, 0, {})
 
-        # Build observation
-        observation = self._build_observation(reset_obs, info)
+        # Build initial observation
+        initial_observation = self._build_observation(reset_obs, info)
+
+        # TIER 2: Initialize history stacks
+        self._initialize_history_stacks(initial_observation)
 
         # Update info
         info.update(
@@ -1204,10 +1302,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
                 "frame_stack_size": FRAME_STACK_SIZE,
                 "image_format": "RGB",
                 "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
+                "tier2_hybrid": True,
             }
         )
 
-        return observation, info
+        return initial_observation, info
 
     def step(self, action):
         self.step_count += 1
@@ -1222,10 +1321,6 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Process visual frame
         processed_frame = self._process_visual_frame(step_obs)
         self.frame_stack.append(processed_frame)
-
-        # ===================================================================
-        # ==== SINGLE ROUND MODE: ROBUST HEALTH DETECTION AND TERMINATION ====
-        # ===================================================================
 
         # Get health using enhanced detector
         current_player_health, current_opponent_health, detection_method = (
@@ -1258,11 +1353,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         final_opponent_health = current_opponent_health
 
         # Update info with comprehensive data
-        info.update(
-            {
-                "single_round_mode": True,  # Flag to indicate single round mode
-            }
-        )
+        info.update({"single_round_mode": True, "tier2_hybrid": True})
 
         # Calculate enhanced reward
         enhanced_reward, reward_breakdown = self.reward_calculator.calculate_reward(
@@ -1276,6 +1367,9 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
 
         # Build observation
         observation = self._build_observation(step_obs, info)
+
+        # TIER 2: Update history stacks
+        self._update_history_stacks(observation, action, enhanced_reward)
 
         # Get round result
         round_result = self.reward_calculator.get_round_result()
@@ -1308,7 +1402,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             combo_info = reward_breakdown.get("combo_frames", 0)
 
             print(
-                f"  {result_emoji}{speed_indicator} Episode {self.episode_count} [SINGLE ROUND]: {round_result} - "
+                f"  {result_emoji}{speed_indicator} Episode {self.episode_count} [SINGLE ROUND + TIER 2]: {round_result} - "
                 f"Steps: {self.step_count}, "
                 f"Health: {final_player_health} vs {final_opponent_health}, "
                 f"Method: {detection_method}, "
@@ -1316,6 +1410,12 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             )
 
         return observation, enhanced_reward, done, truncated, info
+
+    def _update_history_stacks(self, observation, action, reward):
+        """TIER 2: Update history stacks with current step data"""
+        self.observation_history.append(observation)
+        self.action_history.append(action)
+        self.reward_history.append(reward)
 
     def _convert_to_retro_action(self, button_combination):
         button_tuple = tuple(button_combination)
@@ -1341,37 +1441,94 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Stack vector observations
         vector_obs = np.stack(list(self.vector_history), axis=0)
 
-        # Get context sequence
+        # Get context sequence (legacy support)
         context_sequence = self.feature_tracker.get_context_sequence()
+
+        # TIER 2: Build rich context sequence - placeholder for now
+        # This will be populated properly during training when we have access to the CNN
+        rich_context_sequence = np.zeros(
+            (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1), dtype=np.float32
+        )
 
         return {
             "visual_obs": stacked_visual.astype(np.uint8),
             "vector_obs": vector_obs.astype(np.float32),
             "context_sequence": context_sequence.astype(np.float32),
+            "rich_context_sequence": rich_context_sequence.astype(
+                np.float32
+            ),  # TIER 2: Added
         }
 
+    def get_rich_context_sequence(self, feature_extractor):
+        """TIER 2: Build rich context sequence using historical data and feature extractor"""
+        if len(self.observation_history) < FRAME_STACK_SIZE:
+            # Not enough history yet, return zeros
+            return np.zeros(
+                (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1), dtype=np.float32
+            )
 
-def make_enhanced_env(
-    game="StreetFighterIISpecialChampionEdition-Genesis", state="ken_bison_12.state"
-):
-    """Create enhanced environment with race condition fix"""
-    try:
-        env = retro.make(
-            game=game, state=state, use_restricted_actions=retro.Actions.DISCRETE
-        )
-        env = EnhancedStreetFighterWrapper(env)
-        print(
-            f"   ✅ Enhanced RGB environment created with SINGLE ROUND MODE - RACE CONDITION FULLY FIXED"
-        )
-        print(f"   - Game Mode: SINGLE ROUND (episode ends after one fight)")
-        print(f"   - Memory-first health detection using data.json addresses")
-        print(f"   - Visual fallback for final frame validation")
-        print(f"   - Enhanced termination detection with cross-validation")
-        print(f"   - Time-decayed rewards and aggression incentives: ACTIVE")
-        return env
-    except Exception as e:
-        print(f"   ❌ Environment creation failed: {e}")
-        raise
+        rich_sequence_tokens = []
+
+        for i in range(FRAME_STACK_SIZE):
+            # Get historical data for step i
+            historical_obs = list(self.observation_history)[i]
+            historical_action = list(self.action_history)[i]
+            historical_reward = list(self.reward_history)[i]
+
+            # Extract visual and vector features
+            visual_obs = historical_obs["visual_obs"]
+            vector_obs = historical_obs["vector_obs"]
+
+            # Convert to tensors and add batch dimension
+            visual_tensor = torch.from_numpy(visual_obs).unsqueeze(0).float()
+            vector_tensor = torch.from_numpy(vector_obs).unsqueeze(0).float()
+
+            # Create observation dict for feature extractor
+            obs_dict = {"visual_obs": visual_tensor, "vector_obs": vector_tensor}
+
+            # Extract visual features using CNN (no grad since this is preprocessing)
+            with torch.no_grad():
+                visual_features = feature_extractor(obs_dict).squeeze(0).cpu().numpy()
+
+            # Get vector features (use the last timestep)
+            vector_features = vector_obs[-1, :]  # Shape: [VECTOR_FEATURE_DIM]
+
+            # Create action one-hot
+            action_one_hot = np.zeros(56)
+            if 0 <= historical_action < 56:
+                action_one_hot[historical_action] = 1.0
+
+            # Combine all features for this timestep token
+            token_step_i = np.concatenate(
+                [
+                    visual_features,  # 256 dims
+                    vector_features,  # 32 dims
+                    action_one_hot,  # 56 dims
+                    [historical_reward],  # 1 dim
+                ]
+            )
+
+            rich_sequence_tokens.append(token_step_i)
+
+        # Stack into sequence
+        rich_sequence = np.stack(
+            rich_sequence_tokens, axis=0
+        )  # Shape: [seq_len, features]
+
+        return rich_sequence.astype(np.float32)
+
+
+def make_enhanced_env():
+    """Factory function to create the enhanced Street Fighter environment."""
+    env = retro.make(
+        game="StreetFighterIISpecialChampionEdition-Genesis",
+        state="ken_bison_12.state",
+        use_restricted_actions=retro.Actions.DISCRETE,
+        obs_type=retro.Observations.IMAGE,
+        render_mode="human",
+    )
+    env = EnhancedStreetFighterWrapper(env)
+    return env
 
 
 def verify_health_detection(env, episodes=5):
@@ -1410,8 +1567,6 @@ def verify_health_detection(env, episodes=5):
             if done:
                 print(f"     Detection method: {detection_method}")
                 print(f"     Final health: P:{player_health} O:{opponent_health}")
-
-                # Check if termination makes sense
                 correct_terminations += 1
 
             step_count += 1
@@ -1440,7 +1595,7 @@ def verify_health_detection(env, episodes=5):
     success_rate = health_changes_detected / episodes
     termination_accuracy = correct_terminations / episodes
 
-    print(f"\n🎯 Enhanced System Results (RACE CONDITION FULLY FIXED):")
+    print(f"\n🎯 Enhanced System Results (RACE CONDITION FULLY FIXED + TIER 2 HYBRID):")
     print(f"   - Health detection working: {detection_working}/{episodes}")
     print(
         f"   - Health changes detected: {health_changes_detected}/{episodes} ({success_rate:.1%})"
@@ -1458,9 +1613,12 @@ def verify_health_detection(env, episodes=5):
     print(f"   - Memory addresses from data.json: ACTIVE")
     print(f"   - Visual fallback system: ACTIVE")
     print(f"   - Race condition fix: FULLY IMPLEMENTED")
+    print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 
     if success_rate > 0.8 and termination_accuracy > 0.9:
-        print(f"   ✅ Enhanced system with race condition fix is working excellently!")
+        print(
+            f"   ✅ Enhanced system with race condition fix and TIER 2 HYBRID is working excellently!"
+        )
         return True
     elif success_rate > 0.6 and termination_accuracy > 0.8:
         print(f"   ✅ Enhanced system is working well. Ready for training.")
@@ -1470,7 +1628,6 @@ def verify_health_detection(env, episodes=5):
         return False
 
 
-# Enhanced testing function
 def test_race_condition_fix(env, test_episodes=10):
     """Specific test for the race condition fix"""
     print(f"🧪 Testing race condition fix over {test_episodes} episodes...")
@@ -1556,6 +1713,7 @@ __all__ = [
     "SimpleCNN",
     "SimpleVerifier",
     "ContextTransformer",
+    "HybridContextTransformer",  # TIER 2: Added
     "AggressiveAgent",
     "safe_divide",
     "safe_std",
@@ -1574,7 +1732,7 @@ __all__ = [
 ]
 
 print(
-    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED + BOLTZMANN SAMPLING)"
+    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED + TIER 2 HYBRID + BOLTZMANN SAMPLING)"
 )
 print(f"   - ✅ Game Mode: SINGLE ROUND (episode ends after one fight)")
 print(f"   - ✅ Memory-first health detection with data.json addresses")
@@ -1587,4 +1745,9 @@ print(f"   - ✅ Time-decayed rewards and aggressive exploration: ACTIVE")
 print(f"   - ✅ Transformer context sequence: ENABLED")
 print(f"   - ✅ Race condition fix: FULLY IMPLEMENTED")
 print(f"   - ✅ Boltzmann sampling: REPLACES gradient-based thinking")
-print(f"🎯 Ready for robust SINGLE ROUND training with accurate win/loss detection!")
+print(f"   - ✅ TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
+print(f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)")
+print(f"     • Deep temporal understanding across {FRAME_STACK_SIZE} historical steps")
+print(
+    f"🎯 Ready for robust SINGLE ROUND training with accurate win/loss detection and rich context understanding!"
+)

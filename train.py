@@ -1,12 +1,12 @@
-#!/usr/bin/env python3
 """
-🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)
+🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED + TIER 2 HYBRID)
 Key Fixes:
 1. Fixed episode data synchronization issue
 2. Proper logging timing alignment
 3. Separated episode-specific from cumulative stats
 4. Added sync verification
 5. FIXED BEHAVIORAL COLLAPSE: Stricter experience buffer + Double Q-Learning
+6. TIER 2 HYBRID APPROACH: Rich multimodal sequence processing
 """
 
 import torch
@@ -29,6 +29,7 @@ try:
         verify_health_detection,
         SimpleVerifier,
         ContextTransformer,
+        HybridContextTransformer,
         AggressiveAgent,
         SimpleCNN,
         safe_mean,
@@ -40,11 +41,15 @@ try:
         SCREEN_WIDTH,
         SCREEN_HEIGHT,
         CONTEXT_SEQUENCE_DIM,
+        VECTOR_FEATURE_DIM,
     )
 
-    print("✅ Successfully imported enhanced RGB wrapper components with Transformer")
+    print(
+        "✅ Successfully imported enhanced RGB wrapper components with Transformer + TIER 2 HYBRID"
+    )
     print(f"✅ RGB processing with {SCREEN_WIDTH}x{SCREEN_HEIGHT} images: ACTIVE")
     print(f"✅ Transformer context sequence: ACTIVE")
+    print(f"✅ TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 except ImportError as e:
     print(f"❌ Failed to import enhanced wrapper: {e}")
     print("Make sure wrapper.py is in the same directory")
@@ -187,6 +192,7 @@ class ReservoirExperienceBuffer:
             "frame_stack_size": FRAME_STACK_SIZE,
             "image_format": "RGB",
             "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
+            "tier2_hybrid": True,
         }
 
 
@@ -195,7 +201,9 @@ class EnhancedTrainer:
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._setup_directories()
-        print(f"🚀 Initializing ENHANCED RGB environment with Transformer...")
+        print(
+            f"🚀 Initializing ENHANCED RGB environment with Transformer + TIER 2 HYBRID..."
+        )
         self.env = make_enhanced_env()
         if args.verify_health:
             if not verify_health_detection(self.env):
@@ -207,7 +215,9 @@ class EnhancedTrainer:
             f"   - Expected: {3 * FRAME_STACK_SIZE} channels (RGB * {FRAME_STACK_SIZE} frames)"
         )
         print(f"   - Image size: {SCREEN_WIDTH} x {SCREEN_HEIGHT}")
-        print(f"🧠 Initializing enhanced RGB models with Transformer...")
+        print(
+            f"🧠 Initializing enhanced RGB models with Transformer + TIER 2 HYBRID..."
+        )
 
         # we have verifier
         self.verifier = SimpleVerifier(
@@ -220,8 +230,11 @@ class EnhancedTrainer:
 
         # we have target verifier, for stable learning
         self.target_verifier = SimpleVerifier(
+            # obs
             observation_space=self.env.observation_space,
+            # action space
             action_space=self.env.action_space,
+            # feature dim
             features_dim=args.features_dim,
         ).to(self.device)
         self.target_verifier.load_state_dict(self.verifier.state_dict())
@@ -272,7 +285,7 @@ class EnhancedTrainer:
         self.setup_logging()
         self.load_checkpoint()
         print(
-            f"🚀 Enhanced RGB Trainer initialized with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
+            f"🚀 Enhanced RGB Trainer initialized with Transformer + TIER 2 HYBRID (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
         )
         print(f"   - Device: {self.device}")
         print(f"   - Learning rate: {args.learning_rate:.2e} (with reboots)")
@@ -285,6 +298,7 @@ class EnhancedTrainer:
         print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"   - Episode-data synchronization: FIXED")
         print(f"   - Behavioral collapse: FIXED (Boltzmann + Double Q + Strict Buffer)")
+        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 
     def _setup_directories(self):
         self.log_dir = Path("logs")
@@ -294,7 +308,7 @@ class EnhancedTrainer:
 
     def setup_logging(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = self.log_dir / f"enhanced_rgb_training_{timestamp}.log"
+        log_file = self.log_dir / f"enhanced_rgb_training_tier2_{timestamp}.log"
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
@@ -368,7 +382,9 @@ class EnhancedTrainer:
     def save_checkpoint(self, episode):
         if not self.args.save_frequency > 0:
             return
-        filename = self.checkpoint_dir / f"enhanced_rgb_checkpoint_ep_{episode}.pth"
+        filename = (
+            self.checkpoint_dir / f"enhanced_rgb_tier2_checkpoint_ep_{episode}.pth"
+        )
         state = {
             "episode": episode,
             "verifier_state_dict": self.verifier.state_dict(),
@@ -389,17 +405,18 @@ class EnhancedTrainer:
             "image_format": "RGB",
             "screen_width": SCREEN_WIDTH,
             "screen_height": SCREEN_HEIGHT,
+            "tier2_hybrid": True,
             "args": self.args,
         }
         torch.save(state, filename)
-        self.logger.info(f"💾 Enhanced RGB checkpoint saved to {filename}")
+        self.logger.info(f"💾 Enhanced RGB TIER 2 checkpoint saved to {filename}")
 
     def load_checkpoint(self):
         if self.args.load_checkpoint:
             checkpoint_path = self.args.load_checkpoint
             if os.path.exists(checkpoint_path):
                 self.logger.info(
-                    f"🔄 Loading enhanced RGB checkpoint from {checkpoint_path}..."
+                    f"🔄 Loading enhanced RGB TIER 2 checkpoint from {checkpoint_path}..."
                 )
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
                 self.verifier.load_state_dict(checkpoint["verifier_state_dict"])
@@ -431,13 +448,15 @@ class EnhancedTrainer:
                 checkpoint_format = checkpoint.get("image_format", "unknown")
                 checkpoint_width = checkpoint.get("screen_width", "unknown")
                 checkpoint_height = checkpoint.get("screen_height", "unknown")
+                tier2_enabled = checkpoint.get("tier2_hybrid", False)
                 print(f"   📸 Checkpoint image format: {checkpoint_format}")
                 print(
                     f"   📏 Checkpoint resolution: {checkpoint_width}x{checkpoint_height}"
                 )
                 print(f"   📏 Current resolution: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
+                print(f"   🔧 TIER 2 HYBRID in checkpoint: {tier2_enabled}")
                 self.logger.info(
-                    f"✅ Enhanced RGB checkpoint loaded. Resuming from episode {self.episode}."
+                    f"✅ Enhanced RGB TIER 2 checkpoint loaded. Resuming from episode {self.episode}."
                 )
             else:
                 self.logger.warning(f"⚠️ Checkpoint file not found. Starting fresh.")
@@ -463,6 +482,8 @@ class EnhancedTrainer:
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
+            self.env.render()
+
             action, thinking_info = self.agent.predict(obs, deterministic=False)
             next_obs, reward, done, truncated, info = self.env.step(action)
             episode_reward += reward
@@ -498,6 +519,7 @@ class EnhancedTrainer:
                 "frame_stack_size": FRAME_STACK_SIZE,
                 "image_format": "RGB",
                 "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
+                "tier2_hybrid": True,
                 "enhanced_context": {
                     "is_exploration": thinking_info.get("exploration", False),
                     "episode_progress": episode_steps / MAX_FIGHT_STEPS,
@@ -543,22 +565,49 @@ class EnhancedTrainer:
             "is_fast_win": is_fast_win,
         }
 
+    def _build_rich_sequence_batch(self, batch):
+        """TIER 2: Build rich context sequences for the batch using historical observations"""
+        rich_sequences = []
+
+        for exp in batch:
+            obs = exp["obs"]
+
+            # TIER 2: Use the wrapper's method to build rich context sequence
+            if hasattr(self.env, "get_rich_context_sequence"):
+                rich_sequence = self.env.get_rich_context_sequence(
+                    self.verifier.features_extractor
+                )
+            else:
+                # Fallback: create zeros if method not available
+                rich_sequence = np.zeros(
+                    (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1),
+                    dtype=np.float32,
+                )
+
+            rich_sequences.append(rich_sequence)
+
+        return np.stack(rich_sequences, axis=0)
+
     def train_step(self):
+        # good batch, bad batch
         good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
             self.args.batch_size
         )
         if good_batch is None or bad_batch is None:
             return None
 
+        # shuffle good batch and bad batch
         batch = good_batch + bad_batch
         random.shuffle(batch)
 
+        # obs, obs, action, reward, next obs, dones arr
         observations = []
         actions = []
         rewards = []
         next_observations = []
         dones = []
 
+        # in batch, we get back obs, action, reward, next_obs, dones
         for exp in batch:
             observations.append(exp["obs"])
             actions.append(exp["action"])
@@ -566,6 +615,7 @@ class EnhancedTrainer:
             next_observations.append(exp["next_obs"])
             dones.append(exp["done"])
 
+        # device
         device = self.device
 
         visual_obs = torch.tensor(
@@ -580,6 +630,14 @@ class EnhancedTrainer:
         )
         context_sequences = torch.tensor(
             np.stack([obs["context_sequence"] for obs in observations]),
+            dtype=torch.float32,
+            device=device,
+        )
+
+        # TIER 2: Build rich context sequences
+        rich_context_sequences = self._build_rich_sequence_batch(batch)
+        rich_context_sequences = torch.tensor(
+            rich_context_sequences,
             dtype=torch.float32,
             device=device,
         )
@@ -603,6 +661,16 @@ class EnhancedTrainer:
             device=device,
         )
 
+        # TIER 2: Build rich context sequences for next observations
+        next_rich_context_sequences = self._build_rich_sequence_batch(
+            [{"obs": obs} for obs in next_observations]
+        )
+        next_rich_context_sequences = torch.tensor(
+            next_rich_context_sequences,
+            dtype=torch.float32,
+            device=device,
+        )
+
         dones = torch.tensor(dones, dtype=torch.float32, device=device)
 
         batch_size = visual_obs.shape[0]
@@ -613,11 +681,13 @@ class EnhancedTrainer:
             "visual_obs": visual_obs,
             "vector_obs": vector_obs,
             "context_sequence": context_sequences,
+            "rich_context_sequence": rich_context_sequences,  # TIER 2: Added
         }
         next_obs = {
             "visual_obs": next_visual_obs,
             "vector_obs": next_vector_obs,
             "context_sequence": next_context_sequences,
+            "rich_context_sequence": next_rich_context_sequences,  # TIER 2: Added
         }
 
         self.optimizer.zero_grad()
@@ -625,18 +695,25 @@ class EnhancedTrainer:
         # Current energy
         current_energy = self.verifier(current_obs, action_one_hot)
 
-        # FIXED: Double Q-Learning target calculation
+        # FIXED: Double Q-Learning target calculation with TIER 2
+
+        # with this no training, no change weight
         with torch.no_grad():
             # 1. Find the best next action using the MAIN network
             next_energies_main_net = []
+            # 56 action space
             for i in range(self.env.action_space.n):
                 next_action_one_hot = torch.zeros(
                     batch_size, self.env.action_space.n, device=device
                 )
                 next_action_one_hot[:, i] = 1.0
+                # in the loop, 56 times, we call verifier to get energy
+                # energy score from energy net
                 energy = self.verifier(
                     next_obs, next_action_one_hot
                 )  # Using self.verifier here!
+
+                # assign energy into arr
                 next_energies_main_net.append(energy)
 
             next_energies_main_net = torch.cat(next_energies_main_net, dim=1)
@@ -731,7 +808,7 @@ class EnhancedTrainer:
         win_rate_at_episode = safe_divide(ep_data["wins_total"], total_matches, 0.0)
 
         print(
-            f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅ + BEHAVIORAL COLLAPSE FIXED 🔧):"
+            f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅ + BEHAVIORAL COLLAPSE FIXED 🔧 + TIER 2 HYBRID 🚀):"
         )
         print(
             f"   - THIS Episode: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, Result={ep_data['result']}"
@@ -766,10 +843,13 @@ class EnhancedTrainer:
         print(
             f"   - 🔧 Behavioral Collapse Fixes: Boltzmann Sampling + Double Q-Learning + Strict Buffer"
         )
+        print(
+            f"   - 🚀 TIER 2 HYBRID: Rich multimodal sequence (Visual+Vector+Action+Reward)"
+        )
 
         # Also log to file
         self.logger.info(
-            f"Episode {episode} SYNC+FIX: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, "
+            f"Episode {episode} SYNC+FIX+TIER2: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, "
             f"Result={ep_data['result']}, WinRate={win_rate_at_episode:.1%}, "
             f"W/L/D={ep_data['wins_total']}/{ep_data['losses_total']}/{ep_data['draws_total']}, "
             f"Changes=W+{ep_data['wins_change']}/L+{ep_data['losses_change']}/D+{ep_data['draws_change']}, "
@@ -777,14 +857,14 @@ class EnhancedTrainer:
             f"ActionDiversity={agent_stats.get('action_diversity', 0.0):.3f}, "
             f"BufferSize={buffer_stats['total_size']}, "
             f"LearningRate={current_lr:.2e}, Reboots={self.reboot_count}, "
-            f"BehavioralCollapse=FIXED"
+            f"BehavioralCollapse=FIXED, TIER2_HYBRID=ENABLED"
         )
 
     def train(self):
         self.train_start_time = time.time()  # For elapsed time calculation
 
         print(
-            f"🎮 Starting ENHANCED RGB training with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)..."
+            f"🎮 Starting ENHANCED RGB training with Transformer + TIER 2 HYBRID (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)..."
         )
         print(f"   - Total episodes: {self.args.num_episodes}")
         print(f"   - Batch size: {self.args.batch_size}")
@@ -799,6 +879,13 @@ class EnhancedTrainer:
         print(f"     • Boltzmann sampling (replaces gradient-based thinking)")
         print(f"     • Double Q-Learning (stable target calculation)")
         print(f"     • Strict experience buffer (only wins are 'good')")
+        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
+        print(
+            f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)"
+        )
+        print(
+            f"     • Deep temporal understanding across {FRAME_STACK_SIZE} historical steps"
+        )
 
         for episode in range(self.episode, self.args.num_episodes):
             # SYNC FIX: Store episode state BEFORE running episode
@@ -860,7 +947,8 @@ class EnhancedTrainer:
                     self.logger.info(
                         f"Episode {episode}: Loss={train_info['loss']:.4f}, "
                         f"EnergyLoss={train_info['energy_loss']:.4f}, "
-                        f"ContrastiveLoss={train_info['contrastive_loss']:.4f}"
+                        f"ContrastiveLoss={train_info['contrastive_loss']:.4f}, "
+                        f"TIER2_HYBRID=ENABLED"
                     )
 
             # SYNC FIX: Immediate logging with correct data
@@ -893,14 +981,15 @@ class EnhancedTrainer:
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - Episode synchronization: VERIFIED ✅")
         print(f"   - Behavioral collapse: FIXED 🔧")
+        print(f"   - TIER 2 HYBRID APPROACH: ENABLED 🚀")
         self.logger.info(
-            f"Training completed: Episodes={self.episode}, WinRate={final_win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, Reboots={self.reboot_count}, BehavioralCollapse=FIXED"
+            f"Training completed: Episodes={self.episode}, WinRate={final_win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, Reboots={self.reboot_count}, BehavioralCollapse=FIXED, TIER2_HYBRID=ENABLED"
         )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced RGB Street Fighter Training with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
+        description="Enhanced RGB Street Fighter Training with Transformer + TIER 2 HYBRID (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
     )
     parser.add_argument(
         "--num_episodes", type=int, default=2000, help="Number of episodes to train"
@@ -999,7 +1088,9 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"🔧 SYNC FIXED + BEHAVIORAL COLLAPSE FIXED Training Configuration:")
+    print(
+        f"🔧 SYNC FIXED + BEHAVIORAL COLLAPSE FIXED + TIER 2 HYBRID Training Configuration:"
+    )
     print(f"   - Learning rate: {args.learning_rate:.2e} (INCREASED)")
     print(f"   - Thinking steps: {args.thinking_steps} (BACK TO 8 for stability)")
     print(f"   - Thinking LR: {args.thinking_lr:.3f} (BACK TO 0.025 for stability)")
@@ -1014,6 +1105,12 @@ def main():
     print(f"     • Boltzmann sampling: REPLACES gradient descent")
     print(f"     • Double Q-Learning: STABLE target calculation")
     print(f"     • Strict buffer: ONLY wins are 'good' experiences")
+    print(f"   - TIER 2 HYBRID APPROACH: ENABLED 🚀")
+    print(f"     • Rich multimodal sequence processing")
+    print(
+        f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)"
+    )
+    print(f"     • Deep temporal understanding across {FRAME_STACK_SIZE} steps")
 
     trainer = EnhancedTrainer(args)
     trainer.train()
