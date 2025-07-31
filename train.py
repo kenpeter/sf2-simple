@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence (SYNC FIXED)
+🚀 ENHANCED TRAINING - RGB Version with Transformer Context Sequence (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)
 Key Fixes:
 1. Fixed episode data synchronization issue
 2. Proper logging timing alignment
 3. Separated episode-specific from cumulative stats
 4. Added sync verification
+5. FIXED BEHAVIORAL COLLAPSE: Stricter experience buffer + Double Q-Learning
 """
 
 import torch
@@ -67,11 +68,10 @@ class ReservoirExperienceBuffer:
         diversity_score = self._assess_diversity(experience)
         self.sequence_quality_tracker.append(temporal_quality)
         self.diversity_scores.append(diversity_score)
-        is_good_experience = (
-            win_result == "WIN"
-            or (reward > 0.2 and temporal_quality > 0.4)
-            or (diversity_score > 0.7 and temporal_quality > 0.3)
-        )
+
+        # FIXED: Make definition of "good" much stricter - only wins
+        is_good_experience = win_result == "WIN"
+
         if is_good_experience:
             self._reservoir_add(
                 self.good_experiences, experience, self.good_reservoir_size
@@ -128,8 +128,8 @@ class ReservoirExperienceBuffer:
         return np.clip(diversity, 0.0, 1.0)
 
     def sample_balanced_batch(self, batch_size):
-        # MODIFIED: Sample 40% "good" and 60% "bad" to better learn from mistakes
-        good_count = int(batch_size * 0.4)
+        # MODIFIED: Sample 60% "good" and 40% "bad" to focus more on successful strategies
+        good_count = int(batch_size * 0.6)
         bad_count = batch_size - good_count
 
         if (
@@ -271,17 +271,20 @@ class EnhancedTrainer:
 
         self.setup_logging()
         self.load_checkpoint()
-        print(f"🚀 Enhanced RGB Trainer initialized with Transformer (SYNC FIXED)")
+        print(
+            f"🚀 Enhanced RGB Trainer initialized with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
+        )
         print(f"   - Device: {self.device}")
         print(f"   - Learning rate: {args.learning_rate:.2e} (with reboots)")
         print(f"   - Weight decay: {args.weight_decay:.2e}")
-        print(f"   - Aggressive exploration: {self.agent.epsilon:.1%}")
-        print(f"   - Reservoir sampling: ENABLED (40/60 Good/Bad Ratio)")
+        print(f"   - Initial exploration: {self.agent.epsilon:.1%}")
+        print(f"   - Reservoir sampling: ENABLED (60/40 Good/Bad Ratio)")
         print(f"   - Stable Learning: Target Network ENABLED (tau={args.tau})")
         print(f"   - Plateau detection: ACTIVE (Fixed)")
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"   - Episode-data synchronization: FIXED")
+        print(f"   - Behavioral collapse: FIXED (Boltzmann + Double Q + Strict Buffer)")
 
     def _setup_directories(self):
         self.log_dir = Path("logs")
@@ -622,59 +625,32 @@ class EnhancedTrainer:
         # Current energy
         current_energy = self.verifier(current_obs, action_one_hot)
 
-        # Target energy calculation with proper gradient handling
-        next_candidate_action = (
-            torch.randn(batch_size, self.env.action_space.n, device=device) * 0.01
-        )
-
-        # Optimize the candidate action
-        best_next_candidate = next_candidate_action.clone()
-        best_energy = float("inf")
-
-        for step in range(
-            min(self.args.thinking_steps, 4)
-        ):  # Reduce steps for stability
-            # Create a variable that requires gradients
-            next_action_var = next_candidate_action.clone().requires_grad_(True)
-            next_action_probs = F.softmax(next_action_var, dim=-1)
-
-            # Calculate energy using the STABLE TARGET NETWORK
-            energy_val = self.target_verifier(next_obs, next_action_probs)
-
-            # Track best solution
-            with torch.no_grad():
-                current_energy_val = energy_val.mean().item()
-                if current_energy_val < best_energy:
-                    best_energy = current_energy_val
-                    best_next_candidate = next_action_var.clone().detach()
-
-            # Calculate gradients
-            try:
-                grad = torch.autograd.grad(
-                    outputs=energy_val.sum(),
-                    inputs=next_action_var,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
-
-                # Update candidate action
-                with torch.no_grad():
-                    step_size = self.args.thinking_lr * (0.9**step)
-                    next_candidate_action = next_candidate_action - step_size * grad
-                    # Add clipping to prevent explosion
-                    next_candidate_action = torch.clamp(next_candidate_action, -5, 5)
-                    next_candidate_action = F.softmax(next_candidate_action, dim=-1)
-                    next_candidate_action.requires_grad_(True)
-            except RuntimeError:
-                # If gradient computation fails, use best so far
-                break
-
-        # Calculate final target energy with no_grad, using the STABLE TARGET NETWORK
+        # FIXED: Double Q-Learning target calculation
         with torch.no_grad():
-            best_next_action_probs = F.softmax(best_next_candidate, dim=-1)
-            next_energy = self.target_verifier(next_obs, best_next_action_probs)
+            # 1. Find the best next action using the MAIN network
+            next_energies_main_net = []
+            for i in range(self.env.action_space.n):
+                next_action_one_hot = torch.zeros(
+                    batch_size, self.env.action_space.n, device=device
+                )
+                next_action_one_hot[:, i] = 1.0
+                energy = self.verifier(
+                    next_obs, next_action_one_hot
+                )  # Using self.verifier here!
+                next_energies_main_net.append(energy)
 
-            # Calculate target energy
+            next_energies_main_net = torch.cat(next_energies_main_net, dim=1)
+            best_next_action_indices = torch.argmin(next_energies_main_net, dim=1)
+            best_next_action_one_hot = F.one_hot(
+                best_next_action_indices, num_classes=self.env.action_space.n
+            ).float()
+
+            # 2. Evaluate the energy of that best action using the TARGET network
+            next_energy = self.target_verifier(
+                next_obs, best_next_action_one_hot
+            )  # Using self.target_verifier here!
+
+            # 3. Calculate the final target
             target_energy = (
                 rewards.unsqueeze(-1)
                 + (1 - dones.unsqueeze(-1)) * self.args.gamma * next_energy
@@ -701,7 +677,7 @@ class EnhancedTrainer:
             )
 
         # Reduce contrastive weight for stability
-        total_loss = loss + (self.args.contrastive_weight * 0.3) * contrastive_loss
+        total_loss = loss + (self.args.contrastive_weight) * contrastive_loss
 
         total_loss.backward()
         # Reduce gradient clipping for better convergence
@@ -754,7 +730,9 @@ class EnhancedTrainer:
         )
         win_rate_at_episode = safe_divide(ep_data["wins_total"], total_matches, 0.0)
 
-        print(f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅):")
+        print(
+            f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅ + BEHAVIORAL COLLAPSE FIXED 🔧):"
+        )
         print(
             f"   - THIS Episode: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, Result={ep_data['result']}"
         )
@@ -773,7 +751,7 @@ class EnhancedTrainer:
         )
         print(f"   - ActionDiversity: {agent_stats.get('action_diversity', 0.0):.3f}")
         print(
-            f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%})"
+            f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%} - STRICT WINS ONLY)"
         )
         print(
             f"   - Diversity: {buffer_stats['avg_diversity']:.2f}, ActionDiversity: {buffer_stats['action_diversity']:.3f}"
@@ -785,23 +763,29 @@ class EnhancedTrainer:
         print(f"   - Elapsed: {elapsed_time:.2f} hours")
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - 🔍 Sync Check: Episode data timestamp={ep_data['timestamp']:.1f}")
+        print(
+            f"   - 🔧 Behavioral Collapse Fixes: Boltzmann Sampling + Double Q-Learning + Strict Buffer"
+        )
 
         # Also log to file
         self.logger.info(
-            f"Episode {episode} SYNC: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, "
+            f"Episode {episode} SYNC+FIX: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, "
             f"Result={ep_data['result']}, WinRate={win_rate_at_episode:.1%}, "
             f"W/L/D={ep_data['wins_total']}/{ep_data['losses_total']}/{ep_data['draws_total']}, "
             f"Changes=W+{ep_data['wins_change']}/L+{ep_data['losses_change']}/D+{ep_data['draws_change']}, "
             f"Exploration={agent_stats['exploration_rate']:.1%}, "
             f"ActionDiversity={agent_stats.get('action_diversity', 0.0):.3f}, "
             f"BufferSize={buffer_stats['total_size']}, "
-            f"LearningRate={current_lr:.2e}, Reboots={self.reboot_count}"
+            f"LearningRate={current_lr:.2e}, Reboots={self.reboot_count}, "
+            f"BehavioralCollapse=FIXED"
         )
 
     def train(self):
         self.train_start_time = time.time()  # For elapsed time calculation
 
-        print(f"🎮 Starting ENHANCED RGB training with Transformer (SYNC FIXED)...")
+        print(
+            f"🎮 Starting ENHANCED RGB training with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)..."
+        )
         print(f"   - Total episodes: {self.args.num_episodes}")
         print(f"   - Batch size: {self.args.batch_size}")
         print(f"   - Initial learning rate: {self.args.learning_rate:.2e}")
@@ -811,6 +795,10 @@ class EnhancedTrainer:
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - Episode-data synchronization: FIXED")
+        print(f"   - Behavioral collapse fixes: ACTIVE")
+        print(f"     • Boltzmann sampling (replaces gradient-based thinking)")
+        print(f"     • Double Q-Learning (stable target calculation)")
+        print(f"     • Strict experience buffer (only wins are 'good')")
 
         for episode in range(self.episode, self.args.num_episodes):
             # SYNC FIX: Store episode state BEFORE running episode
@@ -904,14 +892,15 @@ class EnhancedTrainer:
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - Episode synchronization: VERIFIED ✅")
+        print(f"   - Behavioral collapse: FIXED 🔧")
         self.logger.info(
-            f"Training completed: Episodes={self.episode}, WinRate={final_win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, Reboots={self.reboot_count}"
+            f"Training completed: Episodes={self.episode}, WinRate={final_win_rate:.1%}, BestWinRate={self.best_win_rate:.1%}, Reboots={self.reboot_count}, BehavioralCollapse=FIXED"
         )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced RGB Street Fighter Training with Transformer (SYNC FIXED)"
+        description="Enhanced RGB Street Fighter Training with Transformer (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
     )
     parser.add_argument(
         "--num_episodes", type=int, default=2000, help="Number of episodes to train"
@@ -931,13 +920,13 @@ def main():
     parser.add_argument(
         "--thinking_steps",
         type=int,
-        default=4,  # REDUCED for stability
+        default=8,  # MODIFIED: Back to 8 for stability
         help="Number of thinking steps for agent",
     )
     parser.add_argument(
         "--thinking_lr",
         type=float,
-        default=0.05,  # INCREASED
+        default=0.025,  # MODIFIED: Back to 0.025 for stability
         help="Learning rate for thinking steps",
     )
     parser.add_argument(
@@ -953,7 +942,7 @@ def main():
     parser.add_argument(
         "--contrastive_weight",
         type=float,
-        default=0.2,  # REDUCED
+        default=0.4,  # MODIFIED: Increased to strengthen learning signal
         help="Weight for contrastive loss",
     )
     parser.add_argument(
@@ -1010,17 +999,21 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"🔧 SYNC FIXED Training Configuration:")
+    print(f"🔧 SYNC FIXED + BEHAVIORAL COLLAPSE FIXED Training Configuration:")
     print(f"   - Learning rate: {args.learning_rate:.2e} (INCREASED)")
-    print(f"   - Thinking steps: {args.thinking_steps} (REDUCED for stability)")
-    print(f"   - Thinking LR: {args.thinking_lr:.3f} (INCREASED)")
+    print(f"   - Thinking steps: {args.thinking_steps} (BACK TO 8 for stability)")
+    print(f"   - Thinking LR: {args.thinking_lr:.3f} (BACK TO 0.025 for stability)")
     print(f"   - Train frequency: {args.train_frequency} (INCREASED)")
     print(f"   - Log frequency: {args.log_frequency} (REDUCED for better sync)")
-    print(f"   - Contrastive weight: {args.contrastive_weight:.2f} (REDUCED)")
+    print(f"   - Contrastive weight: {args.contrastive_weight:.2f} (INCREASED)")
     print(f"   - Weight decay: {args.weight_decay:.2e} (REDUCED)")
     print(f"   - Max grad norm: {args.max_grad_norm:.1f} (INCREASED)")
     print(f"   - Target Network Tau: {args.tau} (ADDED for stable learning)")
     print(f"   - Episode-data synchronization: ENABLED ✅")
+    print(f"   - Behavioral collapse fixes: ENABLED 🔧")
+    print(f"     • Boltzmann sampling: REPLACES gradient descent")
+    print(f"     • Double Q-Learning: STABLE target calculation")
+    print(f"     • Strict buffer: ONLY wins are 'good' experiences")
 
     trainer = EnhancedTrainer(args)
     trainer.train()

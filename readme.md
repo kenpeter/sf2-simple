@@ -15,7 +15,17 @@ python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --featur
 
 
 # cli 
-python train.py --num_episodes 1000 --batch_size 128 --learning_rate 1e-3 --thinking_steps 6
+python train.py \
+  --num_episodes 100 \
+  --batch_size 64 \
+  --learning_rate 5e-4 \
+  --thinking_steps 8 \
+  --thinking_lr 0.025 \
+  --contrastive_weight 0.4 \
+  --log_frequency 5 \
+  --save_frequency 100 \
+  --verify_health
+
 
 
 # data.json 
