@@ -761,9 +761,10 @@ class HybridContextTransformer(nn.Module):
         self.num_layers = num_layers
 
         # Total token size: visual features + vector features + action one-hot + reward
+        # total token size = visual + vector + action hot + reward
         self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
 
-        # embed in transformer
+        # embed so we can pass to transformer
         self.embedding = nn.Linear(self.token_dim, hidden_dim)
 
         # transformer
@@ -778,6 +779,7 @@ class HybridContextTransformer(nn.Module):
             num_layers=num_layers,
         )
 
+        # the output also hidden dim
         self.output = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, rich_sequence, attention_mask=None):
@@ -787,7 +789,7 @@ class HybridContextTransformer(nn.Module):
         """
         batch_size, seq_len, _ = rich_sequence.shape
 
-        # Embed the sequence
+        # we embed the rich seq, with hidden_dim
         x = self.embedding(rich_sequence)
         x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
 
@@ -797,7 +799,7 @@ class HybridContextTransformer(nn.Module):
                 torch.ones(seq_len, seq_len, device=x.device)
             ).bool()
 
-        # Apply transformer
+        # the x will eventually go to transformer
         x = self.transformer(x, mask=~attention_mask)
 
         # Take the last sequence output
@@ -919,6 +921,7 @@ class SimpleVerifier(nn.Module):
         )
 
         # Action embedding - FIXED: Remove BatchNorm1d to avoid single batch issues
+        # when linear that is embed
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 128),
             nn.ReLU(),
@@ -1468,6 +1471,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             )
 
         rich_sequence_tokens = []
+        device = next(feature_extractor.parameters()).device
 
         for i in range(FRAME_STACK_SIZE):
             # Get historical data for step i
@@ -1480,8 +1484,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             vector_obs = historical_obs["vector_obs"]
 
             # Convert to tensors and add batch dimension
-            visual_tensor = torch.from_numpy(visual_obs).unsqueeze(0).float()
-            vector_tensor = torch.from_numpy(vector_obs).unsqueeze(0).float()
+            visual_tensor = torch.from_numpy(visual_obs).unsqueeze(0).float().to(device)
+            vector_tensor = torch.from_numpy(vector_obs).unsqueeze(0).float().to(device)
 
             # Create observation dict for feature extractor
             obs_dict = {"visual_obs": visual_tensor, "vector_obs": vector_tensor}
