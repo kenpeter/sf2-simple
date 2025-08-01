@@ -714,9 +714,12 @@ class HybridContextTransformer(nn.Module):
 
         # Total token size: visual features + vector features + action one-hot + reward
         # total token size = visual + vector + action hot + reward
+        # 256 + 32 + 56 + 1 = 345
         self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
 
-        # embed so we can pass to transformer
+        # transformer's weight
+        # nn.Linear(345, 128)
+        # make smaller
         self.embedding = nn.Linear(self.token_dim, hidden_dim)
 
         # transformer
@@ -741,7 +744,7 @@ class HybridContextTransformer(nn.Module):
         """
         batch_size, seq_len, _ = rich_sequence.shape
 
-        # we embed the rich seq, with hidden_dim
+        # # transformer's weight
         x = self.embedding(rich_sequence)
         x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
 
