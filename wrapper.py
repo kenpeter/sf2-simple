@@ -695,54 +695,6 @@ class StreetFighterDiscreteActions:
         return self.action_map.get(action_idx, [])
 
 
-# Context Transformer for processing action/reward/context sequences
-class ContextTransformer(nn.Module):
-    def __init__(self, input_dim=CONTEXT_SEQUENCE_DIM, hidden_dim=128, num_layers=2):
-        super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-
-        # embed in transformer
-        self.embedding = nn.Linear(input_dim, hidden_dim)
-
-        # transformer
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=hidden_dim,
-                nhead=4,
-                dim_feedforward=hidden_dim * 4,
-                dropout=0.1,
-                activation="relu",
-            ),
-            num_layers=num_layers,
-        )
-
-        self.output = nn.Linear(hidden_dim, hidden_dim)
-
-    def forward(self, context_sequence, attention_mask=None):
-        batch_size, seq_len, _ = context_sequence.shape
-
-        # Embed the sequence
-        x = self.embedding(context_sequence)
-        x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
-
-        # Create causal attention mask if not provided
-        if attention_mask is None:
-            attention_mask = torch.tril(
-                torch.ones(seq_len, seq_len, device=x.device)
-            ).bool()
-
-        # Apply transformer
-        x = self.transformer(x, mask=~attention_mask)
-
-        # Take the last sequence output
-        x = x[-1, :, :]  # (batch_size, hidden_dim)
-        x = self.output(x)
-
-        return x
-
-
 # TIER 2 HYBRID APPROACH: Enhanced Context Transformer for rich multimodal sequences
 class HybridContextTransformer(nn.Module):
     def __init__(
@@ -1686,8 +1638,7 @@ __all__ = [
     "StreetFighterDiscreteActions",
     "SimpleCNN",
     "SimpleVerifier",
-    "ContextTransformer",
-    "HybridContextTransformer",  # TIER 2: Added
+    "HybridContextTransformer",  # Only the TIER 2 hybrid transformer
     "AggressiveAgent",
     "safe_divide",
     "safe_std",
