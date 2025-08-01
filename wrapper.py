@@ -809,7 +809,7 @@ class HybridContextTransformer(nn.Module):
         return x
 
 
-# SimpleCNN for visual processing
+# SimpleCNN for visual processing - CNN and LSTM removed
 class SimpleCNN(nn.Module):
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         super().__init__()
@@ -820,51 +820,8 @@ class SimpleCNN(nn.Module):
         n_input_channels = visual_space.shape[0]
         seq_length, vector_feature_count = vector_space.shape
 
-        # Visual CNN
-        self.visual_cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=2),
-            nn.ReLU(),
-            nn.BatchNorm2d(32),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(64),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(128),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(256),
-            nn.AdaptiveAvgPool2d((4, 4)),
-            nn.Flatten(),
-        )
-
-        # Calculate visual output size
-        with torch.no_grad():
-            dummy_visual = torch.zeros(
-                1, n_input_channels, visual_space.shape[1], visual_space.shape[2]
-            )
-            visual_output_size = self.visual_cnn(dummy_visual).shape[1]
-
-        # Vector LSTM
-        self.vector_lstm = nn.LSTM(
-            input_size=vector_feature_count,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            dropout=0.2,
-        )
-
-        self.vector_processor = nn.Sequential(
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-        )
-
-        # Fusion layer
-        fusion_input_size = visual_output_size + 64
+        # Fusion layer - direct processing without CNN and LSTM
+        fusion_input_size = 64  # Reduced since we're not using CNN/LSTM features
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_size, 512),
             nn.ReLU(),
@@ -880,15 +837,28 @@ class SimpleCNN(nn.Module):
         visual_obs = observations["visual_obs"]
         vector_obs = observations["vector_obs"]
 
-        # Process visual features
-        visual_features = self.visual_cnn(visual_obs.float() / 255.0)
+        # Simple feature processing without CNN and LSTM
+        batch_size = visual_obs.shape[0]
 
-        # Process vector features
-        lstm_out, _ = self.vector_lstm(vector_obs)
-        vector_features = self.vector_processor(lstm_out[:, -1, :])
+        # Create simple features from visual observation (mean pooling)
+        visual_features = torch.mean(visual_obs.float(), dim=[1, 2, 3]).unsqueeze(
+            1
+        )  # [batch, 1]
 
-        # Combine and fuse
-        combined = torch.cat([visual_features, vector_features], dim=1)
+        # Use last timestep of vector features
+        vector_features = vector_obs[:, -1, :1]  # [batch, 1] - only first feature
+
+        # Combine simple features
+        combined = torch.cat([visual_features, vector_features], dim=1)  # [batch, 2]
+
+        # Pad to expected fusion input size
+        padding_size = 64 - combined.shape[1]
+        if padding_size > 0:
+            padding = torch.zeros(batch_size, padding_size, device=combined.device)
+            combined = torch.cat([combined, padding], dim=1)
+        else:
+            combined = combined[:, :64]
+
         output = self.fusion(combined)
 
         return output
