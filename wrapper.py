@@ -309,7 +309,7 @@ class CausalReplayBuffer:
                 else action_logits
             ),
         }
-        
+
         if is_winning:
             # Add to win buffer
             if len(self.win_buffer) < self.max_size // 4:  # 25% for wins
@@ -323,34 +323,42 @@ class CausalReplayBuffer:
                 self.buffer.append(None)
             self.buffer[self.position] = data
             self.position = (self.position + 1) % self.max_size
-            
+
         self.total_added += 1
 
     def sample(self, batch_size):
         """Sample a batch from the buffer with win prioritization"""
-        total_available = len([x for x in self.buffer if x is not None]) + len(self.win_buffer)
+        total_available = len([x for x in self.buffer if x is not None]) + len(
+            self.win_buffer
+        )
         if total_available < batch_size:
             return None, None
 
         batch_obs = []
         batch_logits = []
-        
+
         # Calculate how many samples from each buffer
         if len(self.win_buffer) > 0:
-            win_samples = min(int(batch_size * self.win_sample_ratio), len(self.win_buffer))
+            win_samples = min(
+                int(batch_size * self.win_sample_ratio), len(self.win_buffer)
+            )
             regular_samples = batch_size - win_samples
-            
+
             # Sample from win buffer
             if win_samples > 0:
-                win_indices = np.random.choice(len(self.win_buffer), size=win_samples, replace=False)
+                win_indices = np.random.choice(
+                    len(self.win_buffer), size=win_samples, replace=False
+                )
                 for idx in win_indices:
                     batch_obs.append(self.win_buffer[idx]["obs"])
                     batch_logits.append(self.win_buffer[idx]["action_logits"])
-            
+
             # Sample from regular buffer
             valid_indices = [i for i, x in enumerate(self.buffer) if x is not None]
             if len(valid_indices) >= regular_samples and regular_samples > 0:
-                regular_indices = np.random.choice(valid_indices, size=regular_samples, replace=False)
+                regular_indices = np.random.choice(
+                    valid_indices, size=regular_samples, replace=False
+                )
                 for idx in regular_indices:
                     batch_obs.append(self.buffer[idx]["obs"])
                     batch_logits.append(self.buffer[idx]["action_logits"])
@@ -358,7 +366,9 @@ class CausalReplayBuffer:
             # Fallback to regular sampling
             valid_indices = [i for i, x in enumerate(self.buffer) if x is not None]
             if len(valid_indices) >= batch_size:
-                indices = np.random.choice(valid_indices, size=batch_size, replace=False)
+                indices = np.random.choice(
+                    valid_indices, size=batch_size, replace=False
+                )
                 for idx in indices:
                     batch_obs.append(self.buffer[idx]["obs"])
                     batch_logits.append(self.buffer[idx]["action_logits"])
@@ -936,17 +946,12 @@ class SimpleCNN(nn.Module):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # Vector LSTM
-        self.vector_lstm = nn.LSTM(
-            input_size=vector_feature_count,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            dropout=0.2,
-        )
-
+        # Vector feedforward processor (replaces LSTM)
         self.vector_processor = nn.Sequential(
-            nn.Linear(128, 128),
+            nn.Linear(vector_feature_count, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
@@ -974,9 +979,9 @@ class SimpleCNN(nn.Module):
         # Process visual features
         visual_features = self.visual_cnn(visual_obs.float() / 255.0)
 
-        # Process vector features
-        lstm_out, _ = self.vector_lstm(vector_obs)
-        vector_features = self.vector_processor(lstm_out[:, -1, :])
+        # Process vector features - take last timestep from sequence
+        vector_input = vector_obs[:, -1, :]  # Use last timestep
+        vector_features = self.vector_processor(vector_input)
 
         # Combine and fuse
         combined = torch.cat([visual_features, vector_features], dim=1)
@@ -1029,6 +1034,7 @@ class SimpleVerifier(nn.Module):
 
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
         # Updated input size to include step embedding
+        # energy net for better action
         energy_input_dim = features_dim + 64 + 128 + self.step_embedding_dim
         self.energy_net = nn.Sequential(
             nn.Linear(energy_input_dim, 512),  # Include step embedding
@@ -1046,13 +1052,15 @@ class SimpleVerifier(nn.Module):
         )
 
         # Win-probability estimation network for energy shaping
+
+        # win energy net for win
         self.win_predictor = nn.Sequential(
             nn.Linear(energy_input_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.Sigmoid()  # Win probability [0,1]
+            nn.Sigmoid(),  # Win probability [0,1]
         )
 
         self.energy_scale = 0.5  # Reduced for more sensitivity
@@ -1097,7 +1105,7 @@ class SimpleVerifier(nn.Module):
         # Calculate base energy and win probability
         base_energy = self.energy_net(combined)
         win_prob = self.win_predictor(combined)
-        
+
         # Energy = base_energy - win_weight * win_probability
         # Lower energy for higher win probability (energy minimization seeks wins)
         energy = base_energy - self.win_weight * win_prob
@@ -1299,14 +1307,18 @@ class AggressiveAgent:
                             torch.randn_like(proposal_logits) * self.langevin_noise_std
                         )
                         proposal_logits += noise
-                        
+
                         # Add diversity regularization - push away from recent actions
                         if len(self.recent_actions) > 0:
-                            recent_action_tensor = torch.tensor(self.recent_actions[-5:], device=proposal_logits.device)
+                            recent_action_tensor = torch.tensor(
+                                self.recent_actions[-5:], device=proposal_logits.device
+                            )
                             for recent_action in recent_action_tensor:
                                 if recent_action < proposal_logits.shape[-1]:
                                     # Reduce probability of recent actions
-                                    proposal_logits[0, recent_action] -= self.action_diversity_weight
+                                    proposal_logits[
+                                        0, recent_action
+                                    ] -= self.action_diversity_weight
                 else:
                     # Deterministic: just gradient step
                     with torch.no_grad():
@@ -1384,7 +1396,7 @@ class AggressiveAgent:
         if isinstance(final_action_idx, int):
             self.action_counts[final_action_idx] += 1
             self.total_actions += 1
-            
+
             # Update recent actions for diversity tracking
             self.recent_actions.append(final_action_idx)
             if len(self.recent_actions) > self.recent_actions_window:
@@ -1417,7 +1429,9 @@ class AggressiveAgent:
         # Update replay buffer with final optimized logits
         if self.use_replay_buffer:
             # For now, we don't know if this is winning - will be updated later
-            self.replay_buffer.update(obs_device, predicted_action_logits.detach(), is_winning=False)
+            self.replay_buffer.update(
+                obs_device, predicted_action_logits.detach(), is_winning=False
+            )
 
         thinking_info = {
             "steps_taken": steps_taken,
@@ -1471,7 +1485,7 @@ class AggressiveAgent:
             stats["mcmc_acceptance_rate"] = 0.0
 
         return stats
-    
+
     def update_last_action_outcome(self, obs, action_logits, is_winning=False):
         """Update the replay buffer with outcome information for the last action"""
         if self.use_replay_buffer and is_winning:
