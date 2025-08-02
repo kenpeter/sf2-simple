@@ -416,7 +416,8 @@ class EnhancedRewardCalculator:
         
         # --- RECOMMENDATION 5: Track passivity ---
         self.no_damage_frames = 0
-        self.combo_bonus_multiplier = 2.0
+        # --- COMBO ENHANCEMENT: Increase combo rewards ---
+        self.combo_bonus_multiplier = 4.0  # INCREASED from 2.0 for better combos
         self.fast_damage_bonus = 1.0
         self.timeout_penalty_multiplier = 3.0
 
@@ -467,10 +468,20 @@ class EnhancedRewardCalculator:
             )
 
             if self.consecutive_damage_frames > 1:
+                # --- ENHANCED COMBO SCALING: Exponential growth for longer combos ---
+                combo_length = self.consecutive_damage_frames - 1
+                # Exponential scaling: 1.0, 1.8, 2.8, 4.0, 5.4, 7.0...
                 combo_multiplier = min(
-                    1 + (self.consecutive_damage_frames - 1) * 0.5, 3.0
+                    1 + combo_length * 0.8 + (combo_length ** 1.2) * 0.3, 8.0  # INCREASED max from 3.0 to 8.0
                 )
                 damage_reward *= combo_multiplier
+                
+                # Additional bonus for very long combos (5+ hits)
+                if self.consecutive_damage_frames >= 5:
+                    long_combo_bonus = (self.consecutive_damage_frames - 4) * 2.0
+                    reward += long_combo_bonus
+                    reward_breakdown["long_combo_bonus"] = long_combo_bonus
+                
                 reward_breakdown["combo_multiplier"] = combo_multiplier
                 reward_breakdown["combo_frames"] = self.consecutive_damage_frames
 
@@ -613,6 +624,7 @@ class SimplifiedFeatureTracker:
         self.damage_history = deque(maxlen=self.history_length)
         self.last_action = 0
         self.combo_count = 0
+        self.max_combo_this_round = 0  # Track maximum combo achieved
         # Initialize positional data for blocking knowledge
         self.player_x = 0
         self.enemy_x = 0
@@ -634,14 +646,18 @@ class SimplifiedFeatureTracker:
         damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
         self.damage_history.append(damage_dealt)
 
-        # Update combo tracking
+        # --- ENHANCED COMBO TRACKING ---
         if damage_dealt > 0:
-            if action == self.last_action:
-                self.combo_count += 1
-            else:
-                self.combo_count = max(0, self.combo_count - 1)
+            # Successful attack - increment combo
+            self.combo_count += 1
+            # Store maximum combo achieved
+            if not hasattr(self, 'max_combo_this_round'):
+                self.max_combo_this_round = 0
+            self.max_combo_this_round = max(self.max_combo_this_round, self.combo_count)
         else:
-            self.combo_count = max(0, self.combo_count - 1)
+            # No damage dealt - reset combo but with some forgiveness
+            if self.combo_count > 0:
+                self.combo_count = max(0, self.combo_count - 2)  # Slower decay for combo maintenance
 
         self.last_action = action
 
@@ -714,7 +730,7 @@ class SimplifiedFeatureTracker:
                 player_trend,
                 opponent_trend,
                 self.last_action / 55.0,
-                min(self.combo_count / 5.0, 1.0),
+                min(self.combo_count / 3.0, 2.0),  # ENHANCED: Better combo scaling for longer combos
                 recent_damage,
                 damage_acceleration,
                 action_diversity,
