@@ -242,6 +242,7 @@ class EnhancedTrainer:
         # network into eval mode so frozen
         self.target_verifier.eval()  # Target network is only for inference
 
+        # we create the agent
         self.agent = AggressiveAgent(
             verifier=self.verifier,
             thinking_steps=args.thinking_steps,
@@ -565,6 +566,19 @@ class EnhancedTrainer:
             self.experience_buffer.add_experience(
                 experience, episode_reward, win_result
             )
+
+        # (NEW) CRITICAL FIX: Update the agent's CausalReplayBuffer with winning experiences
+        if win_result == "WIN":
+            for experience in episode_experiences:
+                # Get the observation and the optimized logits that were generated for that step
+                obs_for_buffer = experience["obs"]
+                final_logits = experience["thinking_info"].get("final_action_logits")
+
+                if final_logits is not None:
+                    # Update the agent's internal MCMC replay buffer with this winning example
+                    self.agent.update_last_action_outcome(
+                        obs_for_buffer, final_logits, is_winning=True
+                    )
 
         # Update tracking
         self.performance_history.append(episode_reward / max(1, episode_steps))
@@ -1119,6 +1133,8 @@ def main():
     )
     print(f"     • Deep temporal understanding across {FRAME_STACK_SIZE} steps")
 
+    # train ref to verfier and target verifier, agent does not learn
+    # agent ref to verifier, the agent uses verifier's predict
     trainer = EnhancedTrainer(args)
     trainer.train()
 

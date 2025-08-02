@@ -406,11 +406,15 @@ class EnhancedRewardCalculator:
         self.match_started = False
         self.step_count = 0
         self.max_damage_reward = 1.5
-        self.base_winning_bonus = 5.0
+        # --- RECOMMENDATION 4: Make winning the ultimate goal ---
+        self.base_winning_bonus = 15.0 # INCREASED from 5.0
         self.health_advantage_bonus = 0.8
         self.health_preservation_bonus = 2.0
         self.damage_taken_penalty_multiplier = 2.5
         self.double_ko_penalty = -10.0
+        
+        # --- RECOMMENDATION 5: Track passivity ---
+        self.no_damage_frames = 0
         self.combo_bonus_multiplier = 2.0
         self.fast_damage_bonus = 1.0
         self.timeout_penalty_multiplier = 3.0
@@ -440,6 +444,12 @@ class EnhancedRewardCalculator:
         player_damage_taken = max(0, self.previous_player_health - player_health)
         opponent_damage_dealt = max(0, self.previous_opponent_health - opponent_health)
 
+        # --- RECOMMENDATION 5: Add a penalty for passivity ---
+        if opponent_damage_dealt == 0 and player_damage_taken == 0:
+            self.no_damage_frames += 1
+        else:
+            self.no_damage_frames = 0
+            
         self.total_damage_dealt += opponent_damage_dealt
         self.total_damage_taken += player_damage_taken
 
@@ -546,10 +556,16 @@ class EnhancedRewardCalculator:
 
         # Step penalty to encourage faster resolution
         step_penalty = (
-            -0.01
-        )  # MODIFIED: Increased penalty to encourage more aggressive play
+            -0.005  # MODIFIED: A consistent small penalty to discourage passivity
+        )
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
+        
+        # Additional passivity penalty
+        if self.no_damage_frames > 150: # about 2.5 seconds of nothing happening
+            passivity_penalty = -0.1
+            reward += passivity_penalty
+            reward_breakdown["passivity_penalty"] = passivity_penalty
 
         self.previous_player_health = player_health
         self.previous_opponent_health = opponent_health
@@ -578,6 +594,7 @@ class EnhancedRewardCalculator:
         self.round_result_determined = False
         self.total_damage_dealt = 0.0
         self.total_damage_taken = 0.0
+        self.no_damage_frames = 0 # Reset passivity counter
         self.consecutive_damage_frames = 0
         self.last_damage_frame = -1
 
@@ -1101,25 +1118,28 @@ class AggressiveAgent:
         self.thinking_steps = thinking_steps
         self.thinking_lr = thinking_lr
         self.action_dim = verifier.action_dim
-        self.epsilon = 0.60  # Increased initial exploration
-        self.epsilon_decay = 0.9998  # Slower decay for longer exploration
-        self.min_epsilon = 0.25  # Higher minimum exploration
+        # --- RECOMMENDATION 1: Increase exploration pressure ---
+        self.epsilon = 0.80  # Start higher
+        self.epsilon_decay = 0.9997 # Slightly slower decay
+        self.min_epsilon = 0.15      # CRITICAL: Increase minimum exploration
 
-        # EBT-aligned parameters - IMPROVED for better exploration
-        self.mcmc_step_size = 0.15  # Increased for better exploration
-        self.langevin_noise_std = 0.05  # Increased noise for action diversity
-        self.temperature = 1.5  # Higher temperature for more exploration
-        self.clamp_grad = True  # Whether to clamp gradients
-        self.clamp_max = 3.0  # Increased for stronger gradients
+        # --- RECOMMENDATION 2: Make MCMC sampling healthier ---
+        self.mcmc_step_size = 0.10             # SLIGHTLY REDUCE: Let noise have more effect
+        self.langevin_noise_std = 0.12         # INCREASE: Force more exploration during thinking
+        self.temperature = 1.0                 # Keep as is for now, but could be tuned
+        self.clamp_grad = True
+        self.clamp_max = 3.0
 
         # EBT-style replay buffer
         self.use_replay_buffer = True
-        self.replay_buffer = CausalReplayBuffer(max_size=5000, sample_size=16)
+        # MODIFICATION: Make the causal buffer larger to store more winning strategies
+        # agressi agent use this buffer. just action and best outcome (win)
+        self.replay_buffer = CausalReplayBuffer(max_size=10000, sample_size=16)
 
         # Add action tracking for diversity
         self.action_counts = defaultdict(int)
         self.total_actions = 0
-        self.action_diversity_weight = 0.1  # Weight for diversity regularization
+        self.action_diversity_weight = 0.25 # INCREASE: Make it more costly to repeat actions
         self.recent_actions = []  # Track recent actions for diversity
         self.recent_actions_window = 20  # Window size for recent actions
 
@@ -1340,12 +1360,17 @@ class AggressiveAgent:
 
         # Determine final action
         with torch.no_grad():
+            # --- RECOMMENDATION 6: Add temperature to final action selection ---
+            # Anneal temperature over time. A simple way is to tie it to epsilon
+            action_selection_temp = max(0.1, self.epsilon * 0.5 + 0.05) 
+            
             final_action_probs = F.softmax(
-                predicted_action_logits / self.temperature, dim=-1
+                predicted_action_logits / action_selection_temp, dim=-1
             )
             if deterministic:
                 final_action = torch.argmax(final_action_probs, dim=-1)
             else:
+                # Use multinomial sampling instead of argmax
                 final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
 
         # Update tracking
@@ -1446,8 +1471,20 @@ class AggressiveAgent:
     def update_last_action_outcome(self, obs, action_logits, is_winning=False):
         """Update the replay buffer with outcome information for the last action"""
         if self.use_replay_buffer and is_winning:
+            # We need to construct the observation dictionary correctly
+            obs_dict = {}
+            for key, value in obs.items():
+                # Ensure value is a tensor before detaching/cloning
+                if isinstance(value, torch.Tensor):
+                    obs_dict[key] = value.detach().clone()
+                else:
+                    # If it's a numpy array, we don't need to do anything special
+                    obs_dict[key] = value
+
             # Add winning example to win buffer
-            self.replay_buffer.add(obs, action_logits, is_winning=True)
+            self.replay_buffer.add(
+                obs_dict, action_logits.detach().clone(), is_winning=True
+            )
 
 
 # FULLY FIXED EnhancedStreetFighterWrapper with TIER 2 HYBRID APPROACH
