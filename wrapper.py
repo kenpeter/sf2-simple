@@ -310,15 +310,16 @@ class CausalReplayBuffer:
             ),
         }
 
+        # win, then add to win buffer
         if is_winning:
-            # Add to win buffer
+            # Add to self win buffer
             if len(self.win_buffer) < self.max_size // 4:  # 25% for wins
                 self.win_buffer.append(data)
             else:
                 self.win_buffer[self.win_position] = data
                 self.win_position = (self.win_position + 1) % (self.max_size // 4)
         else:
-            # Add to regular buffer
+            # lose add self buffer
             if len(self.buffer) < self.max_size:
                 self.buffer.append(None)
             self.buffer[self.position] = data
@@ -797,6 +798,7 @@ class StreetFighterDiscreteActions:
 
 
 # Context Transformer for processing action/reward/context sequences
+
 
 # TIER 2 HYBRID APPROACH: Enhanced Context Transformer for rich multimodal sequences
 class HybridContextTransformer(nn.Module):
