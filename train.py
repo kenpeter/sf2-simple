@@ -299,7 +299,7 @@ class EnhancedTrainer:
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"   - Episode-data synchronization: FIXED")
-        print(f"   - Behavioral collapse: FIXED (Boltzmann + Double Q + Strict Buffer)")
+        print(f"   - Behavioral collapse: FIXED (Double Q + Strict Buffer)")
         print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
 
     def _setup_directories(self):
@@ -822,10 +822,18 @@ class EnhancedTrainer:
         print(
             f"   - Exploration: {agent_stats['exploration_rate']:.1%}, Success: {agent_stats['success_rate']:.1%}"
         )
-        print(f"   - EBT Energy Improvement: {agent_stats.get('energy_improvement_rate', 0.0):.1%}")
-        print(f"   - EBT Avg Thinking Steps: {agent_stats.get('average_thinking_steps', 0.0):.1f}")
-        print(f"   - EBT MCMC Acceptance: {agent_stats.get('mcmc_acceptance_rate', 0.0):.1%}")
-        print(f"   - EBT Replay Buffer: {agent_stats.get('replay_buffer_size', 0)} samples")
+        print(
+            f"   - EBT Energy Improvement: {agent_stats.get('energy_improvement_rate', 0.0):.1%}"
+        )
+        print(
+            f"   - EBT Avg Thinking Steps: {agent_stats.get('average_thinking_steps', 0.0):.1f}"
+        )
+        print(
+            f"   - EBT MCMC Acceptance: {agent_stats.get('mcmc_acceptance_rate', 0.0):.1%}"
+        )
+        print(
+            f"   - EBT Replay Buffer: {agent_stats.get('replay_buffer_size', 0)} samples"
+        )
         print(f"   - ActionDiversity: {agent_stats.get('action_diversity', 0.0):.3f}")
         print(
             f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%} - STRICT WINS ONLY)"
@@ -840,9 +848,7 @@ class EnhancedTrainer:
         print(f"   - Elapsed: {elapsed_time:.2f} hours")
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - 🔍 Sync Check: Episode data timestamp={ep_data['timestamp']:.1f}")
-        print(
-            f"   - 🔧 Behavioral Collapse Fixes: Boltzmann Sampling + Double Q-Learning + Strict Buffer"
-        )
+        print(f"   - 🔧 Behavioral Collapse Fixes: Double Q-Learning + Strict Buffer")
         print(
             f"   - 🚀 TIER 2 HYBRID: Rich multimodal sequence (Visual+Vector+Action+Reward)"
         )
@@ -1090,9 +1096,7 @@ def main():
 
     args = parser.parse_args()
 
-    print(
-        f"🔧 SYNC FIXED + EBT-ALIGNED + TIER 2 HYBRID Training Configuration:"
-    )
+    print(f"🔧 SYNC FIXED + EBT-ALIGNED + TIER 2 HYBRID Training Configuration:")
     print(f"   - Learning rate: {args.learning_rate:.2e} (INCREASED)")
     print(f"   - Thinking steps: {args.thinking_steps} (BACK TO 8 for stability)")
     print(f"   - Thinking LR: {args.thinking_lr:.3f} (BACK TO 0.025 for stability)")
