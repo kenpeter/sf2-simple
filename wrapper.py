@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 112
-VECTOR_FEATURE_DIM = 32
+VECTOR_FEATURE_DIM = 36 # INCREASED from 32 to make space for positional features
 MAX_FIGHT_STEPS = 3500
 FRAME_STACK_SIZE = 8
 CONTEXT_SEQUENCE_DIM = 64
@@ -410,7 +410,8 @@ class EnhancedRewardCalculator:
         self.base_winning_bonus = 15.0 # INCREASED from 5.0
         self.health_advantage_bonus = 0.8
         self.health_preservation_bonus = 2.0
-        self.damage_taken_penalty_multiplier = 2.5
+        # --- RECOMMENDATION: Make getting hit MUCH more painful ---
+        self.damage_taken_penalty_multiplier = 4.0 # INCREASED from 2.5
         self.double_ko_penalty = -10.0
         
         # --- RECOMMENDATION 5: Track passivity ---
@@ -554,12 +555,11 @@ class EnhancedRewardCalculator:
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
-        # Step penalty to encourage faster resolution
-        step_penalty = (
-            -0.005  # MODIFIED: A consistent small penalty to discourage passivity
-        )
-        reward += step_penalty
-        reward_breakdown["step_penalty"] = step_penalty
+        # --- RECOMMENDATION: Remove the penalty that discourages blocking ---
+        # Comment out or remove the step penalty to allow defensive actions
+        # step_penalty = -0.005
+        # reward += step_penalty
+        # reward_breakdown["step_penalty"] = step_penalty
         
         # Additional passivity penalty
         if self.no_damage_frames > 150: # about 2.5 seconds of nothing happening
@@ -613,11 +613,18 @@ class SimplifiedFeatureTracker:
         self.damage_history = deque(maxlen=self.history_length)
         self.last_action = 0
         self.combo_count = 0
+        # Initialize positional data for blocking knowledge
+        self.player_x = 0
+        self.enemy_x = 0
 
-    def update(self, player_health, opponent_health, action, reward_breakdown):
+    def update(self, player_health, opponent_health, action, reward_breakdown, player_x=0, enemy_x=0):
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
         self.action_history.append(action / 55.0)
+        
+        # Store positional data for blocking knowledge
+        self.player_x = player_x
+        self.enemy_x = enemy_x
 
         reward_signal = reward_breakdown.get(
             "damage_dealt", 0.0
@@ -691,6 +698,13 @@ class SimplifiedFeatureTracker:
         recent_actions = action_hist[-4:]
         action_diversity = len(set([int(a * 55) for a in recent_actions])) / 4.0
 
+        # --- NEW POSITIONAL FEATURES ---
+        # Normalize positions (approximate screen center and width)
+        norm_player_x = (self.player_x - 128) / 128.0
+        norm_enemy_x = (self.enemy_x - 128) / 128.0
+        relative_distance_x = norm_player_x - norm_enemy_x
+        is_opponent_on_right = 1.0 if relative_distance_x < 0 else -1.0
+        
         # Add derived features
         features.extend(
             [
@@ -704,6 +718,11 @@ class SimplifiedFeatureTracker:
                 recent_damage,
                 damage_acceleration,
                 action_diversity,
+                # --- ADD THE NEW FEATURES HERE ---
+                norm_player_x,
+                norm_enemy_x,
+                relative_distance_x,
+                is_opponent_on_right,
             ]
         )
 
@@ -1646,8 +1665,12 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             "opponent": opponent_health,
         }
 
-        # Update feature tracker
-        self.feature_tracker.update(player_health, opponent_health, 0, {})
+        # Extract initial positional data
+        player_x = info.get("agent_x", 0)
+        enemy_x = info.get("enemy_x", 0)
+        
+        # Update feature tracker with initial state
+        self.feature_tracker.update(player_health, opponent_health, 0, {}, player_x, enemy_x)
 
         # Build initial observation
         initial_observation = self._build_observation(reset_obs, info)
@@ -1728,9 +1751,13 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             final_player_health, final_opponent_health, done, info
         )
 
-        # Update feature tracker
+        # Extract positional data for blocking knowledge
+        player_x = info.get("agent_x", 0)
+        enemy_x = info.get("enemy_x", 0)
+        
+        # Update feature tracker with positional data
         self.feature_tracker.update(
-            final_player_health, final_opponent_health, action, reward_breakdown
+            final_player_health, final_opponent_health, action, reward_breakdown, player_x, enemy_x
         )
 
         # Build observation
