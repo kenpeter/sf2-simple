@@ -16,7 +16,7 @@ python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --featur
 
 # cli 
 python train.py \
-  --num_episodes 100 \
+  --num_episodes 1000 \
   --batch_size 64 \
   --learning_rate 5e-4 \
   --features_dim 256 \
@@ -32,7 +32,8 @@ python train.py \
   --save_frequency 20 \
   --weight_decay 5e-6 \
   --tau 0.005 \
-  --verify_health
+  --verify_health \
+  --load_checkpoint checkpoints/enhanced_rgb_tier2_checkpoint_ep_540.pth
 
 
 

@@ -28,6 +28,7 @@ try:
         make_enhanced_env,
         verify_health_detection,
         SimpleVerifier,
+        ContextTransformer,
         HybridContextTransformer,
         AggressiveAgent,
         SimpleCNN,
