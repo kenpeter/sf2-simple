@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-🛡️ ENHANCED WRAPPER - RGB Version with Transformer Context Sequence (RACE CONDITION FULLY FIXED + TIER 2 HYBRID)
-Key Improvements:
-1. Uses exact memory addresses from data.json for reliable health detection
-2. Implements robust fallback system: Memory -> Visual -> Previous frame
-3. Fixed race condition in final frame health reading with multi-method validation
-4. Enhanced termination detection with cross-validation
-5. Improved health tracking with temporal consistency checks
-6. TIER 2 HYBRID APPROACH: Rich multimodal sequence for Transformer
-7. FIXED COLD START PROBLEM: Smart initialization for rich context sequences
-"""
-
 import cv2
 import torch
 import torch.nn as nn

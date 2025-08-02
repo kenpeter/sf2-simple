@@ -482,13 +482,28 @@ class EnhancedTrainer:
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
+            # Pre-calculate the rich context sequence for the current state 'obs'
+            current_rich_context_sequence = self.env.get_rich_context_sequence(
+                self.verifier.features_extractor
+            )
+            # Inject it into a copy of the observation for prediction.
+            obs_for_predict = obs.copy()
+            obs_for_predict["rich_context_sequence"] = current_rich_context_sequence
+
             self.env.render()
 
-            action, thinking_info = self.agent.predict(obs, deterministic=False)
+            action, thinking_info = self.agent.predict(
+                obs_for_predict, deterministic=False
+            )
             next_obs, reward, done, truncated, info = self.env.step(action)
             episode_reward += reward
             episode_steps += 1
             self.total_steps += 1
+
+            # After the step, get the rich context for the NEXT state
+            next_rich_context_sequence = self.env.get_rich_context_sequence(
+                self.verifier.features_extractor
+            )
 
             final_player_health = info.get("agent_hp", 0)
             final_opponent_health = info.get("enemy_hp", 0)
@@ -509,9 +524,11 @@ class EnhancedTrainer:
 
             experience = {
                 "obs": obs,
+                "rich_context_sequence": current_rich_context_sequence,
                 "action": action,
                 "reward": reward,
                 "next_obs": next_obs,
+                "next_rich_context_sequence": next_rich_context_sequence,
                 "done": done,
                 "thinking_info": thinking_info,
                 "episode": self.episode,
@@ -565,29 +582,6 @@ class EnhancedTrainer:
             "is_fast_win": is_fast_win,
         }
 
-    def _build_rich_sequence_batch(self, batch):
-        """TIER 2: Build rich context sequences for the batch using historical observations"""
-        rich_sequences = []
-
-        for exp in batch:
-            obs = exp["obs"]
-
-            # TIER 2: Use the wrapper's method to build rich context sequence
-            if hasattr(self.env, "get_rich_context_sequence"):
-                rich_sequence = self.env.get_rich_context_sequence(
-                    self.verifier.features_extractor
-                )
-            else:
-                # Fallback: create zeros if method not available
-                rich_sequence = np.zeros(
-                    (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1),
-                    dtype=np.float32,
-                )
-
-            rich_sequences.append(rich_sequence)
-
-        return np.stack(rich_sequences, axis=0)
-
     def train_step(self):
         # good batch, bad batch
         good_batch, bad_batch = self.experience_buffer.sample_balanced_batch(
@@ -606,6 +600,8 @@ class EnhancedTrainer:
         rewards = []
         next_observations = []
         dones = []
+        rich_context_sequences_list = []
+        next_rich_context_sequences_list = []
 
         # in batch, we get back obs, action, reward, next_obs, dones
         for exp in batch:
@@ -614,6 +610,8 @@ class EnhancedTrainer:
             rewards.append(exp["reward"])
             next_observations.append(exp["next_obs"])
             dones.append(exp["done"])
+            rich_context_sequences_list.append(exp["rich_context_sequence"])
+            next_rich_context_sequences_list.append(exp["next_rich_context_sequence"])
 
         # device
         device = self.device
@@ -634,10 +632,9 @@ class EnhancedTrainer:
             device=device,
         )
 
-        # TIER 2: Build rich context sequences
-        rich_context_sequences = self._build_rich_sequence_batch(batch)
+        # TIER 2: Build rich context sequences from pre-calculated data
         rich_context_sequences = torch.tensor(
-            rich_context_sequences,
+            np.stack(rich_context_sequences_list),
             dtype=torch.float32,
             device=device,
         )
@@ -661,12 +658,9 @@ class EnhancedTrainer:
             device=device,
         )
 
-        # TIER 2: Build rich context sequences for next observations
-        next_rich_context_sequences = self._build_rich_sequence_batch(
-            [{"obs": obs} for obs in next_observations]
-        )
+        # TIER 2: Build rich context sequences for next observations from pre-calculated data
         next_rich_context_sequences = torch.tensor(
-            next_rich_context_sequences,
+            np.stack(next_rich_context_sequences_list),
             dtype=torch.float32,
             device=device,
         )
