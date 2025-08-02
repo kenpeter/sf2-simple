@@ -16,25 +16,33 @@ python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --featur
 
 # cli 
 python train.py \
-  --num_episodes 1000 \
-  --batch_size 64 \
-  --learning_rate 5e-4 \
-  --features_dim 256 \
-  --thinking_steps 8 \
-  --thinking_lr 0.025 \
-  --buffer_capacity 30000 \
-  --gamma 0.99 \
-  --contrastive_margin 0.5 \
-  --contrastive_weight 0.4 \
-  --max_grad_norm 2.0 \
-  --train_frequency 2 \
-  --log_frequency 5 \
-  --save_frequency 20 \
-  --weight_decay 5e-6 \
-  --tau 0.005 \
-  --verify_health \
+    --num_episodes 1000 \
+    --batch_size 64 \
+    --learning_rate 5e-4 \
+    --thinking_steps 8 \
+    --thinking_lr 0.025 \
+    --buffer_capacity 30000 \
+    --gamma 0.99 \
+    --contrastive_margin 0.5 \
+    --contrastive_weight 0.4 \
+    --max_grad_norm 2.0 \
+    --train_frequency 2 \
+    --log_frequency 5 \
+    --save_frequency 100 \
+    --weight_decay 5e-6 \
+    --tau 0.005 \
+    --features_dim 256
   --load_checkpoint checkpoints/enhanced_rgb_tier2_checkpoint_ep_540.pth
 
+
+
+Core Energy-Based Learning: Uses gradient descent with autograd to optimize energy functions
+MCMC Steps: Multiple iterative steps (default 8-16) to refine predictions
+Energy Landscape: Learns energy functions that guide action selection
+Replay Buffer: Sophisticated causal replay buffer for experience storage
+Contrastive Learning: Explicit contrastive loss to separate good/bad actions
+Temperature/Noise: Langevin dynamics noise and temperature scaling
+Multiple Energy Landscapes: Different energy landscapes for different MCMC steps
 
 
 # data.json 

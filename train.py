@@ -56,6 +56,8 @@ except ImportError as e:
     exit(1)
 
 
+# RL Training Experience Buffer - stores complete transitions for Q-learning
+# Different from CausalReplayBuffer (in wrapper.py) which stores MCMC action logits
 class ReservoirExperienceBuffer:
     def __init__(self, capacity=30000):
         self.capacity = capacity
@@ -559,7 +561,7 @@ class EnhancedTrainer:
             self.recent_results.append("DRAW")
             win_result = "DRAW"
 
-        # Add experiences to buffer
+        # Add experiences to buffer (for Q-learning training)
         for experience in episode_experiences:
             self.experience_buffer.add_experience(
                 experience, episode_reward, win_result
@@ -686,8 +688,8 @@ class EnhancedTrainer:
 
         self.optimizer.zero_grad()
 
-        # Current energy
-        current_energy = self.verifier(current_obs, action_one_hot)
+        # Current energy (using initial landscape for training)
+        current_energy = self.verifier(current_obs, action_one_hot, mcmc_step=0)
 
         # FIXED: Double Q-Learning target calculation with TIER 2
 
@@ -702,9 +704,9 @@ class EnhancedTrainer:
                 )
                 next_action_one_hot[:, i] = 1.0
                 # in the loop, 56 times, we call verifier to get energy
-                # energy score from energy net
+                # energy score from energy net (using initial landscape)
                 energy = self.verifier(
-                    next_obs, next_action_one_hot
+                    next_obs, next_action_one_hot, mcmc_step=0
                 )  # Using self.verifier here!
 
                 # assign energy into arr
@@ -718,7 +720,7 @@ class EnhancedTrainer:
 
             # 2. Evaluate the energy of that best action using the TARGET network
             next_energy = self.target_verifier(
-                next_obs, best_next_action_one_hot
+                next_obs, best_next_action_one_hot, mcmc_step=0
             )  # Using self.target_verifier here!
 
             # 3. Calculate the final target
@@ -740,7 +742,7 @@ class EnhancedTrainer:
                 batch_size, self.env.action_space.n, device=device
             )
             negative_one_hot.scatter_(1, negative_actions.unsqueeze(1), 1.0)
-            negative_energy = self.verifier(current_obs, negative_one_hot)
+            negative_energy = self.verifier(current_obs, negative_one_hot, mcmc_step=0)
             contrastive_loss += torch.mean(
                 nn.functional.relu(
                     current_energy - negative_energy + self.args.contrastive_margin
@@ -802,7 +804,7 @@ class EnhancedTrainer:
         win_rate_at_episode = safe_divide(ep_data["wins_total"], total_matches, 0.0)
 
         print(
-            f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅ + BEHAVIORAL COLLAPSE FIXED 🔧 + TIER 2 HYBRID 🚀):"
+            f"\n📊 Episode {episode} Summary (SYNC VERIFIED ✅ + EBT-ALIGNED 🧠 + TIER 2 HYBRID 🚀):"
         )
         print(
             f"   - THIS Episode: Reward={ep_data['reward']:.2f}, Steps={ep_data['steps']}, Result={ep_data['result']}"
@@ -820,6 +822,10 @@ class EnhancedTrainer:
         print(
             f"   - Exploration: {agent_stats['exploration_rate']:.1%}, Success: {agent_stats['success_rate']:.1%}"
         )
+        print(f"   - EBT Energy Improvement: {agent_stats.get('energy_improvement_rate', 0.0):.1%}")
+        print(f"   - EBT Avg Thinking Steps: {agent_stats.get('average_thinking_steps', 0.0):.1f}")
+        print(f"   - EBT MCMC Acceptance: {agent_stats.get('mcmc_acceptance_rate', 0.0):.1%}")
+        print(f"   - EBT Replay Buffer: {agent_stats.get('replay_buffer_size', 0)} samples")
         print(f"   - ActionDiversity: {agent_stats.get('action_diversity', 0.0):.3f}")
         print(
             f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%} - STRICT WINS ONLY)"
@@ -858,7 +864,7 @@ class EnhancedTrainer:
         self.train_start_time = time.time()  # For elapsed time calculation
 
         print(
-            f"🎮 Starting ENHANCED RGB training with Transformer + TIER 2 HYBRID (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)..."
+            f"🎮 Starting ENHANCED RGB training with Transformer + TIER 2 HYBRID + EBT-ALIGNED (SYNC FIXED + EBT THINKING)..."
         )
         print(f"   - Total episodes: {self.args.num_episodes}")
         print(f"   - Batch size: {self.args.batch_size}")
@@ -869,10 +875,12 @@ class EnhancedTrainer:
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
         print(f"   - Transformer context sequence: ENABLED")
         print(f"   - Episode-data synchronization: FIXED")
-        print(f"   - Behavioral collapse fixes: ACTIVE")
-        print(f"     • Boltzmann sampling (replaces gradient-based thinking)")
+        print(f"   - EBT-Aligned energy thinking: ACTIVE")
+        print(f"     • True MCMC with Metropolis-Hastings acceptance")
+        print(f"     • Multiple energy landscapes (step-dependent)")
+        print(f"     • Langevin dynamics proposals (gradient + noise)")
+        print(f"     • Causal replay buffer for experience reuse")
         print(f"     • Double Q-Learning (stable target calculation)")
-        print(f"     • Strict experience buffer (only wins are 'good')")
         print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
         print(
             f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)"
@@ -983,7 +991,7 @@ class EnhancedTrainer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced RGB Street Fighter Training with Transformer + TIER 2 HYBRID (SYNC FIXED + BEHAVIORAL COLLAPSE FIXED)"
+        description="Enhanced RGB Street Fighter Training with Transformer + TIER 2 HYBRID + EBT-ALIGNED (SYNC FIXED + EBT THINKING)"
     )
     parser.add_argument(
         "--num_episodes", type=int, default=2000, help="Number of episodes to train"
@@ -1083,7 +1091,7 @@ def main():
     args = parser.parse_args()
 
     print(
-        f"🔧 SYNC FIXED + BEHAVIORAL COLLAPSE FIXED + TIER 2 HYBRID Training Configuration:"
+        f"🔧 SYNC FIXED + EBT-ALIGNED + TIER 2 HYBRID Training Configuration:"
     )
     print(f"   - Learning rate: {args.learning_rate:.2e} (INCREASED)")
     print(f"   - Thinking steps: {args.thinking_steps} (BACK TO 8 for stability)")
@@ -1095,10 +1103,12 @@ def main():
     print(f"   - Max grad norm: {args.max_grad_norm:.1f} (INCREASED)")
     print(f"   - Target Network Tau: {args.tau} (ADDED for stable learning)")
     print(f"   - Episode-data synchronization: ENABLED ✅")
-    print(f"   - Behavioral collapse fixes: ENABLED 🔧")
-    print(f"     • Boltzmann sampling: REPLACES gradient descent")
+    print(f"   - EBT-Aligned energy thinking: ENABLED 🧠")
+    print(f"     • True MCMC: Metropolis-Hastings acceptance")
+    print(f"     • Multiple landscapes: Step-dependent energy functions")
+    print(f"     • Langevin proposals: Gradient + noise sampling")
+    print(f"     • Causal replay buffer: EXPERIENCE reuse")
     print(f"     • Double Q-Learning: STABLE target calculation")
-    print(f"     • Strict buffer: ONLY wins are 'good' experiences")
     print(f"   - TIER 2 HYBRID APPROACH: ENABLED 🚀")
     print(f"     • Rich multimodal sequence processing")
     print(

@@ -286,6 +286,68 @@ class EnhancedHealthDetector:
 
 
 # Enhanced RewardCalculator
+# EBT-Aligned Causal Replay Buffer - stores optimized action logits for MCMC warm-start
+# Different from ReservoirExperienceBuffer (in train.py) which stores transitions for Q-learning
+class CausalReplayBuffer:
+    def __init__(self, max_size=30000, sample_size=32):
+        self.max_size = max_size
+        self.sample_size = sample_size
+        self.buffer = []
+        self.position = 0
+        self.total_added = 0
+        
+    def add(self, obs, action_logits):
+        """Add observation and action logits to buffer"""
+        if len(self.buffer) < self.max_size:
+            self.buffer.append(None)
+        
+        self.buffer[self.position] = {
+            'obs': obs.detach().clone() if isinstance(obs, torch.Tensor) else obs,
+            'action_logits': action_logits.detach().clone() if isinstance(action_logits, torch.Tensor) else action_logits
+        }
+        
+        self.position = (self.position + 1) % self.max_size
+        self.total_added += 1
+    
+    def sample(self, batch_size):
+        """Sample a batch from the buffer"""
+        if len(self.buffer) < batch_size:
+            return None, None
+            
+        indices = np.random.choice(len(self.buffer), size=min(batch_size, len(self.buffer)), replace=False)
+        batch_obs = []
+        batch_logits = []
+        
+        for idx in indices:
+            if self.buffer[idx] is not None:
+                batch_obs.append(self.buffer[idx]['obs'])
+                batch_logits.append(self.buffer[idx]['action_logits'])
+        
+        if len(batch_obs) == 0:
+            return None, None
+            
+        return batch_obs, batch_logits
+    
+    def get_batch(self, current_obs):
+        """Get a mixed batch of current observation and replay buffer samples"""
+        if len(self.buffer) < self.sample_size:
+            return current_obs, None, None
+            
+        # Sample from buffer
+        buffer_obs, buffer_logits = self.sample(self.sample_size)
+        if buffer_obs is None:
+            return current_obs, None, None
+            
+        return current_obs, buffer_logits, None
+    
+    def update(self, obs, final_logits):
+        """Update buffer with final optimized logits"""
+        self.add(obs, final_logits)
+    
+    def __len__(self):
+        return len(self.buffer)
+
+
 class EnhancedRewardCalculator:
     def __init__(self):
         self.previous_opponent_health = MAX_HEALTH
@@ -897,6 +959,11 @@ class SimpleVerifier(nn.Module):
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
+        # Multiple energy landscapes support - MUST be defined first
+        self.max_mcmc_steps = 16  # Support up to 16 MCMC steps
+        self.step_embedding_dim = 32
+        self.step_embedding = nn.Embedding(self.max_mcmc_steps, self.step_embedding_dim)
+
         # Feature extractor
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
@@ -921,10 +988,10 @@ class SimpleVerifier(nn.Module):
         )
 
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
+        # Updated input size to include step embedding
+        energy_input_dim = features_dim + 64 + 128 + self.step_embedding_dim
         self.energy_net = nn.Sequential(
-            nn.Linear(
-                features_dim + 64 + 128, 512
-            ),  # Include Hybrid Transformer context
+            nn.Linear(energy_input_dim, 512),  # Include step embedding
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, 256),
@@ -941,7 +1008,7 @@ class SimpleVerifier(nn.Module):
         self.energy_scale = 0.7
 
     def forward(
-        self, context: Dict[str, torch.Tensor], candidate_action: torch.Tensor
+        self, context: Dict[str, torch.Tensor], candidate_action: torch.Tensor, mcmc_step: int = 0
     ) -> torch.Tensor:
         # extract context features
         context_features = self.features_extractor(context)
@@ -960,19 +1027,41 @@ class SimpleVerifier(nn.Module):
 
         # Embed action
         action_embedded = self.action_embed(candidate_action)
+        
+        # Add MCMC step embedding for multiple energy landscapes
+        batch_size = context_features.shape[0]
+        step_embedding = self._get_step_embedding(mcmc_step, context_features.device, batch_size)
 
-        # Combine all features
+        # Combine all features including step information
         combined = torch.cat(
-            [context_features, action_embedded, context_embedding], dim=-1
+            [context_features, action_embedded, context_embedding, step_embedding], dim=-1
         )
 
-        # Calculate energy
-        energy = self.energy_net(combined) * self.energy_scale
+        # Calculate step-dependent energy
+        energy = self.energy_net(combined) * self._get_step_scale(mcmc_step)
 
         return energy
+    
+    def _get_step_embedding(self, mcmc_step: int, device, batch_size: int):
+        """Get step embedding for multiple energy landscapes"""
+        step_idx = min(mcmc_step, self.max_mcmc_steps - 1)  # Clamp to valid range
+        step_tensor = torch.tensor([step_idx], device=device, dtype=torch.long)
+        step_emb = self.step_embedding(step_tensor)
+        step_emb = step_emb.squeeze(0)  # Remove sequence dimension
+        # Expand to match batch size
+        step_emb = step_emb.unsqueeze(0).expand(batch_size, -1)
+        return step_emb
+    
+    def _get_step_scale(self, mcmc_step: int) -> float:
+        """Get step-dependent energy scaling for multiple landscapes"""
+        # Early steps: broader energy landscape (lower scale)
+        # Later steps: sharper energy landscape (higher scale)
+        progress = mcmc_step / max(1, self.max_mcmc_steps - 1)
+        scale = self.energy_scale * (0.5 + 0.5 * progress)  # Scale from 0.35 to 0.7
+        return scale
 
 
-# AggressiveAgent with Boltzmann sampling - FIXED
+# EBT-Aligned Agent with Gradient-Based Energy Thinking
 class AggressiveAgent:
     def __init__(
         self,
@@ -985,9 +1074,19 @@ class AggressiveAgent:
         self.thinking_lr = thinking_lr
         self.action_dim = verifier.action_dim
         self.epsilon = 0.40
-        self.epsilon_decay = 0.9995  # Fixed: slower decay
-        self.min_epsilon = 0.15  # Fixed: higher minimum
-        self.temperature = 0.5  # FIXED: Temperature for Boltzmann sampling
+        self.epsilon_decay = 0.9995
+        self.min_epsilon = 0.15
+        
+        # EBT-aligned parameters
+        self.mcmc_step_size = 0.1  # Alpha parameter from EBT
+        self.langevin_noise_std = 0.01  # Noise for Langevin dynamics
+        self.temperature = 1.0  # Temperature for softmax normalization
+        self.clamp_grad = True  # Whether to clamp gradients
+        self.clamp_max = 2.0  # Maximum gradient clamp value
+        
+        # EBT-style replay buffer
+        self.use_replay_buffer = True
+        self.replay_buffer = CausalReplayBuffer(max_size=5000, sample_size=16)
 
         # Add action tracking for diversity
         self.action_counts = defaultdict(int)
@@ -998,6 +1097,10 @@ class AggressiveAgent:
             "successful_optimizations": 0,
             "exploration_actions": 0,
             "exploitation_actions": 0,
+            "energy_improvements": 0,
+            "average_thinking_steps": 0.0,
+            "total_mcmc_samples": 0,
+            "total_mcmc_accepted": 0,
         }
 
     def predict(
@@ -1020,13 +1123,11 @@ class AggressiveAgent:
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # Fixed: Better exploration strategy with action diversity
+        # Exploration with action diversity
         if not deterministic and np.random.random() < self.epsilon:
-            # Bias toward less-used actions for diversity
             action_probs = np.ones(self.action_dim)
             for action_idx in range(self.action_dim):
                 count = self.action_counts[action_idx]
-                # Reduce probability for frequently used actions
                 action_probs[action_idx] = 1.0 / (1.0 + count * 0.1)
 
             action_probs = action_probs / action_probs.sum()
@@ -1042,60 +1143,187 @@ class AggressiveAgent:
                 "final_energy": 0.0,
                 "exploration": True,
                 "epsilon": self.epsilon,
-                "action_diversity": len(self.action_counts)
-                / max(1, self.total_actions),
+                "action_diversity": len(self.action_counts) / max(1, self.total_actions),
+                "energy_improvement": False,
             }
             return action_idx, thinking_info
 
         self.stats["exploitation_actions"] += 1
 
-        # FIXED: Replace gradient-based thinking with Boltzmann sampling
-        with torch.no_grad():
-            # Evaluate energy for ALL possible actions at once
-            energies = []
-            for i in range(self.action_dim):
-                action_one_hot = torch.zeros(batch_size, self.action_dim, device=device)
-                action_one_hot[:, i] = 1.0
-                energy = self.verifier(obs_device, action_one_hot)
-                energies.append(energy)
-
-            energies = torch.cat(energies, dim=1)  # Shape: [batch, num_actions]
-
-            # Convert energies to probabilities using temperature
-            # Subtracting max for numerical stability
-            action_probs = F.softmax(-energies / self.temperature, dim=-1)
-
-            # Sample from the distribution
-            if deterministic:
-                action_idx = torch.argmin(energies, dim=-1)
+        # EBT-style gradient-based energy thinking with MCMC
+        # Initialize with random noise or replay buffer sample
+        if self.use_replay_buffer and len(self.replay_buffer) > 0:
+            # Try to get initial condition from replay buffer
+            _, buffer_logits = self.replay_buffer.sample(1)
+            if buffer_logits is not None and len(buffer_logits) > 0:
+                predicted_action_logits = buffer_logits[0].clone().detach().requires_grad_(True)
+                if predicted_action_logits.shape[0] != batch_size:
+                    predicted_action_logits = predicted_action_logits.expand(batch_size, -1).clone().detach().requires_grad_(True)
             else:
-                action_idx = torch.multinomial(action_probs, 1).squeeze(-1)
+                predicted_action_logits = torch.randn(
+                    batch_size, self.action_dim, device=device, requires_grad=True
+                )
+        else:
+            # Initialize with random noise (corrupt initial condition)
+            predicted_action_logits = torch.randn(
+                batch_size, self.action_dim, device=device, requires_grad=True
+            )
+        
+        initial_energy = None
+        final_energy = None
+        steps_taken = 0
+        energy_improved = False
 
-        # Update action tracking
-        final_action = action_idx.item() if batch_size == 1 else action_idx
-        if isinstance(final_action, int):
-            self.action_counts[final_action] += 1
+        # True MCMC optimization loop with Metropolis-Hastings
+        current_logits = predicted_action_logits.clone()
+        accepted_samples = 0
+        
+        with torch.set_grad_enabled(True):
+            # Calculate initial energy
+            current_probs = F.softmax(current_logits / self.temperature, dim=-1)
+            current_energy = self.verifier(obs_device, current_probs, mcmc_step=0)
+            initial_energy = current_energy.item()
+            best_energy = initial_energy
+            best_logits = current_logits.clone()
+            
+            for step in range(self.thinking_steps):
+                # Propose new state using Langevin dynamics (gradient + noise)
+                if step == 0:
+                    # First step: compute gradient for proposal
+                    energy_grad = torch.autograd.grad(
+                        outputs=current_energy.sum(),
+                        inputs=current_logits,
+                        retain_graph=True,
+                        create_graph=False
+                    )[0]
+                    
+                    if self.clamp_grad:
+                        energy_grad = torch.clamp(energy_grad, -self.clamp_max, self.clamp_max)
+                
+                # Propose new state: gradient step + noise (Langevin proposal)
+                proposal_logits = current_logits.clone().detach().requires_grad_(True)
+                
+                if not deterministic:
+                    # Add both gradient information and noise
+                    with torch.no_grad():
+                        if step > 0 or 'energy_grad' in locals():
+                            proposal_logits -= self.mcmc_step_size * energy_grad
+                        
+                        # Add MCMC noise
+                        noise = torch.randn_like(proposal_logits) * self.langevin_noise_std
+                        proposal_logits += noise
+                else:
+                    # Deterministic: just gradient step
+                    with torch.no_grad():
+                        if step > 0 or 'energy_grad' in locals():
+                            proposal_logits -= self.mcmc_step_size * energy_grad
+                
+                # Calculate energy for proposal using current MCMC step
+                proposal_probs = F.softmax(proposal_logits / self.temperature, dim=-1)
+                proposal_energy = self.verifier(obs_device, proposal_probs, mcmc_step=step)
+                
+                # Metropolis-Hastings acceptance criterion
+                energy_diff = proposal_energy.item() - current_energy.item()
+                
+                if deterministic:
+                    # Always accept if energy improved (greedy)
+                    accept = energy_diff < 0
+                else:
+                    # Probabilistic acceptance based on energy difference
+                    accept_prob = np.exp(-energy_diff / self.temperature)
+                    accept = (energy_diff < 0) or (np.random.random() < accept_prob)
+                
+                if accept:
+                    # Accept the proposal
+                    current_logits = proposal_logits
+                    current_energy = proposal_energy
+                    accepted_samples += 1
+                    
+                    # Track best sample seen
+                    if current_energy.item() < best_energy:
+                        best_energy = current_energy.item()
+                        best_logits = current_logits.clone()
+                    
+                    # Compute gradient for next proposal
+                    if step < self.thinking_steps - 1:
+                        energy_grad = torch.autograd.grad(
+                            outputs=current_energy.sum(),
+                            inputs=current_logits,
+                            retain_graph=(step < self.thinking_steps - 2),
+                            create_graph=False
+                        )[0]
+                        
+                        if self.clamp_grad:
+                            energy_grad = torch.clamp(energy_grad, -self.clamp_max, self.clamp_max)
+                
+                steps_taken = step + 1
+                final_energy = best_energy
+                
+                # Check for NaN/Inf
+                if torch.isnan(current_logits).any() or torch.isinf(current_logits).any():
+                    print("⚠️ NaN/Inf detected in MCMC logits, breaking early")
+                    break
+            
+            # Use best sample found during MCMC
+            predicted_action_logits = best_logits
+
+        # Determine final action
+        with torch.no_grad():
+            final_action_probs = F.softmax(predicted_action_logits / self.temperature, dim=-1)
+            if deterministic:
+                final_action = torch.argmax(final_action_probs, dim=-1)
+            else:
+                final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
+
+        # Update tracking
+        final_action_idx = final_action.item() if batch_size == 1 else final_action
+        if isinstance(final_action_idx, int):
+            self.action_counts[final_action_idx] += 1
             self.total_actions += 1
 
-        # Update epsilon more conservatively
+        # Check if energy improved
+        if initial_energy is not None and final_energy is not None:
+            energy_improved = final_energy < initial_energy
+            if energy_improved:
+                self.stats["energy_improvements"] += 1
+
+        # Update epsilon
         if not deterministic:
             self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
         self.stats["total_predictions"] += 1
-        self.stats[
-            "successful_optimizations"
-        ] += 1  # All Boltzmann samples are "successful"
+        self.stats["successful_optimizations"] += 1
+        
+        # Update MCMC stats
+        self.stats["total_mcmc_samples"] += steps_taken
+        self.stats["total_mcmc_accepted"] += accepted_samples
+        
+        # Update average thinking steps
+        current_avg = self.stats["average_thinking_steps"]
+        total_preds = self.stats["total_predictions"]
+        self.stats["average_thinking_steps"] = ((current_avg * (total_preds - 1)) + steps_taken) / total_preds
+
+        # Update replay buffer with final optimized logits
+        if self.use_replay_buffer:
+            self.replay_buffer.update(obs_device, predicted_action_logits.detach())
 
         thinking_info = {
-            "steps_taken": 0,  # No gradient steps needed
-            "final_energy": torch.min(energies).item(),
-            "energy_improvement": True,
+            "steps_taken": steps_taken,
+            "initial_energy": initial_energy if initial_energy is not None else 0.0,
+            "final_energy": final_energy if final_energy is not None else 0.0,
+            "energy_improvement": energy_improved,
+            "mcmc_accepted_samples": accepted_samples,
+            "mcmc_acceptance_rate": accepted_samples / max(1, steps_taken),
             "exploration": False,
             "epsilon": self.epsilon,
             "action_diversity": len(self.action_counts) / max(1, self.total_actions),
+            "replay_buffer_size": len(self.replay_buffer) if self.use_replay_buffer else 0,
+            "final_action_logits": predicted_action_logits.detach().clone(),
+            "multiple_landscapes": True,
+            "max_mcmc_step": steps_taken - 1,
         }
 
-        return final_action, thinking_info
+        return final_action_idx, thinking_info
 
     def get_thinking_stats(self) -> Dict:
         stats = self.stats.copy()
@@ -1106,12 +1334,26 @@ class AggressiveAgent:
             stats["exploration_rate"] = (
                 stats["exploration_actions"] / stats["total_predictions"]
             )
+            stats["energy_improvement_rate"] = (
+                stats["energy_improvements"] / stats["total_predictions"]
+            )
         else:
             stats["success_rate"] = 0.0
             stats["exploration_rate"] = 0.0
+            stats["energy_improvement_rate"] = 0.0
 
         stats["current_epsilon"] = self.epsilon
         stats["action_diversity"] = len(self.action_counts) / max(1, self.total_actions)
+        stats["mcmc_step_size"] = self.mcmc_step_size
+        stats["langevin_noise"] = self.langevin_noise_std
+        stats["temperature"] = self.temperature
+        
+        # MCMC-specific stats
+        if stats["total_mcmc_samples"] > 0:
+            stats["mcmc_acceptance_rate"] = stats["total_mcmc_accepted"] / stats["total_mcmc_samples"]
+        else:
+            stats["mcmc_acceptance_rate"] = 0.0
+            
         return stats
 
 
