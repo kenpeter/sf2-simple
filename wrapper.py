@@ -53,8 +53,15 @@ class StreetFighter(gym.Env):
         # Use the filtered action space from retro
         self.action_space = self.game.action_space
         
-        # Score tracking for reward calculation
-        self.score = 0
+        # Health tracking for reward shaping
+        self.player_health = 0
+        self.enemy_health = 0
+        
+        # Position tracking
+        self.agent_x = 0
+        self.agent_y = 0
+        self.enemy_x = 0
+        self.enemy_y = 0
         
     def preprocess(self, observation):
         """
@@ -78,10 +85,35 @@ class StreetFighter(gym.Env):
         # Preprocess observation
         obs = self.preprocess(obs)
         
-        # Calculate reward based on score change
-        score = info.get('score', 0)
-        reward = score - self.score
-        self.score = score
+        # --- REWARD SHAPING ---
+        current_player_health = info.get('agent_hp', 0)
+        current_enemy_health = info.get('enemy_hp', 0)
+        
+        # Position tracking
+        current_agent_x = info.get('agent_x', 0)
+        current_agent_y = info.get('agent_y', 0)
+        current_enemy_x = info.get('enemy_x', 0)
+        current_enemy_y = info.get('enemy_y', 0)
+        
+        # Reward for damaging the opponent
+        damage_to_enemy = self.enemy_health - current_enemy_health
+        
+        # Penalty for taking damage
+        damage_to_player = self.player_health - current_player_health
+        
+        # Combine into a single reward signal
+        # You can tune these weights
+        reward = damage_to_enemy * 1.5 - damage_to_player * 1.0 - 0.001
+
+        # Update the stored health values for the next step
+        self.player_health = current_player_health
+        self.enemy_health = current_enemy_health
+        
+        # Update position values
+        self.agent_x = current_agent_x
+        self.agent_y = current_agent_y
+        self.enemy_x = current_enemy_x
+        self.enemy_y = current_enemy_y
         
         return obs, reward, done, truncated, info
     
@@ -91,8 +123,15 @@ class StreetFighter(gym.Env):
         """
         obs, info = self.game.reset(**kwargs)
         
-        # Reset score
-        self.score = info.get('score', 0)
+        # Reset health scores from info dict
+        self.player_health = info.get('agent_hp', 0)
+        self.enemy_health = info.get('enemy_hp', 0)
+        
+        # Reset position values
+        self.agent_x = info.get('agent_x', 0)
+        self.agent_y = info.get('agent_y', 0)
+        self.enemy_x = info.get('enemy_x', 0)
+        self.enemy_y = info.get('enemy_y', 0)
         
         # Preprocess observation
         obs = self.preprocess(obs)
