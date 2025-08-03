@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 112
-VECTOR_FEATURE_DIM = 36 # INCREASED from 32 to make space for positional features
+VECTOR_FEATURE_DIM = 36  # INCREASED from 32 to make space for positional features
 MAX_FIGHT_STEPS = 3500
 FRAME_STACK_SIZE = 8
 CONTEXT_SEQUENCE_DIM = 64
@@ -289,7 +289,15 @@ class EnhancedHealthDetector:
 # EBT-Aligned Causal Replay Buffer - stores optimized action logits for MCMC warm-start
 # Different from ReservoirExperienceBuffer (in train.py) which stores transitions for Q-learning
 class CausalReplayBuffer:
-    def __init__(self, max_size=30000, sample_size=32):
+    def __init__(self, max_size=30000, sample_size=32, initial_win_ratio=0.3):
+        """
+        Initializes the replay buffer with an adaptive sampling strategy.
+        
+        Args:
+            max_size (int): The total capacity of the normal experience buffer.
+            sample_size (int): The number of samples to return for MCMC initialization.
+            initial_win_ratio (float): The starting ratio for sampling winning experiences.
+        """
         self.max_size = max_size
         self.sample_size = sample_size
         self.buffer = []
@@ -297,10 +305,20 @@ class CausalReplayBuffer:
         self.position = 0
         self.win_position = 0
         self.total_added = 0
-        self.win_sample_ratio = 0.7  # 70% of samples from wins
+        
+        # --- ADAPTIVE SAMPLING PARAMETERS ---
+        self.initial_win_ratio = initial_win_ratio  # Start with a low win sample ratio
+        self.max_win_ratio = 0.65  # Cap the win ratio to ensure diversity
+        self.min_win_samples_for_adaptation = 100  # Min wins needed before increasing the ratio
+        self.adaptive_win_ratio = initial_win_ratio  # The dynamic ratio, updated during training
+        
+        print(f"✅ Initialized CausalReplayBuffer with ADAPTIVE sampling.")
+        print(f"   - Initial Win Sample Ratio: {self.initial_win_ratio:.2f}")
+        print(f"   - Max Win Sample Ratio: {self.max_win_ratio:.2f}")
+        print(f"   - Min Wins for Adaptation: {self.min_win_samples_for_adaptation}")
 
     def add(self, obs, action_logits, is_winning=False):
-        """Add observation and action logits to buffer"""
+        """Add observation and action logits to the appropriate buffer."""
         data = {
             "obs": obs.detach().clone() if isinstance(obs, torch.Tensor) else obs,
             "action_logits": (
@@ -310,82 +328,93 @@ class CausalReplayBuffer:
             ),
         }
 
-        # win, then add to win buffer
         if is_winning:
-            # Add to self win buffer
-            if len(self.win_buffer) < self.max_size // 4:  # 25% for wins
+            win_buffer_capacity = self.max_size // 4
+            if len(self.win_buffer) < win_buffer_capacity:
                 self.win_buffer.append(data)
             else:
                 self.win_buffer[self.win_position] = data
-                self.win_position = (self.win_position + 1) % (self.max_size // 4)
+                self.win_position = (self.win_position + 1) % win_buffer_capacity
         else:
-            # lose add self buffer
             if len(self.buffer) < self.max_size:
                 self.buffer.append(None)
             self.buffer[self.position] = data
             self.position = (self.position + 1) % self.max_size
 
         self.total_added += 1
+        
+    def update_adaptive_win_ratio(self, current_win_rate: float):
+        """
+        Dynamically adjust the win sample ratio based on agent performance.
+        
+        Args:
+            current_win_rate (float): The agent's recent win rate (e.g., over the last 100 episodes).
+        """
+        win_buffer_size = len(self.win_buffer)
 
-    def sample(self, batch_size):
-        """Sample a batch from the buffer with win prioritization"""
-        total_available = len([x for x in self.buffer if x is not None]) + len(
-            self.win_buffer
-        )
+        if win_buffer_size < self.min_win_samples_for_adaptation:
+            # If we don't have enough winning examples, stick to the initial low ratio
+            self.adaptive_win_ratio = self.initial_win_ratio
+        else:
+            # Linearly increase the win ratio from its initial value towards the max value
+            # as the agent's win rate improves.
+            ratio_range = self.max_win_ratio - self.initial_win_ratio
+            new_ratio = self.initial_win_ratio + (ratio_range * current_win_rate)
+            self.adaptive_win_ratio = min(self.max_win_ratio, new_ratio)
+
+    def sample(self, batch_size: int, current_win_rate: float = 0.0):
+        """
+        Sample a batch with adaptive win prioritization.
+        
+        Args:
+            batch_size (int): The number of samples to return.
+            current_win_rate (float): The agent's current win rate to guide sampling.
+        """
+        valid_normal_samples = [x for x in self.buffer if x is not None]
+        total_available = len(valid_normal_samples) + len(self.win_buffer)
         if total_available < batch_size:
             return None, None
+
+        # Update the sampling ratio based on current performance
+        self.update_adaptive_win_ratio(current_win_rate)
 
         batch_obs = []
         batch_logits = []
 
-        # Calculate how many samples from each buffer
-        if len(self.win_buffer) > 0:
-            win_samples = min(
-                int(batch_size * self.win_sample_ratio), len(self.win_buffer)
-            )
-            regular_samples = batch_size - win_samples
+        # Calculate number of samples from each buffer based on the adaptive ratio
+        win_samples_count = min(int(batch_size * self.adaptive_win_ratio), len(self.win_buffer))
+        regular_samples_count = batch_size - win_samples_count
 
-            # Sample from win buffer
-            if win_samples > 0:
-                win_indices = np.random.choice(
-                    len(self.win_buffer), size=win_samples, replace=False
-                )
-                for idx in win_indices:
-                    batch_obs.append(self.win_buffer[idx]["obs"])
-                    batch_logits.append(self.win_buffer[idx]["action_logits"])
+        # 1. Sample from the win buffer
+        if win_samples_count > 0:
+            win_indices = np.random.choice(len(self.win_buffer), size=win_samples_count, replace=True)
+            for idx in win_indices:
+                batch_obs.append(self.win_buffer[idx]["obs"])
+                batch_logits.append(self.win_buffer[idx]["action_logits"])
 
-            # Sample from regular buffer
-            valid_indices = [i for i, x in enumerate(self.buffer) if x is not None]
-            if len(valid_indices) >= regular_samples and regular_samples > 0:
-                regular_indices = np.random.choice(
-                    valid_indices, size=regular_samples, replace=False
-                )
-                for idx in regular_indices:
-                    batch_obs.append(self.buffer[idx]["obs"])
-                    batch_logits.append(self.buffer[idx]["action_logits"])
-        else:
-            # Fallback to regular sampling
-            valid_indices = [i for i, x in enumerate(self.buffer) if x is not None]
-            if len(valid_indices) >= batch_size:
-                indices = np.random.choice(
-                    valid_indices, size=batch_size, replace=False
-                )
-                for idx in indices:
-                    batch_obs.append(self.buffer[idx]["obs"])
-                    batch_logits.append(self.buffer[idx]["action_logits"])
+        # 2. Sample from the regular buffer
+        if regular_samples_count > 0 and len(valid_normal_samples) > 0:
+            if len(valid_normal_samples) >= regular_samples_count:
+                regular_indices = np.random.choice(len(valid_normal_samples), size=regular_samples_count, replace=False)
+            else: # Fallback if not enough normal samples
+                regular_indices = np.random.choice(len(valid_normal_samples), size=regular_samples_count, replace=True)
+            
+            for idx in regular_indices:
+                batch_obs.append(valid_normal_samples[idx]["obs"])
+                batch_logits.append(valid_normal_samples[idx]["action_logits"])
 
-        if len(batch_obs) == 0:
+        if not batch_obs:
             return None, None
 
         return batch_obs, batch_logits
 
-    def get_batch(self, current_obs):
-        """Get a mixed batch of current observation and replay buffer samples"""
+    def get_batch(self, current_obs, win_rate=0.0):
+        """Get a mixed batch of current observation and replay buffer samples. (DEPRECATED)"""
+        # This method seems unused in your `AggressiveAgent`, but we'll update it for completeness
         if len(self.buffer) < self.sample_size:
             return current_obs, None, None
 
-        # Sample from buffer
-        buffer_obs, buffer_logits = self.sample(self.sample_size)
+        buffer_obs, buffer_logits = self.sample(self.sample_size, current_win_rate=win_rate)
         if buffer_obs is None:
             return current_obs, None, None
 
@@ -407,14 +436,22 @@ class EnhancedRewardCalculator:
         self.step_count = 0
         self.max_damage_reward = 1.5
         # --- MASSIVE CARROT: Make winning the ultimate goal ---
-        self.base_winning_bonus = 20.0 # MASSIVELY INCREASED from 15.0 - winning is the jackpot
-        self.health_advantage_bonus = 1.2 # INCREASED from 0.8 - reward dominance
-        self.health_preservation_bonus = 3.0 # INCREASED from 2.0 - high health wins are best
+        self.base_winning_bonus = (
+            20.0  # MASSIVELY INCREASED from 15.0 - winning is the jackpot
+        )
+        self.health_advantage_bonus = 1.2  # INCREASED from 0.8 - reward dominance
+        self.health_preservation_bonus = (
+            3.0  # INCREASED from 2.0 - high health wins are best
+        )
         # --- PAINFUL STICK: Make getting hit extremely costly ---
-        self.damage_taken_penalty_multiplier = 5.0 # INCREASED from 4.0 - getting hit is devastating
-        self.double_ko_penalty = -15.0 # INCREASED penalty from -10.0 - avoid mutual destruction
-        self.losing_penalty = -8.0 # NEW: Make losing severely punishing
-        
+        self.damage_taken_penalty_multiplier = (
+            5.0  # INCREASED from 4.0 - getting hit is devastating
+        )
+        self.double_ko_penalty = (
+            -15.0
+        )  # INCREASED penalty from -10.0 - avoid mutual destruction
+        self.losing_penalty = -8.0  # NEW: Make losing severely punishing
+
         # --- RECOMMENDATION 5: Track passivity ---
         self.no_damage_frames = 0
         # --- COMBO ENHANCEMENT: Increase combo rewards ---
@@ -452,7 +489,7 @@ class EnhancedRewardCalculator:
             self.no_damage_frames += 1
         else:
             self.no_damage_frames = 0
-            
+
         self.total_damage_dealt += opponent_damage_dealt
         self.total_damage_taken += player_damage_taken
 
@@ -471,7 +508,7 @@ class EnhancedRewardCalculator:
             if self.consecutive_damage_frames > 1:
                 # --- NON-LINEAR COMBO SCALING: Exponential jackpot for longer combos ---
                 combo_length = self.consecutive_damage_frames
-                
+
                 # Non-linear scaling creates massive incentive for combos:
                 # 2-hit: 1.5x, 3-hit: 2.5x, 4-hit: 4.0x, 5-hit: 6.0x, 6-hit: 8.5x...
                 combo_multiplier = 1.0  # Default multiplier
@@ -484,22 +521,24 @@ class EnhancedRewardCalculator:
                 elif combo_length == 5:
                     combo_multiplier = 6.0
                 elif combo_length >= 6:
-                    combo_multiplier = 8.0 + (combo_length - 6) * 1.5  # Keeps growing beyond 6
-                
+                    combo_multiplier = (
+                        8.0 + (combo_length - 6) * 1.5
+                    )  # Keeps growing beyond 6
+
                 damage_reward *= combo_multiplier
-                
+
                 # MILESTONE BONUS: Special reward for achieving 4-hit combo
                 if self.consecutive_damage_frames >= 4:
                     milestone_bonus = 3.0  # Flat bonus for 4+ hit combos
                     reward += milestone_bonus
                     reward_breakdown["combo_milestone_bonus"] = milestone_bonus
-                
+
                 # Additional scaling bonus for very long combos (6+ hits)
                 if self.consecutive_damage_frames >= 6:
                     ultra_combo_bonus = (self.consecutive_damage_frames - 5) * 2.5
                     reward += ultra_combo_bonus
                     reward_breakdown["ultra_combo_bonus"] = ultra_combo_bonus
-                
+
                 reward_breakdown["combo_multiplier"] = combo_multiplier
                 reward_breakdown["combo_frames"] = self.consecutive_damage_frames
 
@@ -589,9 +628,9 @@ class EnhancedRewardCalculator:
         # step_penalty = -0.005
         # reward += step_penalty
         # reward_breakdown["step_penalty"] = step_penalty
-        
+
         # Additional passivity penalty
-        if self.no_damage_frames > 150: # about 2.5 seconds of nothing happening
+        if self.no_damage_frames > 150:  # about 2.5 seconds of nothing happening
             passivity_penalty = -0.1
             reward += passivity_penalty
             reward_breakdown["passivity_penalty"] = passivity_penalty
@@ -623,7 +662,7 @@ class EnhancedRewardCalculator:
         self.round_result_determined = False
         self.total_damage_dealt = 0.0
         self.total_damage_taken = 0.0
-        self.no_damage_frames = 0 # Reset passivity counter
+        self.no_damage_frames = 0  # Reset passivity counter
         self.consecutive_damage_frames = 0
         self.last_damage_frame = -1
 
@@ -647,11 +686,19 @@ class SimplifiedFeatureTracker:
         self.player_x = 0
         self.enemy_x = 0
 
-    def update(self, player_health, opponent_health, action, reward_breakdown, player_x=0, enemy_x=0):
+    def update(
+        self,
+        player_health,
+        opponent_health,
+        action,
+        reward_breakdown,
+        player_x=0,
+        enemy_x=0,
+    ):
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
         self.action_history.append(action / 55.0)
-        
+
         # Store positional data for blocking knowledge
         self.player_x = player_x
         self.enemy_x = enemy_x
@@ -660,7 +707,9 @@ class SimplifiedFeatureTracker:
             "damage_dealt", 0.0
         ) - reward_breakdown.get("damage_taken", 0.0)
         # NORMALIZE: Clip reward signal to prevent extreme values from dominating
-        self.reward_history.append(np.clip(reward_signal, -2.0, 2.0) / 2.0)  # Normalize to [-1, 1]
+        self.reward_history.append(
+            np.clip(reward_signal, -2.0, 2.0) / 2.0
+        )  # Normalize to [-1, 1]
 
         damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
         self.damage_history.append(damage_dealt)
@@ -670,13 +719,15 @@ class SimplifiedFeatureTracker:
             # Successful attack - increment combo
             self.combo_count += 1
             # Store maximum combo achieved
-            if not hasattr(self, 'max_combo_this_round'):
+            if not hasattr(self, "max_combo_this_round"):
                 self.max_combo_this_round = 0
             self.max_combo_this_round = max(self.max_combo_this_round, self.combo_count)
         else:
             # No damage dealt - reset combo but with some forgiveness
             if self.combo_count > 0:
-                self.combo_count = max(0, self.combo_count - 2)  # Slower decay for combo maintenance
+                self.combo_count = max(
+                    0, self.combo_count - 2
+                )  # Slower decay for combo maintenance
 
         self.last_action = action
 
@@ -739,23 +790,28 @@ class SimplifiedFeatureTracker:
         norm_enemy_x = (self.enemy_x - 128) / 128.0
         relative_distance_x = norm_player_x - norm_enemy_x
         is_opponent_on_right = 1.0 if relative_distance_x < 0 else -1.0
-        
+
         # Add derived features - ALL PROPERLY NORMALIZED to [-1, 1] range
         features.extend(
             [
                 current_player_health,  # Already normalized by MAX_HEALTH
-                current_opponent_health,  # Already normalized by MAX_HEALTH  
-                (current_player_health - current_opponent_health),  # Difference in [-1, 1]
+                current_opponent_health,  # Already normalized by MAX_HEALTH
+                (
+                    current_player_health - current_opponent_health
+                ),  # Difference in [-1, 1]
                 np.clip(player_trend, -1.0, 1.0),  # Clamp trends to [-1, 1]
                 np.clip(opponent_trend, -1.0, 1.0),  # Clamp trends to [-1, 1]
                 self.last_action / 55.0,  # Normalize action to [0, 1]
-                min(self.combo_count, 5.0) / 5.0,  # Cap and normalize combo count to [0, 1]
+                min(self.combo_count, 5.0)
+                / 5.0,  # Cap and normalize combo count to [0, 1]
                 np.clip(recent_damage, 0.0, 1.0),  # Clamp damage to [0, 1]
-                np.clip(damage_acceleration, -1.0, 1.0),  # Clamp acceleration to [-1, 1]
+                np.clip(
+                    damage_acceleration, -1.0, 1.0
+                ),  # Clamp acceleration to [-1, 1]
                 action_diversity,  # Already in [0, 1] range
                 # --- POSITIONAL FEATURES: Already normalized ---
                 norm_player_x,  # [-1, 1] range
-                norm_enemy_x,   # [-1, 1] range
+                norm_enemy_x,  # [-1, 1] range
                 np.clip(relative_distance_x, -2.0, 2.0) / 2.0,  # Normalize to [-1, 1]
                 is_opponent_on_right,  # Already in [-1, 1] range
             ]
@@ -868,249 +924,7 @@ class StreetFighterDiscreteActions:
         return self.action_map.get(action_idx, [])
 
 
-# Context Transformer for processing action/reward/context sequences
-
-
-# LIGHTWEIGHT TRANSFORMER: Diet version with dramatically reduced parameters
-class LightweightContextTransformer(nn.Module):
-    def __init__(
-        self,
-        visual_feature_dim=256,
-        vector_feature_dim=32,
-        action_dim=56,
-        hidden_dim=64,      # REDUCED from 128
-        num_layers=1,       # REDUCED from 2
-        num_heads=2,        # REDUCED from 4
-    ):
-        super().__init__()
-        self.visual_feature_dim = visual_feature_dim
-        self.vector_feature_dim = vector_feature_dim
-        self.action_dim = action_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-
-        # Total token size: visual features + vector features + action one-hot + reward
-        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
-
-        # Input embedding now projects to smaller dimension
-        self.embedding = nn.Linear(self.token_dim, hidden_dim)
-
-        # The Transformer encoder layer is now much smaller
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=hidden_dim * 2,  # REDUCED from hidden_dim * 4
-            dropout=0.1,
-            activation="relu",
-        )
-        
-        # The stack of layers is smaller
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_layers,
-        )
-
-        self.output = nn.Linear(hidden_dim, hidden_dim)
-
-    def forward(self, rich_sequence, attention_mask=None):
-        """
-        rich_sequence: [batch_size, seq_len, token_dim]
-        where token_dim = visual_features + vector_features + action_one_hot + reward
-        """
-        batch_size, seq_len, _ = rich_sequence.shape
-
-        # Embed the rich sequence
-        x = self.embedding(rich_sequence)
-        x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
-
-        # Create causal attention mask if not provided
-        if attention_mask is None:
-            attention_mask = torch.tril(
-                torch.ones(seq_len, seq_len, device=x.device)
-            ).bool()
-
-        # Apply transformer
-        x = self.transformer(x, mask=~attention_mask)
-
-        # Take the last sequence output
-        x = x[-1, :, :]  # (batch_size, hidden_dim)
-        x = self.output(x)
-
-        return x
-
-
-# SINGLE ATTENTION BLOCK: Maximum simplicity while preserving attention mechanism
-class SingleAttentionBlock(nn.Module):
-    def __init__(
-        self,
-        visual_feature_dim=256,
-        vector_feature_dim=32,
-        action_dim=56,
-        hidden_dim=64,  # Small hidden dimension
-        num_heads=2,    # Small number of heads
-    ):
-        super().__init__()
-        self.visual_feature_dim = visual_feature_dim
-        self.vector_feature_dim = vector_feature_dim
-        self.action_dim = action_dim
-        self.hidden_dim = hidden_dim
-
-        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
-        self.embedding = nn.Linear(self.token_dim, hidden_dim)
-
-        # Just one Multi-Head Attention layer
-        self.attention = nn.MultiHeadAttention(
-            embed_dim=hidden_dim, 
-            num_heads=num_heads, 
-            dropout=0.1, 
-            batch_first=True
-        )
-
-        # A small feed-forward network to process the attention output
-        self.feed_forward = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 2, hidden_dim)
-        )
-        
-        # Layer normalization is crucial for stability
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        self.norm2 = nn.LayerNorm(hidden_dim)
-
-    def forward(self, rich_sequence, attention_mask=None):
-        # rich_sequence shape: (batch_size, seq_len, token_dim)
-        
-        # 1. Embed the sequence
-        embedded_sequence = self.embedding(rich_sequence)
-
-        # 2. Apply Self-Attention
-        attention_output, _ = self.attention(
-            query=embedded_sequence, 
-            key=embedded_sequence, 
-            value=embedded_sequence,
-            attn_mask=attention_mask
-        )
-        
-        # 3. Add & Norm (residual connection)
-        x = self.norm1(embedded_sequence + attention_output)
-
-        # 4. Feed Forward Network
-        ff_output = self.feed_forward(x)
-
-        # 5. Add & Norm
-        x = self.norm2(x + ff_output)
-
-        # 6. Take the last token's output as the context summary
-        return x[:, -1, :]  # (batch_size, hidden_dim)
-
-
-# GATED RECURRENT CONTEXT: Traditional but highly efficient sequence processor
-class GatedRecurrentContext(nn.Module):
-    def __init__(
-        self,
-        visual_feature_dim=256,
-        vector_feature_dim=32,
-        action_dim=56,
-        hidden_dim=128,  # GRUs can handle a slightly larger hidden state
-        num_layers=2,
-    ):
-        super().__init__()
-        self.visual_feature_dim = visual_feature_dim
-        self.vector_feature_dim = vector_feature_dim
-        self.action_dim = action_dim
-        self.hidden_dim = hidden_dim
-
-        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
-        
-        # A GRU layer instead of a Transformer
-        self.gru = nn.GRU(
-            input_size=self.token_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=0.1 if num_layers > 1 else 0
-        )
-
-        self.output = nn.Linear(hidden_dim, hidden_dim)
-
-    def forward(self, rich_sequence, attention_mask=None):
-        # rich_sequence shape: (batch_size, seq_len, token_dim)
-        
-        # The GRU outputs all hidden states for the sequence, and the final hidden state
-        all_outputs, final_hidden_state = self.gru(rich_sequence)
-
-        # We want the output of the very last time step
-        last_output = all_outputs[:, -1, :]
-        
-        return self.output(last_output)
-
-
-# HYBRID CONTEXT TRANSFORMER: Rename LightweightContextTransformer to HybridContextTransformer
-class HybridContextTransformer(nn.Module):
-    def __init__(
-        self,
-        visual_feature_dim=256,
-        vector_feature_dim=32,
-        action_dim=56,
-        hidden_dim=64,      # REDUCED from 128
-        num_layers=1,       # REDUCED from 2
-        num_heads=2,        # REDUCED from 4
-    ):
-        super().__init__()
-        self.visual_feature_dim = visual_feature_dim
-        self.vector_feature_dim = vector_feature_dim
-        self.action_dim = action_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-
-        # Total token size: visual features + vector features + action one-hot + reward
-        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
-
-        # Input embedding now projects to smaller dimension
-        self.embedding = nn.Linear(self.token_dim, hidden_dim)
-
-        # The Transformer encoder layer is now much smaller
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=hidden_dim * 2,  # REDUCED from hidden_dim * 4
-            dropout=0.1,
-            activation="relu",
-        )
-        
-        # The stack of layers is smaller
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_layers,
-        )
-
-        self.output = nn.Linear(hidden_dim, hidden_dim)
-
-    def forward(self, rich_sequence, attention_mask=None):
-        """
-        rich_sequence: [batch_size, seq_len, token_dim]
-        where token_dim = visual_features + vector_features + action_one_hot + reward
-        """
-        batch_size, seq_len, _ = rich_sequence.shape
-
-        # Embed the rich sequence
-        x = self.embedding(rich_sequence)
-        x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
-
-        # Create causal attention mask if not provided
-        if attention_mask is None:
-            attention_mask = torch.tril(
-                torch.ones(seq_len, seq_len, device=x.device)
-            ).bool()
-
-        # Apply transformer
-        x = self.transformer(x, mask=~attention_mask)
-
-        # Take the last sequence output
-        x = x[-1, :, :]  # (batch_size, hidden_dim)
-        x = self.output(x)
-
-        return x
+# NO TRANSFORMERS - Pure Energy-Based Thinking Only
 
 
 # SimpleCNN for visual processing
@@ -1215,14 +1029,7 @@ class SimpleVerifier(nn.Module):
         # Feature extractor
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # TIER 2: Hybrid context transformer (now lightweight)
-        self.context_transformer = HybridContextTransformer(
-            visual_feature_dim=features_dim,
-            vector_feature_dim=VECTOR_FEATURE_DIM,
-            action_dim=self.action_dim,
-            hidden_dim=64,   # REDUCED from 128
-            num_layers=1,    # REDUCED from 2
-        )
+        # NO TRANSFORMER: Pure energy-based thinking only
 
         # Action embedding - FIXED: Remove BatchNorm1d to avoid single batch issues
         # when linear that is embed
@@ -1237,8 +1044,8 @@ class SimpleVerifier(nn.Module):
 
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
         # Updated input size to include step embedding
-        # energy net for better action
-        energy_input_dim = features_dim + 64 + 64 + self.step_embedding_dim  # context embedding now 64
+        # energy net for better action (NO TRANSFORMER)
+        energy_input_dim = features_dim + 64 + self.step_embedding_dim  # NO context embedding
         self.energy_net = nn.Sequential(
             nn.Linear(energy_input_dim, 512),  # Include step embedding
             nn.ReLU(),
@@ -1279,17 +1086,7 @@ class SimpleVerifier(nn.Module):
         # extract context features
         context_features = self.features_extractor(context)
 
-        # TIER 2: Build rich context sequence and pass to hybrid transformer
-        rich_sequence = context.get(
-            "rich_context_sequence",
-            torch.zeros(
-                context_features.shape[0],
-                FRAME_STACK_SIZE,
-                self.context_transformer.token_dim,
-                device=context_features.device,
-            ),
-        )
-        context_embedding = self.context_transformer(rich_sequence)
+        # NO TRANSFORMER: Skip rich sequence processing
 
         # Embed action
         action_embedded = self.action_embed(candidate_action)
@@ -1300,9 +1097,9 @@ class SimpleVerifier(nn.Module):
             mcmc_step, context_features.device, batch_size
         )
 
-        # Combine all features including step information
+        # Combine features WITHOUT transformer context embedding
         combined = torch.cat(
-            [context_features, action_embedded, context_embedding, step_embedding],
+            [context_features, action_embedded, step_embedding],
             dim=-1,
         )
 
@@ -1350,13 +1147,15 @@ class AggressiveAgent:
         self.action_dim = verifier.action_dim
         # --- RECOMMENDATION 1: Increase exploration pressure ---
         self.epsilon = 0.80  # Start higher
-        self.epsilon_decay = 0.9997 # Slightly slower decay
-        self.min_epsilon = 0.15      # CRITICAL: Increase minimum exploration
+        self.epsilon_decay = 0.9997  # Slightly slower decay
+        self.min_epsilon = 0.15  # CRITICAL: Increase minimum exploration
 
         # --- RECOMMENDATION 2: Make MCMC sampling healthier ---
-        self.mcmc_step_size = 0.10             # SLIGHTLY REDUCE: Let noise have more effect
-        self.langevin_noise_std = 0.12         # INCREASE: Force more exploration during thinking
-        self.temperature = 1.0                 # Keep as is for now, but could be tuned
+        self.mcmc_step_size = 0.10  # SLIGHTLY REDUCE: Let noise have more effect
+        self.langevin_noise_std = (
+            0.12  # INCREASE: Force more exploration during thinking
+        )
+        self.temperature = 1.0  # Keep as is for now, but could be tuned
         self.clamp_grad = True
         self.clamp_max = 3.0
 
@@ -1369,9 +1168,15 @@ class AggressiveAgent:
         # Add action tracking for diversity
         self.action_counts = defaultdict(int)
         self.total_actions = 0
-        self.action_diversity_weight = 0.25 # INCREASE: Make it more costly to repeat actions
+        self.action_diversity_weight = (
+            0.25  # INCREASE: Make it more costly to repeat actions
+        )
         self.recent_actions = []  # Track recent actions for diversity
         self.recent_actions_window = 20  # Window size for recent actions
+        
+        # Win rate tracking for adaptive buffer sampling
+        self.recent_episodes = deque(maxlen=100)  # Track last 100 episodes
+        self.current_win_rate = 0.0
 
         self.stats = {
             "total_predictions": 0,
@@ -1441,8 +1246,8 @@ class AggressiveAgent:
         if self.use_replay_buffer and len(self.replay_buffer) > 0:
             # Try to get initial condition from replay buffer
 
-            # buffer logic from replay buffer, sample 1
-            _, buffer_logits = self.replay_buffer.sample(1)
+            # buffer logic from replay buffer, sample 1 with current win rate
+            _, buffer_logits = self.replay_buffer.sample(1, current_win_rate=self.current_win_rate)
             if buffer_logits is not None and len(buffer_logits) > 0:
                 predicted_action_logits = (
                     buffer_logits[0].clone().detach().requires_grad_(True)
@@ -1592,8 +1397,8 @@ class AggressiveAgent:
         with torch.no_grad():
             # --- RECOMMENDATION 6: Add temperature to final action selection ---
             # Anneal temperature over time. A simple way is to tie it to epsilon
-            action_selection_temp = max(0.1, self.epsilon * 0.5 + 0.05) 
-            
+            action_selection_temp = max(0.1, self.epsilon * 0.5 + 0.05)
+
             final_action_probs = F.softmax(
                 predicted_action_logits / action_selection_temp, dim=-1
             )
@@ -1698,6 +1503,12 @@ class AggressiveAgent:
 
         return stats
 
+    def update_episode_outcome(self, is_winning=False):
+        """Update win rate tracking for adaptive buffer sampling"""
+        self.recent_episodes.append(1.0 if is_winning else 0.0)
+        if len(self.recent_episodes) > 0:
+            self.current_win_rate = sum(self.recent_episodes) / len(self.recent_episodes)
+
     def update_last_action_outcome(self, obs, action_logits, is_winning=False):
         """Update the replay buffer with outcome information for the last action"""
         if self.use_replay_buffer and is_winning:
@@ -1752,23 +1563,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             shape=(FRAME_STACK_SIZE, 56 + 1 + 10),  # Action one-hot + reward + context
             dtype=np.float32,
         )
-        # TIER 2: Rich context sequence space (visual features + vector features + action + reward)
-        rich_context_sequence_space = gym.spaces.Box(
-            low=-10.0,
-            high=10.0,
-            shape=(
-                FRAME_STACK_SIZE,
-                256 + VECTOR_FEATURE_DIM + 56 + 1,
-            ),  # visual + vector + action + reward
-            dtype=np.float32,
-        )
-
         self.observation_space = gym.spaces.Dict(
             {
                 "visual_obs": visual_space,
                 "vector_obs": vector_space,
                 "context_sequence": context_sequence_space,
-                "rich_context_sequence": rich_context_sequence_space,  # TIER 2: Added rich sequence
             }
         )
 
@@ -1783,14 +1582,14 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.termination_validated = False
 
         print(
-            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED + TIER 2 HYBRID + COLD START FIXED)"
+            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE + PURE ENERGY-BASED THINKING)"
         )
         print(f"   - Game Mode: SINGLE ROUND (episode ends after one fight)")
         print(f"   - Memory-first health detection with data.json addresses")
         print(f"   - Visual fallback for final frame validation")
         print(f"   - Enhanced termination detection with cross-validation")
-        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
-        print(f"   - COLD START PROBLEM: FIXED with smart initialization")
+        print(f"   - NO TRANSFORMERS: Pure energy-based thinking only")
+        print(f"   - Enhanced rewards: Massive win bonus + combo scaling")
 
     def _initialize_frame_stack(self, initial_frame):
         self.frame_stack.clear()
@@ -1879,9 +1678,11 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Extract initial positional data
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
-        
+
         # Update feature tracker with initial state
-        self.feature_tracker.update(player_health, opponent_health, 0, {}, player_x, enemy_x)
+        self.feature_tracker.update(
+            player_health, opponent_health, 0, {}, player_x, enemy_x
+        )
 
         # Build initial observation
         initial_observation = self._build_observation(reset_obs, info)
@@ -1965,10 +1766,15 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Extract positional data for blocking knowledge
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
-        
+
         # Update feature tracker with positional data
         self.feature_tracker.update(
-            final_player_health, final_opponent_health, action, reward_breakdown, player_x, enemy_x
+            final_player_health,
+            final_opponent_health,
+            action,
+            reward_breakdown,
+            player_x,
+            enemy_x,
         )
 
         # Build observation
@@ -2050,126 +1856,13 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Get context sequence (legacy support)
         context_sequence = self.feature_tracker.get_context_sequence()
 
-        # TIER 2: Build rich context sequence - placeholder for now
-        # This will be populated properly during training when we have access to the CNN
-        rich_context_sequence = np.zeros(
-            (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1), dtype=np.float32
-        )
-
         return {
             "visual_obs": stacked_visual.astype(np.uint8),
             "vector_obs": vector_obs.astype(np.float32),
             "context_sequence": context_sequence.astype(np.float32),
-            "rich_context_sequence": rich_context_sequence.astype(
-                np.float32
-            ),  # TIER 2: Added
         }
 
-    def _build_rich_sequence_from_history(self, history_list, feature_extractor):
-        """TIER 2: Helper method to build rich context sequence from history list"""
-        rich_sequence_tokens = []
-        device = next(feature_extractor.parameters()).device
-
-        for i in range(FRAME_STACK_SIZE):
-            # Get historical data for step i
-            if i < len(history_list):
-                historical_obs = history_list[i]
-                historical_action = (
-                    list(self.action_history)[i] if len(self.action_history) > i else 0
-                )
-                historical_reward = (
-                    list(self.reward_history)[i]
-                    if len(self.reward_history) > i
-                    else 0.0
-                )
-            else:
-                # Use the last available observation if we don't have enough history
-                historical_obs = history_list[-1] if history_list else None
-                historical_action = 0
-                historical_reward = 0.0
-
-            if historical_obs is None:
-                # Absolute fallback - create a token of zeros
-                token_step_i = np.zeros(
-                    256 + VECTOR_FEATURE_DIM + 56 + 1, dtype=np.float32
-                )
-                rich_sequence_tokens.append(token_step_i)
-                continue
-
-            # Extract visual and vector features
-            visual_obs = historical_obs["visual_obs"]
-            vector_obs = historical_obs["vector_obs"]
-
-            # Convert to tensors and add batch dimension
-            visual_tensor = torch.from_numpy(visual_obs).unsqueeze(0).float().to(device)
-            vector_tensor = torch.from_numpy(vector_obs).unsqueeze(0).float().to(device)
-
-            # Create observation dict for feature extractor
-            obs_dict = {"visual_obs": visual_tensor, "vector_obs": vector_tensor}
-
-            # Extract visual features using CNN (no grad since this is preprocessing)
-            with torch.no_grad():
-                visual_features = feature_extractor(obs_dict).squeeze(0).cpu().numpy()
-
-            # Get vector features (use the last timestep)
-            vector_features = vector_obs[-1, :]  # Shape: [VECTOR_FEATURE_DIM]
-
-            # Create action one-hot
-            action_one_hot = np.zeros(56)
-            if 0 <= historical_action < 56:
-                action_one_hot[historical_action] = 1.0
-
-            # Combine all features for this timestep token
-            token_step_i = np.concatenate(
-                [
-                    visual_features,  # 256 dims
-                    vector_features,  # 32 dims
-                    action_one_hot,  # 56 dims
-                    [historical_reward],  # 1 dim
-                ]
-            )
-
-            rich_sequence_tokens.append(token_step_i)
-
-        # Stack into sequence
-        rich_sequence = np.stack(
-            rich_sequence_tokens, axis=0
-        )  # Shape: [seq_len, features]
-
-        return rich_sequence.astype(np.float32)
-
-    def get_rich_context_sequence(self, feature_extractor):
-        """TIER 2: Build rich context sequence using historical data and feature extractor - COLD START FIXED"""
-
-        if len(self.observation_history) < FRAME_STACK_SIZE:
-            # SMART INITIALIZATION: Use current observation to fill missing history
-            current_obs = (
-                self.observation_history[-1] if self.observation_history else None
-            )
-            if current_obs is None:
-                # Absolute fallback - still use zeros but this should rarely happen
-                return np.zeros(
-                    (FRAME_STACK_SIZE, 256 + VECTOR_FEATURE_DIM + 56 + 1),
-                    dtype=np.float32,
-                )
-
-            # Fill missing history slots with current observation
-            filled_history = []
-            for i in range(FRAME_STACK_SIZE):
-                if i < len(self.observation_history):
-                    filled_history.append(self.observation_history[i])
-                else:
-                    filled_history.append(current_obs)  # Replicate current
-
-            # Now build rich sequence from filled history
-            return self._build_rich_sequence_from_history(
-                filled_history, feature_extractor
-            )
-
-        # Normal case: enough history
-        return self._build_rich_sequence_from_history(
-            list(self.observation_history), feature_extractor
-        )
+# Rich context sequence methods removed - NO TRANSFORMER
 
 
 def make_enhanced_env():
@@ -2369,9 +2062,6 @@ __all__ = [
     "StreetFighterDiscreteActions",
     "SimpleCNN",
     "SimpleVerifier",
-    "HybridContextTransformer",  # Lightweight transformer (formerly heavy)
-    "SingleAttentionBlock",  # Minimal attention-only approach
-    "GatedRecurrentContext",  # Traditional RNN alternative
     "AggressiveAgent",
     "safe_divide",
     "safe_std",
@@ -2390,7 +2080,7 @@ __all__ = [
 ]
 
 print(
-    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE - RACE CONDITION FULLY FIXED + TIER 2 HYBRID + SAMPLING + COLD START FIXED)"
+    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE + PURE ENERGY-BASED THINKING)"
 )
 print(f"   - ✅ Game Mode: SINGLE ROUND (episode ends after one fight)")
 print(f"   - ✅ Memory-first health detection with data.json addresses")
@@ -2400,15 +2090,11 @@ print(
     f"   - ✅ RGB images with frame stacking: ACTIVE ({SCREEN_WIDTH}x{SCREEN_HEIGHT})"
 )
 print(f"   - ✅ Time-decayed rewards and aggressive exploration: ACTIVE")
-print(f"   - ✅ Transformer context sequence: ENABLED")
+print(f"   - ✅ NO TRANSFORMERS: Pure energy-based thinking only")
 print(f"   - ✅ Race condition fix: FULLY IMPLEMENTED")
-print(f"   - ✅ sampling: REPLACES gradient-based thinking")
-print(f"   - ✅ TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
-print(f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)")
-print(f"     • Deep temporal understanding across {FRAME_STACK_SIZE} historical steps")
-print(f"   - ✅ COLD START PROBLEM: FIXED with smart initialization")
-print(f"     • Replicates current observation to fill missing history")
-print(f"     • Prevents Transformer from learning garbage during first 8 episodes")
+print(f"   - ✅ MCMC sampling: Gradient-based energy thinking")
+print(f"   - ✅ Normalized features: All inputs properly scaled")
+print(f"   - ✅ Enhanced rewards: Massive win bonus + combo scaling")
 print(
-    f"🎯 Ready for robust SINGLE ROUND training with accurate win/loss detection, rich context understanding, and proper initialization!"
+    f"🎯 Ready for robust SINGLE ROUND training with pure energy-based decision making!"
 )

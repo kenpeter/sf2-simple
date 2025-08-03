@@ -28,9 +28,7 @@ try:
         make_enhanced_env,
         verify_health_detection,
         SimpleVerifier,
-        HybridContextTransformer,
         AggressiveAgent,
-        SimpleCNN,
         safe_mean,
         safe_std,
         safe_divide,
@@ -44,11 +42,11 @@ try:
     )
 
     print(
-        "✅ Successfully imported enhanced RGB wrapper components with Transformer + TIER 2 HYBRID"
+        "✅ Successfully imported enhanced RGB wrapper components with PURE ENERGY-BASED THINKING"
     )
     print(f"✅ RGB processing with {SCREEN_WIDTH}x{SCREEN_HEIGHT} images: ACTIVE")
-    print(f"✅ Transformer context sequence: ACTIVE")
-    print(f"✅ TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
+    print(f"✅ NO TRANSFORMERS: Pure energy-based thinking only")
+    print(f"✅ Enhanced rewards: Massive win bonus + combo scaling")
 except ImportError as e:
     print(f"❌ Failed to import enhanced wrapper: {e}")
     print("Make sure wrapper.py is in the same directory")
@@ -296,11 +294,11 @@ class EnhancedTrainer:
         print(f"   - Reservoir sampling: ENABLED (60/40 Good/Bad Ratio)")
         print(f"   - Stable Learning: Target Network ENABLED (tau={args.tau})")
         print(f"   - Plateau detection: ACTIVE (Fixed)")
-        print(f"   - Transformer context sequence: ENABLED")
+        print(f"   - NO TRANSFORMERS: Pure energy-based thinking only")
         print(f"   - RGB processing: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"   - Episode-data synchronization: FIXED")
         print(f"   - Behavioral collapse: FIXED (Double Q + Strict Buffer)")
-        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
+        print(f"   - Enhanced rewards: Massive win bonus + combo scaling")
 
     def _setup_directories(self):
         self.log_dir = Path("logs")
@@ -484,28 +482,18 @@ class EnhancedTrainer:
         while (
             not done and not truncated and episode_steps < self.args.max_episode_steps
         ):
-            # Pre-calculate the rich context sequence for the current state 'obs'
-            current_rich_context_sequence = self.env.get_rich_context_sequence(
-                self.verifier.features_extractor
-            )
-            # Inject it into a copy of the observation for prediction.
-            obs_for_predict = obs.copy()
-            obs_for_predict["rich_context_sequence"] = current_rich_context_sequence
-
+            # NO TRANSFORMER: Use observations directly
             self.env.render()
 
             action, thinking_info = self.agent.predict(
-                obs_for_predict, deterministic=False
+                obs, deterministic=False
             )
             next_obs, reward, done, truncated, info = self.env.step(action)
             episode_reward += reward
             episode_steps += 1
             self.total_steps += 1
 
-            # After the step, get the rich context for the NEXT state
-            next_rich_context_sequence = self.env.get_rich_context_sequence(
-                self.verifier.features_extractor
-            )
+            # NO TRANSFORMER: Skip rich context processing
 
             final_player_health = info.get("agent_hp", 0)
             final_opponent_health = info.get("enemy_hp", 0)
@@ -526,11 +514,9 @@ class EnhancedTrainer:
 
             experience = {
                 "obs": obs,
-                "rich_context_sequence": current_rich_context_sequence,
                 "action": action,
                 "reward": reward,
                 "next_obs": next_obs,
-                "next_rich_context_sequence": next_rich_context_sequence,
                 "done": done,
                 "thinking_info": thinking_info,
                 "episode": self.episode,
@@ -560,6 +546,9 @@ class EnhancedTrainer:
             self.draws += 1
             self.recent_results.append("DRAW")
             win_result = "DRAW"
+
+        # Update agent's win rate tracking for adaptive buffer sampling
+        self.agent.update_episode_outcome(is_winning=(win_result == "WIN"))
 
         # Add experiences to buffer (for Q-learning training)
         for experience in episode_experiences:
@@ -615,9 +604,6 @@ class EnhancedTrainer:
         rewards = []
         next_observations = []
         dones = []
-        rich_context_sequences_list = []
-        next_rich_context_sequences_list = []
-
         # in batch, we get back obs, action, reward, next_obs, dones
         for exp in batch:
             observations.append(exp["obs"])
@@ -625,8 +611,6 @@ class EnhancedTrainer:
             rewards.append(exp["reward"])
             next_observations.append(exp["next_obs"])
             dones.append(exp["done"])
-            rich_context_sequences_list.append(exp["rich_context_sequence"])
-            next_rich_context_sequences_list.append(exp["next_rich_context_sequence"])
 
         # device
         device = self.device
@@ -647,12 +631,7 @@ class EnhancedTrainer:
             device=device,
         )
 
-        # TIER 2: Build rich context sequences from pre-calculated data
-        rich_context_sequences = torch.tensor(
-            np.stack(rich_context_sequences_list),
-            dtype=torch.float32,
-            device=device,
-        )
+        # NO TRANSFORMER: Skip rich context sequences
 
         actions = torch.tensor(actions, dtype=torch.long, device=device)
         rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
@@ -673,12 +652,7 @@ class EnhancedTrainer:
             device=device,
         )
 
-        # TIER 2: Build rich context sequences for next observations from pre-calculated data
-        next_rich_context_sequences = torch.tensor(
-            np.stack(next_rich_context_sequences_list),
-            dtype=torch.float32,
-            device=device,
-        )
+        # NO TRANSFORMER: Skip next rich context sequences
 
         dones = torch.tensor(dones, dtype=torch.float32, device=device)
 
@@ -690,13 +664,11 @@ class EnhancedTrainer:
             "visual_obs": visual_obs,
             "vector_obs": vector_obs,
             "context_sequence": context_sequences,
-            "rich_context_sequence": rich_context_sequences,  # TIER 2: Added
         }
         next_obs = {
             "visual_obs": next_visual_obs,
             "vector_obs": next_vector_obs,
             "context_sequence": next_context_sequences,
-            "rich_context_sequence": next_rich_context_sequences,  # TIER 2: Added
         }
 
         self.optimizer.zero_grad()
@@ -883,7 +855,7 @@ class EnhancedTrainer:
         self.train_start_time = time.time()  # For elapsed time calculation
 
         print(
-            f"🎮 Starting ENHANCED RGB training with Transformer + TIER 2 HYBRID + EBT-ALIGNED (SYNC FIXED + EBT THINKING)..."
+            f"🎮 Starting ENHANCED RGB training with PURE ENERGY-BASED THINKING + EBT-ALIGNED (SYNC FIXED + EBT THINKING)..."
         )
         print(f"   - Total episodes: {self.args.num_episodes}")
         print(f"   - Batch size: {self.args.batch_size}")
@@ -892,7 +864,7 @@ class EnhancedTrainer:
         print(f"   - Initial exploration: {self.agent.epsilon:.1%}")
         print(f"   - Frame stacking: {FRAME_STACK_SIZE} frames")
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
-        print(f"   - Transformer context sequence: ENABLED")
+        print(f"   - NO TRANSFORMERS: Pure energy-based thinking only")
         print(f"   - Episode-data synchronization: FIXED")
         print(f"   - EBT-Aligned energy thinking: ACTIVE")
         print(f"     • True MCMC with Metropolis-Hastings acceptance")
@@ -900,7 +872,7 @@ class EnhancedTrainer:
         print(f"     • Langevin dynamics proposals (gradient + noise)")
         print(f"     • Causal replay buffer for experience reuse")
         print(f"     • Double Q-Learning (stable target calculation)")
-        print(f"   - TIER 2 HYBRID APPROACH: Rich multimodal sequence processing")
+        print(f"   - Enhanced rewards: Massive win bonus + combo scaling")
         print(
             f"     • Visual features (256) + Vector features (32) + Action (56) + Reward (1)"
         )
@@ -999,7 +971,7 @@ class EnhancedTrainer:
         print(f"   - Fast wins: {self.fast_wins}, Timeouts: {self.timeout_wins}")
         print(f"   - Learning rate reboots: {self.reboot_count}")
         print(f"   - Image format: RGB ({SCREEN_WIDTH}x{SCREEN_HEIGHT})")
-        print(f"   - Transformer context sequence: ENABLED")
+        print(f"   - NO TRANSFORMERS: Pure energy-based thinking only")
         print(f"   - Episode synchronization: VERIFIED ✅")
         print(f"   - Behavioral collapse: FIXED 🔧")
         print(f"   - TIER 2 HYBRID APPROACH: ENABLED 🚀")
@@ -1010,7 +982,7 @@ class EnhancedTrainer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced RGB Street Fighter Training with Transformer + TIER 2 HYBRID + EBT-ALIGNED (SYNC FIXED + EBT THINKING)"
+        description="Enhanced RGB Street Fighter Training with PURE ENERGY-BASED THINKING + EBT-ALIGNED (SYNC FIXED + EBT THINKING)"
     )
     parser.add_argument(
         "--num_episodes", type=int, default=2000, help="Number of episodes to train"
