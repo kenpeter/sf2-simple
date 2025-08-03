@@ -408,9 +408,9 @@ class MinimalFixTrainer:
                 episode_reward += reward
                 episode_steps += 1
 
-                # Check for match win (best of 3)
+                # Check for round win (single episode = single round)
                 reward_breakdown = info.get("reward_breakdown", {})
-                if "match_won" in reward_breakdown:
+                if "round_won" in reward_breakdown:
                     wins += 1
                     break
 
