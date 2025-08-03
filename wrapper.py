@@ -406,13 +406,14 @@ class EnhancedRewardCalculator:
         self.match_started = False
         self.step_count = 0
         self.max_damage_reward = 1.5
-        # --- RECOMMENDATION 4: Make winning the ultimate goal ---
-        self.base_winning_bonus = 15.0 # INCREASED from 5.0
-        self.health_advantage_bonus = 0.8
-        self.health_preservation_bonus = 2.0
-        # --- RECOMMENDATION: Make getting hit MUCH more painful ---
-        self.damage_taken_penalty_multiplier = 4.0 # INCREASED from 2.5
-        self.double_ko_penalty = -10.0
+        # --- MASSIVE CARROT: Make winning the ultimate goal ---
+        self.base_winning_bonus = 20.0 # MASSIVELY INCREASED from 15.0 - winning is the jackpot
+        self.health_advantage_bonus = 1.2 # INCREASED from 0.8 - reward dominance
+        self.health_preservation_bonus = 3.0 # INCREASED from 2.0 - high health wins are best
+        # --- PAINFUL STICK: Make getting hit extremely costly ---
+        self.damage_taken_penalty_multiplier = 5.0 # INCREASED from 4.0 - getting hit is devastating
+        self.double_ko_penalty = -15.0 # INCREASED penalty from -10.0 - avoid mutual destruction
+        self.losing_penalty = -8.0 # NEW: Make losing severely punishing
         
         # --- RECOMMENDATION 5: Track passivity ---
         self.no_damage_frames = 0
@@ -468,19 +469,36 @@ class EnhancedRewardCalculator:
             )
 
             if self.consecutive_damage_frames > 1:
-                # --- ENHANCED COMBO SCALING: Exponential growth for longer combos ---
-                combo_length = self.consecutive_damage_frames - 1
-                # Exponential scaling: 1.0, 1.8, 2.8, 4.0, 5.4, 7.0...
-                combo_multiplier = min(
-                    1 + combo_length * 0.8 + (combo_length ** 1.2) * 0.3, 8.0  # INCREASED max from 3.0 to 8.0
-                )
+                # --- NON-LINEAR COMBO SCALING: Exponential jackpot for longer combos ---
+                combo_length = self.consecutive_damage_frames
+                
+                # Non-linear scaling creates massive incentive for combos:
+                # 2-hit: 1.5x, 3-hit: 2.5x, 4-hit: 4.0x, 5-hit: 6.0x, 6-hit: 8.5x...
+                combo_multiplier = 1.0  # Default multiplier
+                if combo_length == 2:
+                    combo_multiplier = 1.5
+                elif combo_length == 3:
+                    combo_multiplier = 2.5
+                elif combo_length == 4:
+                    combo_multiplier = 4.0
+                elif combo_length == 5:
+                    combo_multiplier = 6.0
+                elif combo_length >= 6:
+                    combo_multiplier = 8.0 + (combo_length - 6) * 1.5  # Keeps growing beyond 6
+                
                 damage_reward *= combo_multiplier
                 
-                # Additional bonus for very long combos (5+ hits)
-                if self.consecutive_damage_frames >= 5:
-                    long_combo_bonus = (self.consecutive_damage_frames - 4) * 2.0
-                    reward += long_combo_bonus
-                    reward_breakdown["long_combo_bonus"] = long_combo_bonus
+                # MILESTONE BONUS: Special reward for achieving 4-hit combo
+                if self.consecutive_damage_frames >= 4:
+                    milestone_bonus = 3.0  # Flat bonus for 4+ hit combos
+                    reward += milestone_bonus
+                    reward_breakdown["combo_milestone_bonus"] = milestone_bonus
+                
+                # Additional scaling bonus for very long combos (6+ hits)
+                if self.consecutive_damage_frames >= 6:
+                    ultra_combo_bonus = (self.consecutive_damage_frames - 5) * 2.5
+                    reward += ultra_combo_bonus
+                    reward_breakdown["ultra_combo_bonus"] = ultra_combo_bonus
                 
                 reward_breakdown["combo_multiplier"] = combo_multiplier
                 reward_breakdown["combo_frames"] = self.consecutive_damage_frames
@@ -546,8 +564,8 @@ class EnhancedRewardCalculator:
                 self.round_lost = True
                 self.round_won = False
                 self.round_draw = False
-                reward += -3.0
-                reward_breakdown["round_lost"] = -3.0
+                reward += self.losing_penalty
+                reward_breakdown["round_lost"] = self.losing_penalty
 
             else:
                 # Draw case (both <= 0 or other scenarios)
@@ -641,7 +659,8 @@ class SimplifiedFeatureTracker:
         reward_signal = reward_breakdown.get(
             "damage_dealt", 0.0
         ) - reward_breakdown.get("damage_taken", 0.0)
-        self.reward_history.append(np.clip(reward_signal, -1.0, 1.0))
+        # NORMALIZE: Clip reward signal to prevent extreme values from dominating
+        self.reward_history.append(np.clip(reward_signal, -2.0, 2.0) / 2.0)  # Normalize to [-1, 1]
 
         damage_dealt = reward_breakdown.get("damage_dealt", 0.0)
         self.damage_history.append(damage_dealt)
@@ -721,24 +740,24 @@ class SimplifiedFeatureTracker:
         relative_distance_x = norm_player_x - norm_enemy_x
         is_opponent_on_right = 1.0 if relative_distance_x < 0 else -1.0
         
-        # Add derived features
+        # Add derived features - ALL PROPERLY NORMALIZED to [-1, 1] range
         features.extend(
             [
-                current_player_health,
-                current_opponent_health,
-                current_player_health - current_opponent_health,
-                player_trend,
-                opponent_trend,
-                self.last_action / 55.0,
-                min(self.combo_count / 3.0, 2.0),  # ENHANCED: Better combo scaling for longer combos
-                recent_damage,
-                damage_acceleration,
-                action_diversity,
-                # --- ADD THE NEW FEATURES HERE ---
-                norm_player_x,
-                norm_enemy_x,
-                relative_distance_x,
-                is_opponent_on_right,
+                current_player_health,  # Already normalized by MAX_HEALTH
+                current_opponent_health,  # Already normalized by MAX_HEALTH  
+                (current_player_health - current_opponent_health),  # Difference in [-1, 1]
+                np.clip(player_trend, -1.0, 1.0),  # Clamp trends to [-1, 1]
+                np.clip(opponent_trend, -1.0, 1.0),  # Clamp trends to [-1, 1]
+                self.last_action / 55.0,  # Normalize action to [0, 1]
+                min(self.combo_count, 5.0) / 5.0,  # Cap and normalize combo count to [0, 1]
+                np.clip(recent_damage, 0.0, 1.0),  # Clamp damage to [0, 1]
+                np.clip(damage_acceleration, -1.0, 1.0),  # Clamp acceleration to [-1, 1]
+                action_diversity,  # Already in [0, 1] range
+                # --- POSITIONAL FEATURES: Already normalized ---
+                norm_player_x,  # [-1, 1] range
+                norm_enemy_x,   # [-1, 1] range
+                np.clip(relative_distance_x, -2.0, 2.0) / 2.0,  # Normalize to [-1, 1]
+                is_opponent_on_right,  # Already in [-1, 1] range
             ]
         )
 
