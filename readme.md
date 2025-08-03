@@ -6,21 +6,7 @@ __win rate at 53.4%!!!!!!!!!!!!!!__
 
 
 
-python train.py \
-    --max-episodes 1000 \
-    --learning-rate 1e-5 \
-    --thinking-lr 0.03 \
-    --checkpoint-frequency 20 \
-    --thinking-steps 2 \
-    --batch-size 64 \
-    --device cuda \
-    --render \
-    --quality-threshold 0.3 \
-    --eval-frequency 5 \
-    --target-win-rate 0.3 \
-    --contrastive-margin 1.5
-
-
+python train.py --mode train --total_timesteps 1000000
 
 
   ta.json 
