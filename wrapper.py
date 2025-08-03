@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 112
-VECTOR_FEATURE_DIM = 36  # INCREASED from 32 to make space for positional features
+VECTOR_FEATURE_DIM = 40  # FIX #3: INCREASED from 36 to add strategic state features
 MAX_FIGHT_STEPS = 3500
 FRAME_STACK_SIZE = 8
 CONTEXT_SEQUENCE_DIM = 64
@@ -452,7 +452,7 @@ class EnhancedRewardCalculator:
         self.max_damage_reward = 1.5
         # --- MASSIVE CARROT: Make winning the ultimate goal ---
         self.base_winning_bonus = (
-            20.0  # MASSIVELY INCREASED from 15.0 - winning is the jackpot
+            25.0  # FIX #2: INCREASED from 20.0 - winning is the ultimate jackpot
         )
         self.health_advantage_bonus = 1.2  # INCREASED from 0.8 - reward dominance
         self.health_preservation_bonus = (
@@ -460,7 +460,7 @@ class EnhancedRewardCalculator:
         )
         # --- PAINFUL STICK: Make getting hit extremely costly ---
         self.damage_taken_penalty_multiplier = (
-            5.0  # INCREASED from 4.0 - getting hit is devastating
+            7.0  # FIX #2: INCREASED from 5.0 - blocking is now critical
         )
         self.double_ko_penalty = (
             -15.0
@@ -638,9 +638,9 @@ class EnhancedRewardCalculator:
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
-        # --- CRITICAL FIX: Restore step penalty to force action ---
-        # The agent MUST have incentive to act quickly and decisively
-        step_penalty = -0.01  # RESTORE: Strong step penalty forces active play
+        # --- FIX #2: Reduce step penalty to allow more thoughtful play ---
+        # Less pressure per step, but blocking is now much more rewarding
+        step_penalty = -0.001  # FIX #2: REDUCED from -0.01 for strategic patience
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
 
@@ -700,6 +700,14 @@ class SimplifiedFeatureTracker:
         # Initialize positional data for blocking knowledge
         self.player_x = 0
         self.enemy_x = 0
+        
+        # FIX #3: Initialize strategic state tracking
+        self.player_status = 0
+        self.enemy_status = 0
+        self.round_timer = 99
+        self.is_player_jumping = False
+        self.is_player_crouching = False
+        self.is_enemy_attacking = False
 
     def update(
         self,
@@ -709,6 +717,9 @@ class SimplifiedFeatureTracker:
         reward_breakdown,
         player_x=0,
         enemy_x=0,
+        player_status=0,
+        enemy_status=0,
+        round_timer=99,
     ):
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
@@ -717,6 +728,19 @@ class SimplifiedFeatureTracker:
         # Store positional data for blocking knowledge
         self.player_x = player_x
         self.enemy_x = enemy_x
+        
+        # FIX #3: Store strategic state information
+        self.player_status = player_status
+        self.enemy_status = enemy_status
+        self.round_timer = round_timer
+        
+        # Derive strategic state indicators from action and status
+        # These provide context about player intentions and enemy threats
+        self.is_player_jumping = action in [3, 20, 21, 22, 32, 33, 34]  # UP-based actions
+        self.is_player_crouching = action in [4, 17, 18, 19, 29, 30, 31]  # DOWN-based actions
+        # Enemy attacking can be inferred from status or recent damage patterns
+        recent_damage_taken = sum([1 for r in list(self.reward_history)[-3:] if r < -0.01])
+        self.is_enemy_attacking = recent_damage_taken >= 1 or (enemy_status & 0x0F) > 0
 
         reward_signal = reward_breakdown.get(
             "damage_dealt", 0.0
@@ -829,6 +853,11 @@ class SimplifiedFeatureTracker:
                 norm_enemy_x,  # [-1, 1] range
                 np.clip(relative_distance_x, -2.0, 2.0) / 2.0,  # Normalize to [-1, 1]
                 is_opponent_on_right,  # Already in [-1, 1] range
+                # --- FIX #3: STRATEGIC STATE FEATURES ---
+                1.0 if self.is_player_jumping else -1.0,  # Player jumping state
+                1.0 if self.is_player_crouching else -1.0,  # Player crouching/blocking state
+                1.0 if self.is_enemy_attacking else -1.0,  # Enemy attack threat
+                (self.round_timer - 50) / 50.0,  # Round timer normalized to [-1, 1]
             ]
         )
 
@@ -1162,20 +1191,20 @@ class AggressiveAgent:
         thinking_lr: float = 0.025,
     ):
         self.verifier = verifier
-        self.thinking_steps = 6  # SIMPLIFIED: Reduce from 8 to 6 steps like old code
-        self.thinking_lr = 0.1   # SIMPLIFIED: Higher learning rate for faster convergence
+        # --- FIX 1: Make the agent more "thoughtful" ---
+        self.thinking_steps = 12                  # INCREASED: More steps to refine the action.
+        self.thinking_lr = 0.02                   # DECREASED: Smaller, more careful steps.
         self.action_dim = verifier.action_dim
-        # --- RECOMMENDATION 1: Increase exploration pressure ---
-        self.epsilon = 0.80  # Start higher
-        self.epsilon_decay = 0.9997  # Slightly slower decay
-        self.min_epsilon = 0.10  # MATCH OLD CODE: More aggressive exploration
+        self.epsilon = 0.80
+        self.epsilon_decay = 0.9997
+        self.min_epsilon = 0.10
 
-        # --- SIMPLIFIED THINKING: More like old gradient descent ---
-        self.mcmc_step_size = self.thinking_lr  # SIMPLIFIED: Use thinking_lr directly
-        self.langevin_noise_std = 0.01         # REDUCED: Less noise, more deterministic
-        self.temperature = 0.1                 # REDUCED: More deterministic action selection
+        self.mcmc_step_size = self.thinking_lr
+        self.langevin_noise_std = 0.05            # INCREASED: More noise to escape bad local minima.
+        self.temperature = 0.4                    # INCREASED: Softer, less greedy final action selection.
         self.clamp_grad = True
-        self.clamp_max = 1.0                   # REDUCED: Smaller gradient clamps
+        self.clamp_max = 0.5                      # DECREASED: Prevents single gradients from dominating.
+        # --- END FIX 1 ---
 
         # EBT-style replay buffer
         self.use_replay_buffer = True
@@ -1186,11 +1215,8 @@ class AggressiveAgent:
         # Add action tracking for diversity
         self.action_counts = defaultdict(int)
         self.total_actions = 0
-        self.action_diversity_weight = (
-            0.25  # INCREASE: Make it more costly to repeat actions
-        )
-        self.recent_actions = []  # Track recent actions for diversity
-        self.recent_actions_window = 20  # Window size for recent actions
+        self.action_diversity_weight = 0.4        # INCREASED: Stronger penalty for repeating actions.
+        self.recent_actions = deque(maxlen=20)    # Changed to deque for efficiency
 
         # Win rate tracking for adaptive buffer sampling
         self.recent_episodes = deque(maxlen=100)  # Track last 100 episodes
@@ -1300,6 +1326,7 @@ class AggressiveAgent:
         # True MCMC optimization loop with Metropolis-Hastings
         current_logits = predicted_action_logits.clone()
         accepted_samples = 0
+        energy_grad = None  # Initialize gradient variable
 
         with torch.set_grad_enabled(True):
             # Calculate initial energy
@@ -1331,7 +1358,7 @@ class AggressiveAgent:
                 if not deterministic:
                     # Add both gradient information and noise
                     with torch.no_grad():
-                        if step > 0 or "energy_grad" in locals():
+                        if energy_grad is not None:
                             proposal_logits -= self.mcmc_step_size * energy_grad
 
                         # Add MCMC noise
@@ -1342,8 +1369,9 @@ class AggressiveAgent:
 
                         # Add diversity regularization - push away from recent actions
                         if len(self.recent_actions) > 0:
+                            recent_actions_list = list(self.recent_actions)
                             recent_action_tensor = torch.tensor(
-                                self.recent_actions[-5:], device=proposal_logits.device
+                                recent_actions_list[-5:], device=proposal_logits.device
                             )
                             for recent_action in recent_action_tensor:
                                 if recent_action < proposal_logits.shape[-1]:
@@ -1354,7 +1382,7 @@ class AggressiveAgent:
                 else:
                     # Deterministic: just gradient step
                     with torch.no_grad():
-                        if step > 0 or "energy_grad" in locals():
+                        if energy_grad is not None:
                             proposal_logits -= self.mcmc_step_size * energy_grad
 
                 # Calculate energy for proposal using current MCMC step
@@ -1428,16 +1456,18 @@ class AggressiveAgent:
                 else:
                     final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
 
-        # Update tracking
-        final_action_idx = final_action.item() if batch_size == 1 else final_action
-        if isinstance(final_action_idx, int):
-            self.action_counts[final_action_idx] += 1
-            self.total_actions += 1
+        # Update tracking - ensure we always return an integer
+        if isinstance(final_action, torch.Tensor):
+            final_action_idx = int(final_action.item())
+        else:
+            final_action_idx = int(final_action)
+            
+        # Update action tracking
+        self.action_counts[final_action_idx] += 1
+        self.total_actions += 1
 
-            # Update recent actions for diversity tracking
-            self.recent_actions.append(final_action_idx)
-            if len(self.recent_actions) > self.recent_actions_window:
-                self.recent_actions.pop(0)
+        # Update recent actions for diversity tracking (deque handles max length automatically)
+        self.recent_actions.append(final_action_idx)
 
         # Check if energy improved
         if initial_energy is not None and final_energy is not None:
@@ -1701,9 +1731,15 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
 
+        # Extract initial strategic data
+        player_status = info.get("agent_status", 0)
+        enemy_status = info.get("enemy_status", 0)
+        round_timer = info.get("round_countdown", 99)
+        
         # Update feature tracker with initial state
         self.feature_tracker.update(
-            player_health, opponent_health, 0, {}, player_x, enemy_x
+            player_health, opponent_health, 0, {}, player_x, enemy_x,
+            player_status, enemy_status, round_timer
         )
 
         # Build initial observation
@@ -1788,8 +1824,13 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Extract positional data for blocking knowledge
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
+        
+        # FIX #3: Extract strategic state data
+        player_status = info.get("agent_status", 0)
+        enemy_status = info.get("enemy_status", 0)
+        round_timer = info.get("round_countdown", 99)
 
-        # Update feature tracker with positional data
+        # Update feature tracker with positional and strategic data
         self.feature_tracker.update(
             final_player_health,
             final_opponent_health,
@@ -1797,6 +1838,9 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             reward_breakdown,
             player_x,
             enemy_x,
+            player_status,
+            enemy_status,
+            round_timer,
         )
 
         # Build observation
