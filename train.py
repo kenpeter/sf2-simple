@@ -56,142 +56,79 @@ except ImportError as e:
 # RL Training Experience Buffer - stores complete transitions for Q-learning
 # Different from CausalReplayBuffer (in wrapper.py) which stores MCMC action logits
 class ReservoirExperienceBuffer:
+    """Basic experience buffer with reservoir sampling (from old code)."""
+
     def __init__(self, capacity=30000):
         self.capacity = capacity
         self.good_experiences = []
         self.bad_experiences = []
         self.total_added = 0
+
+        # Basic reservoir sampling state
         self.good_reservoir_size = capacity // 2
         self.bad_reservoir_size = capacity // 2
-        self.sequence_quality_tracker = deque(maxlen=1000)
-        self.diversity_scores = deque(maxlen=500)
 
     def add_experience(self, experience, reward, win_result):
+        """Add experience using basic reservoir sampling."""
         self.total_added += 1
-        temporal_quality = self._assess_temporal_quality(experience)
-        diversity_score = self._assess_diversity(experience)
-        self.sequence_quality_tracker.append(temporal_quality)
-        self.diversity_scores.append(diversity_score)
 
-        # FIXED: Make definition of "good" much stricter - only wins
+        # Basic classification - wins are good, everything else is bad
         is_good_experience = win_result == "WIN"
 
+        # Add experience using reservoir sampling
         if is_good_experience:
             self._reservoir_add(
                 self.good_experiences, experience, self.good_reservoir_size
             )
-            experience["sequence_quality"] = "good"
         else:
             self._reservoir_add(
                 self.bad_experiences, experience, self.bad_reservoir_size
             )
-            experience["sequence_quality"] = "bad"
 
     def _reservoir_add(self, reservoir, experience, max_size):
+        """Basic reservoir sampling for maintaining diversity."""
         if len(reservoir) < max_size:
+            # Still filling the reservoir
             reservoir.append(experience)
         else:
+            # Reservoir is full - randomly replace an existing experience
             random_index = random.randint(0, len(reservoir) - 1)
             reservoir[random_index] = experience
 
-    def _assess_temporal_quality(self, experience):
-        reward = experience.get("reward", 0.0)
-        thinking_info = experience.get("thinking_info", {})
-        is_exploration = thinking_info.get("exploration", False)
-        energy_improvement = thinking_info.get("energy_improvement", False)
-        final_energy = thinking_info.get("final_energy", 0.0)
-        quality = 0.5
-        if reward > 0:
-            quality += min(reward * 0.4, 0.4)
-        elif reward < 0:
-            quality -= min(abs(reward) * 0.3, 0.3)
-        if energy_improvement:
-            quality += 0.2
-        if final_energy < 0:
-            quality += 0.1
-        if is_exploration:
-            quality += 0.1
-        return np.clip(quality, 0.0, 1.0)
-
-    def _assess_diversity(self, experience):
-        action = experience.get("action", 0)
-        reward = experience.get("reward", 0.0)
-        thinking_info = experience.get("thinking_info", {})
-        diversity = 0.5
-        if hasattr(self, "action_counts"):
-            total_actions = sum(self.action_counts.values())
-            action_frequency = self.action_counts.get(action, 1) / max(total_actions, 1)
-            diversity += (1.0 - action_frequency) * 0.3
-        else:
-            self.action_counts = {}
-        self.action_counts[action] = self.action_counts.get(action, 0) + 1
-        if thinking_info.get("exploration", False):
-            diversity += 0.2
-        if abs(reward) > 1.0:
-            diversity += 0.1
-        return np.clip(diversity, 0.0, 1.0)
-
     def sample_balanced_batch(self, batch_size):
-        # MODIFIED: Sample 60% "good" and 40% "bad" to focus more on successful strategies
-        good_count = int(batch_size * 0.6)
-        bad_count = batch_size - good_count
-
+        """Sample balanced batch with basic random sampling."""
         if (
-            len(self.good_experiences) < good_count
-            or len(self.bad_experiences) < bad_count
+            len(self.good_experiences) < batch_size // 4
+            or len(self.bad_experiences) < batch_size // 4
         ):
-            return None, None  # Wait for enough diverse samples to be collected
+            return None, None
 
-        good_batch = self._sample_with_diversity_bias(self.good_experiences, good_count)
-        bad_batch = self._sample_with_diversity_bias(self.bad_experiences, bad_count)
+        good_count = batch_size // 2
+        bad_count = batch_size // 2
+
+        # Basic random sampling (like old code)
+        good_batch = random.sample(
+            self.good_experiences, min(good_count, len(self.good_experiences))
+        )
+        bad_batch = random.sample(
+            self.bad_experiences, min(bad_count, len(self.bad_experiences))
+        )
+
         return good_batch, bad_batch
 
-    def _sample_with_diversity_bias(self, experience_list, count):
-        if len(experience_list) <= count:
-            return experience_list[:]
-        weights = []
-        for exp in experience_list:
-            action = exp.get("action", 0)
-            thinking_info = exp.get("thinking_info", {})
-            weight = 1.0
-            if hasattr(self, "action_counts"):
-                total_actions = sum(self.action_counts.values())
-                action_frequency = self.action_counts.get(action, 1) / max(
-                    total_actions, 1
-                )
-                weight *= 2.0 - action_frequency
-            if thinking_info.get("exploration", False):
-                weight *= 1.5
-            weights.append(weight)
-        weights = np.array(weights)
-        weights = weights / weights.sum()
-        indices = np.random.choice(
-            len(experience_list), size=count, replace=False, p=weights
-        )
-        return [experience_list[i] for i in indices]
-
     def get_stats(self):
+        """Get basic buffer statistics."""
         total_size = len(self.good_experiences) + len(self.bad_experiences)
-        avg_sequence_quality = safe_mean(list(self.sequence_quality_tracker), 0.5)
-        avg_diversity = safe_mean(list(self.diversity_scores), 0.5)
-        action_diversity = 0.0
-        if hasattr(self, "action_counts") and self.action_counts:
-            unique_actions = len(self.action_counts)
-            total_actions = sum(self.action_counts.values())
-            action_diversity = unique_actions / max(total_actions, 1)
+
         return {
             "total_size": total_size,
             "good_count": len(self.good_experiences),
             "bad_count": len(self.bad_experiences),
             "good_ratio": len(self.good_experiences) / max(1, total_size),
             "total_added": self.total_added,
-            "avg_sequence_quality": avg_sequence_quality,
-            "avg_diversity": avg_diversity,
-            "action_diversity": action_diversity,
             "frame_stack_size": FRAME_STACK_SIZE,
             "image_format": "RGB",
             "image_size": f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}",
-            "tier2_hybrid": True,
         }
 
 
@@ -674,7 +611,7 @@ class EnhancedTrainer:
         self.optimizer.zero_grad()
 
         # Current energy (using initial landscape for training)
-        current_energy = self.verifier(current_obs, action_one_hot, mcmc_step=0)
+        current_energy = self.verifier(current_obs, action_one_hot)
 
         # FIXED: Double Q-Learning target calculation with TIER 2
 
@@ -691,7 +628,7 @@ class EnhancedTrainer:
                 # in the loop, 56 times, we call verifier to get energy
                 # energy score from energy net (using initial landscape)
                 energy = self.verifier(
-                    next_obs, next_action_one_hot, mcmc_step=0
+                    next_obs, next_action_one_hot
                 )  # Using self.verifier here!
 
                 # assign energy into arr
@@ -705,7 +642,7 @@ class EnhancedTrainer:
 
             # 2. Evaluate the energy of that best action using the TARGET network
             next_energy = self.target_verifier(
-                next_obs, best_next_action_one_hot, mcmc_step=0
+                next_obs, best_next_action_one_hot
             )  # Using self.target_verifier here!
 
             # 3. Calculate the final target
@@ -727,7 +664,7 @@ class EnhancedTrainer:
                 batch_size, self.env.action_space.n, device=device
             )
             negative_one_hot.scatter_(1, negative_actions.unsqueeze(1), 1.0)
-            negative_energy = self.verifier(current_obs, negative_one_hot, mcmc_step=0)
+            negative_energy = self.verifier(current_obs, negative_one_hot)
             contrastive_loss += torch.mean(
                 nn.functional.relu(
                     current_energy - negative_energy + self.args.contrastive_margin
@@ -823,9 +760,7 @@ class EnhancedTrainer:
         print(
             f"   - Buffer: {buffer_stats['total_size']} (Good: {buffer_stats['good_ratio']:.1%} - STRICT WINS ONLY)"
         )
-        print(
-            f"   - Diversity: {buffer_stats['avg_diversity']:.2f}, ActionDiversity: {buffer_stats['action_diversity']:.3f}"
-        )
+        print(f"   - Basic buffer (simplified from old code)")
         print(f"   - LearningRate: {current_lr:.2e}, Reboots: {self.reboot_count}")
         print(
             f"   - Timeouts: {self.timeout_wins}/{total_matches}, FastWins: {self.fast_wins}/{total_matches}"

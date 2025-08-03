@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 MAX_HEALTH = 176
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 112
-VECTOR_FEATURE_DIM = 40  # FIX #3: INCREASED from 36 to add strategic state features
+VECTOR_FEATURE_DIM = 32  # Standard feature dimension from old code
 MAX_FIGHT_STEPS = 3500
 FRAME_STACK_SIZE = 8
 CONTEXT_SEQUENCE_DIM = 64
@@ -286,161 +286,6 @@ class EnhancedHealthDetector:
 
 
 # Enhanced RewardCalculator
-# EBT-Aligned Causal Replay Buffer - stores optimized action logits for MCMC warm-start
-# Different from ReservoirExperienceBuffer (in train.py) which stores transitions for Q-learning
-class CausalReplayBuffer:
-    def __init__(self, max_size=30000, sample_size=32, initial_win_ratio=0.3):
-        """
-        Initializes the replay buffer with an adaptive sampling strategy.
-
-        Args:
-            max_size (int): The total capacity of the normal experience buffer.
-            sample_size (int): The number of samples to return for MCMC initialization.
-            initial_win_ratio (float): The starting ratio for sampling winning experiences.
-        """
-        self.max_size = max_size
-        self.sample_size = sample_size
-        # the replay buffer has buffer and win buffer
-        self.buffer = []
-        self.win_buffer = []  # Separate buffer for winning examples
-        self.position = 0
-        self.win_position = 0
-        self.total_added = 0
-
-        # --- ADAPTIVE SAMPLING PARAMETERS ---
-        self.initial_win_ratio = initial_win_ratio  # Start with a low win sample ratio
-        self.max_win_ratio = 0.65  # Cap the win ratio to ensure diversity
-        self.min_win_samples_for_adaptation = (
-            100  # Min wins needed before increasing the ratio
-        )
-        self.adaptive_win_ratio = (
-            initial_win_ratio  # The dynamic ratio, updated during training
-        )
-
-        print(f"✅ Initialized CausalReplayBuffer with ADAPTIVE sampling.")
-        print(f"   - Initial Win Sample Ratio: {self.initial_win_ratio:.2f}")
-        print(f"   - Max Win Sample Ratio: {self.max_win_ratio:.2f}")
-        print(f"   - Min Wins for Adaptation: {self.min_win_samples_for_adaptation}")
-
-    def add(self, obs, action_logits, is_winning=False):
-        """Add observation and action logits to the appropriate buffer."""
-        data = {
-            "obs": obs.detach().clone() if isinstance(obs, torch.Tensor) else obs,
-            "action_logits": (
-                action_logits.detach().clone()
-                if isinstance(action_logits, torch.Tensor)
-                else action_logits
-            ),
-        }
-
-        if is_winning:
-            win_buffer_capacity = self.max_size // 4
-            if len(self.win_buffer) < win_buffer_capacity:
-                self.win_buffer.append(data)
-            else:
-                self.win_buffer[self.win_position] = data
-                self.win_position = (self.win_position + 1) % win_buffer_capacity
-        else:
-            if len(self.buffer) < self.max_size:
-                self.buffer.append(None)
-            self.buffer[self.position] = data
-            self.position = (self.position + 1) % self.max_size
-
-        self.total_added += 1
-
-    def update_adaptive_win_ratio(self, current_win_rate: float):
-        """
-        Dynamically adjust the win sample ratio based on agent performance.
-
-        Args:
-            current_win_rate (float): The agent's recent win rate (e.g., over the last 100 episodes).
-        """
-        win_buffer_size = len(self.win_buffer)
-
-        if win_buffer_size < self.min_win_samples_for_adaptation:
-            # If we don't have enough winning examples, stick to the initial low ratio
-            self.adaptive_win_ratio = self.initial_win_ratio
-        else:
-            # Linearly increase the win ratio from its initial value towards the max value
-            # as the agent's win rate improves.
-            ratio_range = self.max_win_ratio - self.initial_win_ratio
-            new_ratio = self.initial_win_ratio + (ratio_range * current_win_rate)
-            self.adaptive_win_ratio = min(self.max_win_ratio, new_ratio)
-
-    def sample(self, batch_size: int, current_win_rate: float = 0.0):
-        """
-        Sample a batch with adaptive win prioritization.
-
-        Args:
-            batch_size (int): The number of samples to return.
-            current_win_rate (float): The agent's current win rate to guide sampling.
-        """
-        valid_normal_samples = [x for x in self.buffer if x is not None]
-        total_available = len(valid_normal_samples) + len(self.win_buffer)
-        if total_available < batch_size:
-            return None, None
-
-        # Update the sampling ratio based on current performance
-        self.update_adaptive_win_ratio(current_win_rate)
-
-        batch_obs = []
-        batch_logits = []
-
-        # Calculate number of samples from each buffer based on the adaptive ratio
-        win_samples_count = min(
-            int(batch_size * self.adaptive_win_ratio), len(self.win_buffer)
-        )
-        regular_samples_count = batch_size - win_samples_count
-
-        # 1. Sample from the win buffer
-        if win_samples_count > 0:
-            win_indices = np.random.choice(
-                len(self.win_buffer), size=win_samples_count, replace=True
-            )
-            for idx in win_indices:
-                batch_obs.append(self.win_buffer[idx]["obs"])
-                batch_logits.append(self.win_buffer[idx]["action_logits"])
-
-        # 2. Sample from the regular buffer
-        if regular_samples_count > 0 and len(valid_normal_samples) > 0:
-            if len(valid_normal_samples) >= regular_samples_count:
-                regular_indices = np.random.choice(
-                    len(valid_normal_samples), size=regular_samples_count, replace=False
-                )
-            else:  # Fallback if not enough normal samples
-                regular_indices = np.random.choice(
-                    len(valid_normal_samples), size=regular_samples_count, replace=True
-                )
-
-            for idx in regular_indices:
-                batch_obs.append(valid_normal_samples[idx]["obs"])
-                batch_logits.append(valid_normal_samples[idx]["action_logits"])
-
-        if not batch_obs:
-            return None, None
-
-        return batch_obs, batch_logits
-
-    def get_batch(self, current_obs, win_rate=0.0):
-        """Get a mixed batch of current observation and replay buffer samples. (DEPRECATED)"""
-        # This method seems unused in your `AggressiveAgent`, but we'll update it for completeness
-        if len(self.buffer) < self.sample_size:
-            return current_obs, None, None
-
-        buffer_obs, buffer_logits = self.sample(
-            self.sample_size, current_win_rate=win_rate
-        )
-        if buffer_obs is None:
-            return current_obs, None, None
-
-        return current_obs, buffer_logits, None
-
-    def update(self, obs, final_logits, is_winning=False):
-        """Update buffer with final optimized logits"""
-        self.add(obs, final_logits, is_winning)
-
-    def __len__(self):
-        return len([x for x in self.buffer if x is not None]) + len(self.win_buffer)
 
 
 class EnhancedRewardCalculator:
@@ -450,27 +295,19 @@ class EnhancedRewardCalculator:
         self.match_started = False
         self.step_count = 0
         self.max_damage_reward = 1.5
-        # --- MASSIVE CARROT: Make winning the ultimate goal ---
-        self.base_winning_bonus = (
-            25.0  # FIX #2: INCREASED from 20.0 - winning is the ultimate jackpot
-        )
-        self.health_advantage_bonus = 1.2  # INCREASED from 0.8 - reward dominance
-        self.health_preservation_bonus = (
-            3.0  # INCREASED from 2.0 - high health wins are best
-        )
-        # --- PAINFUL STICK: Make getting hit extremely costly ---
-        self.damage_taken_penalty_multiplier = (
-            7.0  # FIX #2: INCREASED from 5.0 - blocking is now critical
-        )
-        self.double_ko_penalty = (
-            -15.0
-        )  # INCREASED penalty from -10.0 - avoid mutual destruction
-        self.losing_penalty = -8.0  # NEW: Make losing severely punishing
+        # Basic reward structure (from old code)
+        self.base_winning_bonus = 5.0  # Standard winning bonus
+        self.health_advantage_bonus = 0.8  # Standard advantage bonus
+        self.health_preservation_bonus = 2.0  # Standard preservation bonus
+        # Standard damage penalty
+        self.damage_taken_penalty_multiplier = 1.2  # Standard penalty from old code
+        self.double_ko_penalty = -10.0  # Standard double KO penalty
+        self.losing_penalty = -3.0  # Standard losing penalty
 
         # --- RECOMMENDATION 5: Track passivity ---
         self.no_damage_frames = 0
-        # --- COMBO ENHANCEMENT: Increase combo rewards ---
-        self.combo_bonus_multiplier = 4.0  # INCREASED from 2.0 for better combos
+        # --- COMBO ENHANCEMENT: Standard combo rewards ---
+        self.combo_bonus_multiplier = 2.0  # Standard combo multiplier from old code
         self.fast_damage_bonus = 1.0
         self.timeout_penalty_multiplier = 3.0
 
@@ -521,39 +358,11 @@ class EnhancedRewardCalculator:
             )
 
             if self.consecutive_damage_frames > 1:
-                # --- NON-LINEAR COMBO SCALING: Exponential jackpot for longer combos ---
-                combo_length = self.consecutive_damage_frames
-
-                # Non-linear scaling creates massive incentive for combos:
-                # 2-hit: 1.5x, 3-hit: 2.5x, 4-hit: 4.0x, 5-hit: 6.0x, 6-hit: 8.5x...
-                combo_multiplier = 1.0  # Default multiplier
-                if combo_length == 2:
-                    combo_multiplier = 1.5
-                elif combo_length == 3:
-                    combo_multiplier = 2.5
-                elif combo_length == 4:
-                    combo_multiplier = 4.0
-                elif combo_length == 5:
-                    combo_multiplier = 6.0
-                elif combo_length >= 6:
-                    combo_multiplier = (
-                        8.0 + (combo_length - 6) * 1.5
-                    )  # Keeps growing beyond 6
-
+                # Simple linear combo scaling (from old code)
+                combo_multiplier = min(
+                    1 + (self.consecutive_damage_frames - 1) * 0.5, 3.0
+                )
                 damage_reward *= combo_multiplier
-
-                # MILESTONE BONUS: Special reward for achieving 4-hit combo
-                if self.consecutive_damage_frames >= 4:
-                    milestone_bonus = 3.0  # Flat bonus for 4+ hit combos
-                    reward += milestone_bonus
-                    reward_breakdown["combo_milestone_bonus"] = milestone_bonus
-
-                # Additional scaling bonus for very long combos (6+ hits)
-                if self.consecutive_damage_frames >= 6:
-                    ultra_combo_bonus = (self.consecutive_damage_frames - 5) * 2.5
-                    reward += ultra_combo_bonus
-                    reward_breakdown["ultra_combo_bonus"] = ultra_combo_bonus
-
                 reward_breakdown["combo_multiplier"] = combo_multiplier
                 reward_breakdown["combo_frames"] = self.consecutive_damage_frames
 
@@ -638,9 +447,8 @@ class EnhancedRewardCalculator:
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
-        # --- FIX #2: Reduce step penalty to allow more thoughtful play ---
-        # Less pressure per step, but blocking is now much more rewarding
-        step_penalty = -0.001  # FIX #2: REDUCED from -0.01 for strategic patience
+        # Standard step penalty (from old code)
+        step_penalty = -0.01  # Standard step penalty
         reward += step_penalty
         reward_breakdown["step_penalty"] = step_penalty
 
@@ -700,14 +508,6 @@ class SimplifiedFeatureTracker:
         # Initialize positional data for blocking knowledge
         self.player_x = 0
         self.enemy_x = 0
-        
-        # FIX #3: Initialize strategic state tracking
-        self.player_status = 0
-        self.enemy_status = 0
-        self.round_timer = 99
-        self.is_player_jumping = False
-        self.is_player_crouching = False
-        self.is_enemy_attacking = False
 
     def update(
         self,
@@ -717,9 +517,6 @@ class SimplifiedFeatureTracker:
         reward_breakdown,
         player_x=0,
         enemy_x=0,
-        player_status=0,
-        enemy_status=0,
-        round_timer=99,
     ):
         self.player_health_history.append(player_health / MAX_HEALTH)
         self.opponent_health_history.append(opponent_health / MAX_HEALTH)
@@ -728,19 +525,6 @@ class SimplifiedFeatureTracker:
         # Store positional data for blocking knowledge
         self.player_x = player_x
         self.enemy_x = enemy_x
-        
-        # FIX #3: Store strategic state information
-        self.player_status = player_status
-        self.enemy_status = enemy_status
-        self.round_timer = round_timer
-        
-        # Derive strategic state indicators from action and status
-        # These provide context about player intentions and enemy threats
-        self.is_player_jumping = action in [3, 20, 21, 22, 32, 33, 34]  # UP-based actions
-        self.is_player_crouching = action in [4, 17, 18, 19, 29, 30, 31]  # DOWN-based actions
-        # Enemy attacking can be inferred from status or recent damage patterns
-        recent_damage_taken = sum([1 for r in list(self.reward_history)[-3:] if r < -0.01])
-        self.is_enemy_attacking = recent_damage_taken >= 1 or (enemy_status & 0x0F) > 0
 
         reward_signal = reward_breakdown.get(
             "damage_dealt", 0.0
@@ -853,11 +637,6 @@ class SimplifiedFeatureTracker:
                 norm_enemy_x,  # [-1, 1] range
                 np.clip(relative_distance_x, -2.0, 2.0) / 2.0,  # Normalize to [-1, 1]
                 is_opponent_on_right,  # Already in [-1, 1] range
-                # --- FIX #3: STRATEGIC STATE FEATURES ---
-                1.0 if self.is_player_jumping else -1.0,  # Player jumping state
-                1.0 if self.is_player_crouching else -1.0,  # Player crouching/blocking state
-                1.0 if self.is_enemy_attacking else -1.0,  # Enemy attack threat
-                (self.round_timer - 50) / 50.0,  # Round timer normalized to [-1, 1]
             ]
         )
 
@@ -1007,14 +786,15 @@ class SimpleCNN(nn.Module):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # CRITICAL FIX: LSTM processor for temporal patterns
+        # Basic vector processing (from old code)
         self.vector_lstm = nn.LSTM(
             input_size=vector_feature_count,
             hidden_size=64,
             num_layers=1,
             batch_first=True,
-            dropout=0.0
+            dropout=0.0,
         )
+
         self.vector_processor = nn.Sequential(
             nn.Linear(64, 64),
             nn.ReLU(),
@@ -1041,11 +821,9 @@ class SimpleCNN(nn.Module):
         # Process visual features
         visual_features = self.visual_cnn(visual_obs.float() / 255.0)
 
-        # CRITICAL FIX: Process vector features through LSTM for temporal patterns
-        lstm_output, (hidden, cell) = self.vector_lstm(vector_obs)
-        # Use the last timestep output
-        vector_lstm_out = lstm_output[:, -1, :]  # Shape: [batch_size, 64]
-        vector_features = self.vector_processor(vector_lstm_out)
+        # Process vector sequence with enhanced LSTM
+        lstm_out, _ = self.vector_lstm(vector_obs)
+        vector_features = self.vector_processor(lstm_out[:, -1, :])
 
         # Combine and fuse
         combined = torch.cat([visual_features, vector_features], dim=1)
@@ -1056,6 +834,8 @@ class SimpleCNN(nn.Module):
 
 # SimpleVerifier with Hybrid Transformer context
 class SimpleVerifier(nn.Module):
+    """Enhanced verifier with better energy modeling for aggressive play."""
+
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -1063,186 +843,98 @@ class SimpleVerifier(nn.Module):
         features_dim: int = 256,
     ):
         super().__init__()
+
         self.observation_space = observation_space
         self.action_space = action_space
         self.features_dim = features_dim
         self.action_dim = action_space.n if hasattr(action_space, "n") else 56
 
-        # Multiple energy landscapes support - MUST be defined first
-        self.max_mcmc_steps = 16  # Support up to 16 MCMC steps
-        self.step_embedding_dim = 32
-        self.step_embedding = nn.Embedding(self.max_mcmc_steps, self.step_embedding_dim)
-
-        # Feature extractor
+        # Enhanced feature extractor for RGB
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # NO TRANSFORMER: Pure energy-based thinking only
-
-        # Action embedding - FIXED: Remove BatchNorm1d to avoid single batch issues
-        # when linear that is embed
+        # Enhanced action embedding with better representation
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 128),
             nn.ReLU(),
+            nn.BatchNorm1d(128),  # Better normalization
             nn.Dropout(0.2),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
 
-        # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
-        # Updated input size to include step embedding
-        # energy net for better action (NO TRANSFORMER)
-        energy_input_dim = (
-            features_dim + 64 + self.step_embedding_dim
-        )  # NO context embedding
+        # Enhanced energy network with better capacity
         self.energy_net = nn.Sequential(
-            nn.Linear(energy_input_dim, 512),  # Include step embedding
+            nn.Linear(features_dim + 64, 512),
             nn.ReLU(),
-            nn.Dropout(0.1),  # Reduced dropout for better learning
+            nn.BatchNorm1d(512),  # Better normalization
+            nn.Dropout(0.3),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.05),
+            nn.Dropout(0.1),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
         )
 
-        # Win-probability estimation network for energy shaping
-
-        # win energy net for win
-        # sigmoid output 0 or 1, win or lose
-        self.win_predictor = nn.Sequential(
-            nn.Linear(energy_input_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-            nn.Sigmoid(),  # Win probability [0,1]
-        )
-
-        self.energy_scale = 0.5  # Reduced for more sensitivity
-        self.win_weight = 3.0  # Weight for win-probability component
+        self.energy_scale = 0.7  # Slightly increased for better separation
 
     def forward(
-        self,
-        context: Dict[str, torch.Tensor],
-        candidate_action: torch.Tensor,
-        mcmc_step: int = 0,
+        self, context: torch.Tensor, candidate_action: torch.Tensor
     ) -> torch.Tensor:
-        # extract context features
-        context_features = self.features_extractor(context)
+        # Extract enhanced RGB features
+        if isinstance(context, dict):
+            context_features = self.features_extractor(context)
+        else:
+            context_features = context
 
-        # NO TRANSFORMER: Skip rich sequence processing
-
-        # Embed action
+        # Enhanced action embedding
         action_embedded = self.action_embed(candidate_action)
 
-        # Add MCMC step embedding for multiple energy landscapes
-        batch_size = context_features.shape[0]
-        step_embedding = self._get_step_embedding(
-            mcmc_step, context_features.device, batch_size
-        )
-
-        # Combine features WITHOUT transformer context embedding
-        combined = torch.cat(
-            [context_features, action_embedded, step_embedding],
-            dim=-1,
-        )
-
-        # Calculate base energy and win probability
-        base_energy = self.energy_net(combined)
-        win_prob = self.win_predictor(combined)
-
-        # Energy = base_energy - win_weight * win_probability
-        # Lower energy for higher win probability (energy minimization seeks wins)
-        energy = base_energy - self.win_weight * win_prob
-        energy = energy * self._get_step_scale(mcmc_step)
+        # Enhanced temporal-aware fusion
+        combined = torch.cat([context_features, action_embedded], dim=-1)
+        energy = self.energy_net(combined) * self.energy_scale
 
         return energy
-
-    def _get_step_embedding(self, mcmc_step: int, device, batch_size: int):
-        """Get step embedding for multiple energy landscapes"""
-        step_idx = min(mcmc_step, self.max_mcmc_steps - 1)  # Clamp to valid range
-        step_tensor = torch.tensor([step_idx], device=device, dtype=torch.long)
-        step_emb = self.step_embedding(step_tensor)
-        step_emb = step_emb.squeeze(0)  # Remove sequence dimension
-        # Expand to match batch size
-        step_emb = step_emb.unsqueeze(0).expand(batch_size, -1)
-        return step_emb
-
-    def _get_step_scale(self, mcmc_step: int) -> float:
-        """Get step-dependent energy scaling for multiple landscapes"""
-        # Early steps: broader energy landscape (lower scale)
-        # Later steps: sharper energy landscape (higher scale)
-        progress = mcmc_step / max(1, self.max_mcmc_steps - 1)
-        scale = self.energy_scale * (0.5 + 0.5 * progress)  # Scale from 0.35 to 0.7
-        return scale
 
 
 # EBT-Aligned Agent with Gradient-Based Energy Thinking
 class AggressiveAgent:
+    """Enhanced agent with aggressive exploration and better temporal reasoning."""
+
     def __init__(
         self,
         verifier: SimpleVerifier,
-        thinking_steps: int = 8,
+        thinking_steps: int = 6,
         thinking_lr: float = 0.025,
     ):
         self.verifier = verifier
-        # --- FIX 1: Make the agent more "thoughtful" ---
-        self.thinking_steps = 12                  # INCREASED: More steps to refine the action.
-        self.thinking_lr = 0.02                   # DECREASED: Smaller, more careful steps.
+        self.thinking_steps = thinking_steps
+        self.thinking_lr = thinking_lr
         self.action_dim = verifier.action_dim
-        self.epsilon = 0.80
-        self.epsilon_decay = 0.9997
-        self.min_epsilon = 0.10
 
-        self.mcmc_step_size = self.thinking_lr
-        self.langevin_noise_std = 0.05            # INCREASED: More noise to escape bad local minima.
-        self.temperature = 0.4                    # INCREASED: Softer, less greedy final action selection.
-        self.clamp_grad = True
-        self.clamp_max = 0.5                      # DECREASED: Prevents single gradients from dominating.
-        # --- END FIX 1 ---
+        # MORE AGGRESSIVE EXPLORATION (from old code)
+        self.epsilon = 0.40  # Start with higher exploration
+        self.epsilon_decay = 0.999  # Decay slower to explore for longer
+        self.min_epsilon = 0.10  # Maintain a higher minimum exploration
 
-        # EBT-style replay buffer
-        self.use_replay_buffer = True
-        # MODIFICATION: Make the causal buffer larger to store more winning strategies
-        # agressi agent use this buffer. just action and best outcome (win)
-        self.replay_buffer = CausalReplayBuffer(max_size=10000, sample_size=16)
-
-        # Add action tracking for diversity
-        self.action_counts = defaultdict(int)
-        self.total_actions = 0
-        self.action_diversity_weight = 0.4        # INCREASED: Stronger penalty for repeating actions.
-        self.recent_actions = deque(maxlen=20)    # Changed to deque for efficiency
-
-        # Win rate tracking for adaptive buffer sampling
-        self.recent_episodes = deque(maxlen=100)  # Track last 100 episodes
-        self.current_win_rate = 0.0
-
+        # Enhanced stats tracking
         self.stats = {
             "total_predictions": 0,
             "successful_optimizations": 0,
             "exploration_actions": 0,
             "exploitation_actions": 0,
-            "energy_improvements": 0,
-            "average_thinking_steps": 0.0,
-            "total_mcmc_samples": 0,
-            "total_mcmc_accepted": 0,
         }
 
-    # predict method
     def predict(
         self, observations: Dict[str, torch.Tensor], deterministic: bool = False
     ) -> Tuple[int, Dict]:
-        # self, obs, deterministic
-
-        # get device
         device = next(self.verifier.parameters()).device
 
-        # Move observations to device
+        # Prepare observations
         obs_device = {}
         for key, value in observations.items():
             if isinstance(value, torch.Tensor):
@@ -1250,25 +942,16 @@ class AggressiveAgent:
             else:
                 obs_device[key] = torch.from_numpy(value).to(device)
 
-        # Add batch dimension if needed
         if len(obs_device["visual_obs"].shape) == 3:
             for key in obs_device:
                 obs_device[key] = obs_device[key].unsqueeze(0)
 
         batch_size = obs_device["visual_obs"].shape[0]
 
-        # Exploration with action diversity
+        # AGGRESSIVE EXPLORATION: Force random actions during training
         if not deterministic and np.random.random() < self.epsilon:
-            action_probs = np.ones(self.action_dim)
-            for action_idx in range(self.action_dim):
-                count = self.action_counts[action_idx]
-                action_probs[action_idx] = 1.0 / (1.0 + count * 0.1)
-
-            action_probs = action_probs / action_probs.sum()
-            action_idx = np.random.choice(self.action_dim, p=action_probs)
-
-            self.action_counts[action_idx] += 1
-            self.total_actions += 1
+            # Pure random exploration
+            action_idx = np.random.randint(0, self.action_dim)
             self.stats["exploration_actions"] += 1
             self.stats["total_predictions"] += 1
 
@@ -1277,248 +960,87 @@ class AggressiveAgent:
                 "final_energy": 0.0,
                 "exploration": True,
                 "epsilon": self.epsilon,
-                "action_diversity": len(self.action_counts)
-                / max(1, self.total_actions),
-                "energy_improvement": False,
             }
+
             return action_idx, thinking_info
 
+        # Enhanced exploitation with better thinking
         self.stats["exploitation_actions"] += 1
 
-        # EBT-style gradient-based energy thinking with MCMC
-        # Initialize with random noise or replay buffer sample
-        if self.use_replay_buffer and len(self.replay_buffer) > 0:
-            # Try to get initial condition from replay buffer
-
-            # buffer logic from replay buffer, sample 1 with current win rate
-            _, buffer_logits = self.replay_buffer.sample(
-                1, current_win_rate=self.current_win_rate
+        # Enhanced initialization for better optimization
+        if deterministic:
+            candidate_action = (
+                torch.ones(batch_size, self.action_dim, device=device) / self.action_dim
             )
-            if buffer_logits is not None and len(buffer_logits) > 0:
-                predicted_action_logits = (
-                    buffer_logits[0].clone().detach().requires_grad_(True)
-                )
-                if predicted_action_logits.shape[0] != batch_size:
-                    predicted_action_logits = (
-                        predicted_action_logits.expand(batch_size, -1)
-                        .clone()
-                        .detach()
-                        .requires_grad_(True)
-                    )
-            else:
-                # torch, random, batch size, action dim, device, require grad
-                predicted_action_logits = torch.randn(
-                    batch_size, self.action_dim, device=device, requires_grad=True
-                )
         else:
-            # Initialize with random noise (corrupt initial condition)
-
-            # torch, random, batch size, action dim, device, require grad
-            predicted_action_logits = torch.randn(
-                batch_size, self.action_dim, device=device, requires_grad=True
+            candidate_action = (
+                torch.randn(batch_size, self.action_dim, device=device) * 0.01
             )
+            candidate_action = F.softmax(candidate_action, dim=-1)
 
-        initial_energy = None
-        final_energy = None
-        steps_taken = 0
-        energy_improved = False
+        candidate_action.requires_grad_(True)
 
-        # True MCMC optimization loop with Metropolis-Hastings
-        current_logits = predicted_action_logits.clone()
-        accepted_samples = 0
-        energy_grad = None  # Initialize gradient variable
+        # Enhanced thinking loop with better optimization
+        best_energy = float("inf")
+        best_action = candidate_action.clone().detach()
 
-        with torch.set_grad_enabled(True):
-            # Calculate initial energy
-            current_probs = F.softmax(current_logits / self.temperature, dim=-1)
-            current_energy = self.verifier(obs_device, current_probs, mcmc_step=0)
-            initial_energy = current_energy.item()
-            best_energy = initial_energy
-            best_logits = current_logits.clone()
+        for step in range(self.thinking_steps):
+            try:
+                energy = self.verifier(obs_device, candidate_action)
 
-            for step in range(self.thinking_steps):
-                # Propose new state using Langevin dynamics (gradient + noise)
-                if step == 0:
-                    # First step: compute gradient for proposal
-                    energy_grad = torch.autograd.grad(
-                        outputs=current_energy.sum(),
-                        inputs=current_logits,
-                        retain_graph=True,
-                        create_graph=False,
-                    )[0]
+                current_energy = energy.mean().item()
+                if current_energy < best_energy:
+                    best_energy = current_energy
+                    best_action = candidate_action.clone().detach()
 
-                    if self.clamp_grad:
-                        energy_grad = torch.clamp(
-                            energy_grad, -self.clamp_max, self.clamp_max
-                        )
+                gradients = torch.autograd.grad(
+                    outputs=energy.sum(),
+                    inputs=candidate_action,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
 
-                # Propose new state: gradient step + noise (Langevin proposal)
-                proposal_logits = current_logits.clone().detach().requires_grad_(True)
+                with torch.no_grad():
+                    # Enhanced gradient descent with adaptive learning rate
+                    step_size = self.thinking_lr * (0.85**step)  # More aggressive decay
+                    candidate_action = candidate_action - step_size * gradients
+                    candidate_action = F.softmax(candidate_action, dim=-1)
+                    candidate_action.requires_grad_(True)
 
-                if not deterministic:
-                    # Add both gradient information and noise
-                    with torch.no_grad():
-                        if energy_grad is not None:
-                            proposal_logits -= self.mcmc_step_size * energy_grad
+            except Exception:
+                candidate_action = best_action
+                break
 
-                        # Add MCMC noise
-                        noise = (
-                            torch.randn_like(proposal_logits) * self.langevin_noise_std
-                        )
-                        proposal_logits += noise
-
-                        # Add diversity regularization - push away from recent actions
-                        if len(self.recent_actions) > 0:
-                            recent_actions_list = list(self.recent_actions)
-                            recent_action_tensor = torch.tensor(
-                                recent_actions_list[-5:], device=proposal_logits.device
-                            )
-                            for recent_action in recent_action_tensor:
-                                if recent_action < proposal_logits.shape[-1]:
-                                    # Reduce probability of recent actions
-                                    proposal_logits[
-                                        0, recent_action
-                                    ] -= self.action_diversity_weight
-                else:
-                    # Deterministic: just gradient step
-                    with torch.no_grad():
-                        if energy_grad is not None:
-                            proposal_logits -= self.mcmc_step_size * energy_grad
-
-                # Calculate energy for proposal using current MCMC step
-                proposal_probs = F.softmax(proposal_logits / self.temperature, dim=-1)
-                proposal_energy = self.verifier(
-                    obs_device, proposal_probs, mcmc_step=step
-                )
-
-                # Metropolis-Hastings acceptance criterion
-                energy_diff = proposal_energy.item() - current_energy.item()
-
-                if deterministic:
-                    # Always accept if energy improved (greedy)
-                    accept = energy_diff < 0
-                else:
-                    # Probabilistic acceptance based on energy difference
-                    accept_prob = np.exp(-energy_diff / self.temperature)
-                    accept = (energy_diff < 0) or (np.random.random() < accept_prob)
-
-                if accept:
-                    # Accept the proposal
-                    current_logits = proposal_logits
-                    current_energy = proposal_energy
-                    accepted_samples += 1
-
-                    # Track best sample seen
-                    if current_energy.item() < best_energy:
-                        best_energy = current_energy.item()
-                        best_logits = current_logits.clone()
-
-                    # Compute gradient for next proposal
-                    if step < self.thinking_steps - 1:
-                        energy_grad = torch.autograd.grad(
-                            outputs=current_energy.sum(),
-                            inputs=current_logits,
-                            retain_graph=(step < self.thinking_steps - 2),
-                            create_graph=False,
-                        )[0]
-
-                        if self.clamp_grad:
-                            energy_grad = torch.clamp(
-                                energy_grad, -self.clamp_max, self.clamp_max
-                            )
-
-                steps_taken = step + 1
-                final_energy = best_energy
-
-                # Check for NaN/Inf
-                if (
-                    torch.isnan(current_logits).any()
-                    or torch.isinf(current_logits).any()
-                ):
-                    print("⚠️ NaN/Inf detected in MCMC logits, breaking early")
-                    break
-
-            # Use best sample found during MCMC
-            predicted_action_logits = best_logits
-
-        # Determine final action
+        # Enhanced action selection
         with torch.no_grad():
-            # SIMPLIFIED: More deterministic action selection like old code
-            final_action_probs = F.softmax(
-                predicted_action_logits / self.temperature, dim=-1
-            )
+            final_action_probs = F.softmax(candidate_action, dim=-1)
+
             if deterministic:
-                final_action = torch.argmax(final_action_probs, dim=-1)
+                action_idx = torch.argmax(final_action_probs, dim=-1)
             else:
-                # More deterministic: use argmax most of the time
-                if np.random.random() < 0.8:  # 80% deterministic
-                    final_action = torch.argmax(final_action_probs, dim=-1)
+                # Enhanced exploration even in exploitation
+                if torch.rand(1).item() < 0.15:  # 15% additional exploration
+                    action_idx = torch.randint(
+                        0, self.action_dim, (batch_size,), device=device
+                    )
                 else:
-                    final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
+                    action_idx = torch.multinomial(final_action_probs, 1).squeeze(-1)
 
-        # Update tracking - ensure we always return an integer
-        if isinstance(final_action, torch.Tensor):
-            final_action_idx = int(final_action.item())
-        else:
-            final_action_idx = int(final_action)
-            
-        # Update action tracking
-        self.action_counts[final_action_idx] += 1
-        self.total_actions += 1
-
-        # Update recent actions for diversity tracking (deque handles max length automatically)
-        self.recent_actions.append(final_action_idx)
-
-        # Check if energy improved
-        if initial_energy is not None and final_energy is not None:
-            energy_improved = final_energy < initial_energy
-            if energy_improved:
-                self.stats["energy_improvements"] += 1
-
-        # Update epsilon
+        # Update epsilon for exploration decay
         if not deterministic:
             self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
         self.stats["total_predictions"] += 1
-        self.stats["successful_optimizations"] += 1
-
-        # Update MCMC stats
-        self.stats["total_mcmc_samples"] += steps_taken
-        self.stats["total_mcmc_accepted"] += accepted_samples
-
-        # Update average thinking steps
-        current_avg = self.stats["average_thinking_steps"]
-        total_preds = self.stats["total_predictions"]
-        self.stats["average_thinking_steps"] = (
-            (current_avg * (total_preds - 1)) + steps_taken
-        ) / total_preds
-
-        # Update replay buffer with final optimized logits
-        if self.use_replay_buffer:
-            # For now, we don't know if this is winning - will be updated later
-            self.replay_buffer.update(
-                obs_device, predicted_action_logits.detach(), is_winning=False
-            )
 
         thinking_info = {
-            "steps_taken": steps_taken,
-            "initial_energy": initial_energy if initial_energy is not None else 0.0,
-            "final_energy": final_energy if final_energy is not None else 0.0,
-            "energy_improvement": energy_improved,
-            "mcmc_accepted_samples": accepted_samples,
-            "mcmc_acceptance_rate": accepted_samples / max(1, steps_taken),
+            "steps_taken": self.thinking_steps,
+            "final_energy": best_energy,
+            "energy_improvement": best_energy < 0,
             "exploration": False,
             "epsilon": self.epsilon,
-            "action_diversity": len(self.action_counts) / max(1, self.total_actions),
-            "replay_buffer_size": (
-                len(self.replay_buffer) if self.use_replay_buffer else 0
-            ),
-            "final_action_logits": predicted_action_logits.detach().clone(),
-            "multiple_landscapes": True,
-            "max_mcmc_step": steps_taken - 1,
         }
 
-        return final_action_idx, thinking_info
+        return action_idx.item() if batch_size == 1 else action_idx, thinking_info
 
     def get_thinking_stats(self) -> Dict:
         stats = self.stats.copy()
@@ -1529,55 +1051,21 @@ class AggressiveAgent:
             stats["exploration_rate"] = (
                 stats["exploration_actions"] / stats["total_predictions"]
             )
-            stats["energy_improvement_rate"] = (
-                stats["energy_improvements"] / stats["total_predictions"]
-            )
         else:
             stats["success_rate"] = 0.0
             stats["exploration_rate"] = 0.0
-            stats["energy_improvement_rate"] = 0.0
-
         stats["current_epsilon"] = self.epsilon
-        stats["action_diversity"] = len(self.action_counts) / max(1, self.total_actions)
-        stats["mcmc_step_size"] = self.mcmc_step_size
-        stats["langevin_noise"] = self.langevin_noise_std
-        stats["temperature"] = self.temperature
-
-        # MCMC-specific stats
-        if stats["total_mcmc_samples"] > 0:
-            stats["mcmc_acceptance_rate"] = (
-                stats["total_mcmc_accepted"] / stats["total_mcmc_samples"]
-            )
-        else:
-            stats["mcmc_acceptance_rate"] = 0.0
-
         return stats
 
     def update_episode_outcome(self, is_winning=False):
-        """Update win rate tracking for adaptive buffer sampling"""
-        self.recent_episodes.append(1.0 if is_winning else 0.0)
-        if len(self.recent_episodes) > 0:
-            self.current_win_rate = sum(self.recent_episodes) / len(
-                self.recent_episodes
-            )
+        """Update episode outcome tracking (simplified version)"""
+        # Simple implementation - just track for stats
+        pass
 
     def update_last_action_outcome(self, obs, action_logits, is_winning=False):
-        """Update the replay buffer with outcome information for the last action"""
-        if self.use_replay_buffer and is_winning:
-            # We need to construct the observation dictionary correctly
-            obs_dict = {}
-            for key, value in obs.items():
-                # Ensure value is a tensor before detaching/cloning
-                if isinstance(value, torch.Tensor):
-                    obs_dict[key] = value.detach().clone()
-                else:
-                    # If it's a numpy array, we don't need to do anything special
-                    obs_dict[key] = value
-
-            # Add winning example to win buffer
-            self.replay_buffer.add(
-                obs_dict, action_logits.detach().clone(), is_winning=True
-            )
+        """Update last action outcome (simplified version)"""
+        # Simple implementation - no replay buffer to update
+        pass
 
 
 # FULLY FIXED EnhancedStreetFighterWrapper with TIER 2 HYBRID APPROACH
@@ -1731,15 +1219,9 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
 
-        # Extract initial strategic data
-        player_status = info.get("agent_status", 0)
-        enemy_status = info.get("enemy_status", 0)
-        round_timer = info.get("round_countdown", 99)
-        
         # Update feature tracker with initial state
         self.feature_tracker.update(
-            player_health, opponent_health, 0, {}, player_x, enemy_x,
-            player_status, enemy_status, round_timer
+            player_health, opponent_health, 0, {}, player_x, enemy_x
         )
 
         # Build initial observation
@@ -1824,13 +1306,8 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         # Extract positional data for blocking knowledge
         player_x = info.get("agent_x", 0)
         enemy_x = info.get("enemy_x", 0)
-        
-        # FIX #3: Extract strategic state data
-        player_status = info.get("agent_status", 0)
-        enemy_status = info.get("enemy_status", 0)
-        round_timer = info.get("round_countdown", 99)
 
-        # Update feature tracker with positional and strategic data
+        # Update feature tracker with positional data
         self.feature_tracker.update(
             final_player_health,
             final_opponent_health,
@@ -1838,9 +1315,6 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             reward_breakdown,
             player_x,
             enemy_x,
-            player_status,
-            enemy_status,
-            round_timer,
         )
 
         # Build observation
