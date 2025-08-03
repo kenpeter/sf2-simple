@@ -852,15 +852,16 @@ class StreetFighterDiscreteActions:
 # Context Transformer for processing action/reward/context sequences
 
 
-# TIER 2 HYBRID APPROACH: Enhanced Context Transformer for rich multimodal sequences
-class HybridContextTransformer(nn.Module):
+# LIGHTWEIGHT TRANSFORMER: Diet version with dramatically reduced parameters
+class LightweightContextTransformer(nn.Module):
     def __init__(
         self,
         visual_feature_dim=256,
         vector_feature_dim=32,
         action_dim=56,
-        hidden_dim=128,
-        num_layers=2,
+        hidden_dim=64,      # REDUCED from 128
+        num_layers=1,       # REDUCED from 2
+        num_heads=2,        # REDUCED from 4
     ):
         super().__init__()
         self.visual_feature_dim = visual_feature_dim
@@ -870,25 +871,26 @@ class HybridContextTransformer(nn.Module):
         self.num_layers = num_layers
 
         # Total token size: visual features + vector features + action one-hot + reward
-        # total token size = visual + vector + action hot + reward
         self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
 
-        # embed so we can pass to transformer
+        # Input embedding now projects to smaller dimension
         self.embedding = nn.Linear(self.token_dim, hidden_dim)
 
-        # transformer
+        # The Transformer encoder layer is now much smaller
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 2,  # REDUCED from hidden_dim * 4
+            dropout=0.1,
+            activation="relu",
+        )
+        
+        # The stack of layers is smaller
         self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=hidden_dim,
-                nhead=4,
-                dim_feedforward=hidden_dim * 4,
-                dropout=0.1,
-                activation="relu",
-            ),
+            encoder_layer,
             num_layers=num_layers,
         )
 
-        # the output also hidden dim
         self.output = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, rich_sequence, attention_mask=None):
@@ -898,7 +900,7 @@ class HybridContextTransformer(nn.Module):
         """
         batch_size, seq_len, _ = rich_sequence.shape
 
-        # we embed the rich seq, with hidden_dim
+        # Embed the rich sequence
         x = self.embedding(rich_sequence)
         x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
 
@@ -908,7 +910,181 @@ class HybridContextTransformer(nn.Module):
                 torch.ones(seq_len, seq_len, device=x.device)
             ).bool()
 
-        # the x will eventually go to transformer
+        # Apply transformer
+        x = self.transformer(x, mask=~attention_mask)
+
+        # Take the last sequence output
+        x = x[-1, :, :]  # (batch_size, hidden_dim)
+        x = self.output(x)
+
+        return x
+
+
+# SINGLE ATTENTION BLOCK: Maximum simplicity while preserving attention mechanism
+class SingleAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        visual_feature_dim=256,
+        vector_feature_dim=32,
+        action_dim=56,
+        hidden_dim=64,  # Small hidden dimension
+        num_heads=2,    # Small number of heads
+    ):
+        super().__init__()
+        self.visual_feature_dim = visual_feature_dim
+        self.vector_feature_dim = vector_feature_dim
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+
+        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
+        self.embedding = nn.Linear(self.token_dim, hidden_dim)
+
+        # Just one Multi-Head Attention layer
+        self.attention = nn.MultiHeadAttention(
+            embed_dim=hidden_dim, 
+            num_heads=num_heads, 
+            dropout=0.1, 
+            batch_first=True
+        )
+
+        # A small feed-forward network to process the attention output
+        self.feed_forward = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim * 2, hidden_dim)
+        )
+        
+        # Layer normalization is crucial for stability
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+
+    def forward(self, rich_sequence, attention_mask=None):
+        # rich_sequence shape: (batch_size, seq_len, token_dim)
+        
+        # 1. Embed the sequence
+        embedded_sequence = self.embedding(rich_sequence)
+
+        # 2. Apply Self-Attention
+        attention_output, _ = self.attention(
+            query=embedded_sequence, 
+            key=embedded_sequence, 
+            value=embedded_sequence,
+            attn_mask=attention_mask
+        )
+        
+        # 3. Add & Norm (residual connection)
+        x = self.norm1(embedded_sequence + attention_output)
+
+        # 4. Feed Forward Network
+        ff_output = self.feed_forward(x)
+
+        # 5. Add & Norm
+        x = self.norm2(x + ff_output)
+
+        # 6. Take the last token's output as the context summary
+        return x[:, -1, :]  # (batch_size, hidden_dim)
+
+
+# GATED RECURRENT CONTEXT: Traditional but highly efficient sequence processor
+class GatedRecurrentContext(nn.Module):
+    def __init__(
+        self,
+        visual_feature_dim=256,
+        vector_feature_dim=32,
+        action_dim=56,
+        hidden_dim=128,  # GRUs can handle a slightly larger hidden state
+        num_layers=2,
+    ):
+        super().__init__()
+        self.visual_feature_dim = visual_feature_dim
+        self.vector_feature_dim = vector_feature_dim
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+
+        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
+        
+        # A GRU layer instead of a Transformer
+        self.gru = nn.GRU(
+            input_size=self.token_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=0.1 if num_layers > 1 else 0
+        )
+
+        self.output = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, rich_sequence, attention_mask=None):
+        # rich_sequence shape: (batch_size, seq_len, token_dim)
+        
+        # The GRU outputs all hidden states for the sequence, and the final hidden state
+        all_outputs, final_hidden_state = self.gru(rich_sequence)
+
+        # We want the output of the very last time step
+        last_output = all_outputs[:, -1, :]
+        
+        return self.output(last_output)
+
+
+# HYBRID CONTEXT TRANSFORMER: Rename LightweightContextTransformer to HybridContextTransformer
+class HybridContextTransformer(nn.Module):
+    def __init__(
+        self,
+        visual_feature_dim=256,
+        vector_feature_dim=32,
+        action_dim=56,
+        hidden_dim=64,      # REDUCED from 128
+        num_layers=1,       # REDUCED from 2
+        num_heads=2,        # REDUCED from 4
+    ):
+        super().__init__()
+        self.visual_feature_dim = visual_feature_dim
+        self.vector_feature_dim = vector_feature_dim
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+
+        # Total token size: visual features + vector features + action one-hot + reward
+        self.token_dim = visual_feature_dim + vector_feature_dim + action_dim + 1
+
+        # Input embedding now projects to smaller dimension
+        self.embedding = nn.Linear(self.token_dim, hidden_dim)
+
+        # The Transformer encoder layer is now much smaller
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 2,  # REDUCED from hidden_dim * 4
+            dropout=0.1,
+            activation="relu",
+        )
+        
+        # The stack of layers is smaller
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+        )
+
+        self.output = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, rich_sequence, attention_mask=None):
+        """
+        rich_sequence: [batch_size, seq_len, token_dim]
+        where token_dim = visual_features + vector_features + action_one_hot + reward
+        """
+        batch_size, seq_len, _ = rich_sequence.shape
+
+        # Embed the rich sequence
+        x = self.embedding(rich_sequence)
+        x = x.permute(1, 0, 2)  # (seq_len, batch_size, hidden_dim)
+
+        # Create causal attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.tril(
+                torch.ones(seq_len, seq_len, device=x.device)
+            ).bool()
+
+        # Apply transformer
         x = self.transformer(x, mask=~attention_mask)
 
         # Take the last sequence output
@@ -1020,13 +1196,13 @@ class SimpleVerifier(nn.Module):
         # Feature extractor
         self.features_extractor = SimpleCNN(observation_space, features_dim)
 
-        # TIER 2: Hybrid context transformer
+        # TIER 2: Hybrid context transformer (now lightweight)
         self.context_transformer = HybridContextTransformer(
             visual_feature_dim=features_dim,
             vector_feature_dim=VECTOR_FEATURE_DIM,
             action_dim=self.action_dim,
-            hidden_dim=128,
-            num_layers=2,
+            hidden_dim=64,   # REDUCED from 128
+            num_layers=1,    # REDUCED from 2
         )
 
         # Action embedding - FIXED: Remove BatchNorm1d to avoid single batch issues
@@ -1043,7 +1219,7 @@ class SimpleVerifier(nn.Module):
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
         # Updated input size to include step embedding
         # energy net for better action
-        energy_input_dim = features_dim + 64 + 128 + self.step_embedding_dim
+        energy_input_dim = features_dim + 64 + 64 + self.step_embedding_dim  # context embedding now 64
         self.energy_net = nn.Sequential(
             nn.Linear(energy_input_dim, 512),  # Include step embedding
             nn.ReLU(),
@@ -2174,7 +2350,9 @@ __all__ = [
     "StreetFighterDiscreteActions",
     "SimpleCNN",
     "SimpleVerifier",
-    "HybridContextTransformer",  # TIER 2: Enhanced context transformer
+    "HybridContextTransformer",  # Lightweight transformer (formerly heavy)
+    "SingleAttentionBlock",  # Minimal attention-only approach
+    "GatedRecurrentContext",  # Traditional RNN alternative
     "AggressiveAgent",
     "safe_divide",
     "safe_std",
