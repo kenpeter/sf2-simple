@@ -63,6 +63,10 @@ class StreetFighter(gym.Env):
         self.enemy_x = 0
         self.enemy_y = 0
         
+        # Round tracking for best of 3
+        self.agent_rounds_won = 0
+        self.enemy_rounds_won = 0
+        
     def preprocess(self, observation):
         """
         Preprocess observation: convert to grayscale and resize to 84x84
@@ -101,9 +105,45 @@ class StreetFighter(gym.Env):
         # Penalty for taking damage
         damage_to_player = self.player_health - current_player_health
         
+        # Check for round end and update round counters
+        round_ended = False
+        if current_player_health <= 0 and self.player_health > 0:
+            # Agent lost this round
+            self.enemy_rounds_won += 1
+            round_ended = True
+        elif current_enemy_health <= 0 and self.enemy_health > 0:
+            # Agent won this round
+            self.agent_rounds_won += 1
+            round_ended = True
+        
         # Combine into a single reward signal
         # You can tune these weights
         reward = damage_to_enemy * 1.5 - damage_to_player * 1.0 - 0.001
+        
+        # Add round win/loss rewards
+        if round_ended:
+            if current_player_health <= 0:
+                reward -= 20  # Penalty for losing round
+            elif current_enemy_health <= 0:
+                reward += 20  # Bonus for winning round
+        
+        # Check if best of 3 is complete
+        if self.agent_rounds_won >= 2:
+            # Agent won best of 3 - reset the game
+            reward += 50  # Big bonus for winning match
+            done = True
+            # Reset game to beginning
+            self.game.reset()
+            self.agent_rounds_won = 0
+            self.enemy_rounds_won = 0
+        elif self.enemy_rounds_won >= 2:
+            # Agent lost best of 3 - reset the game
+            reward -= 50  # Big penalty for losing match
+            done = True
+            # Reset game to beginning
+            self.game.reset()
+            self.agent_rounds_won = 0
+            self.enemy_rounds_won = 0
 
         # Update the stored health values for the next step
         self.player_health = current_player_health
@@ -132,6 +172,10 @@ class StreetFighter(gym.Env):
         self.agent_y = info.get('agent_y', 0)
         self.enemy_x = info.get('enemy_x', 0)
         self.enemy_y = info.get('enemy_y', 0)
+        
+        # Reset round counters
+        self.agent_rounds_won = 0
+        self.enemy_rounds_won = 0
         
         # Preprocess observation
         obs = self.preprocess(obs)
