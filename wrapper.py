@@ -292,7 +292,7 @@ class CausalReplayBuffer:
     def __init__(self, max_size=30000, sample_size=32, initial_win_ratio=0.3):
         """
         Initializes the replay buffer with an adaptive sampling strategy.
-        
+
         Args:
             max_size (int): The total capacity of the normal experience buffer.
             sample_size (int): The number of samples to return for MCMC initialization.
@@ -300,18 +300,23 @@ class CausalReplayBuffer:
         """
         self.max_size = max_size
         self.sample_size = sample_size
+        # the replay buffer has buffer and win buffer
         self.buffer = []
         self.win_buffer = []  # Separate buffer for winning examples
         self.position = 0
         self.win_position = 0
         self.total_added = 0
-        
+
         # --- ADAPTIVE SAMPLING PARAMETERS ---
         self.initial_win_ratio = initial_win_ratio  # Start with a low win sample ratio
         self.max_win_ratio = 0.65  # Cap the win ratio to ensure diversity
-        self.min_win_samples_for_adaptation = 100  # Min wins needed before increasing the ratio
-        self.adaptive_win_ratio = initial_win_ratio  # The dynamic ratio, updated during training
-        
+        self.min_win_samples_for_adaptation = (
+            100  # Min wins needed before increasing the ratio
+        )
+        self.adaptive_win_ratio = (
+            initial_win_ratio  # The dynamic ratio, updated during training
+        )
+
         print(f"✅ Initialized CausalReplayBuffer with ADAPTIVE sampling.")
         print(f"   - Initial Win Sample Ratio: {self.initial_win_ratio:.2f}")
         print(f"   - Max Win Sample Ratio: {self.max_win_ratio:.2f}")
@@ -342,11 +347,11 @@ class CausalReplayBuffer:
             self.position = (self.position + 1) % self.max_size
 
         self.total_added += 1
-        
+
     def update_adaptive_win_ratio(self, current_win_rate: float):
         """
         Dynamically adjust the win sample ratio based on agent performance.
-        
+
         Args:
             current_win_rate (float): The agent's recent win rate (e.g., over the last 100 episodes).
         """
@@ -365,7 +370,7 @@ class CausalReplayBuffer:
     def sample(self, batch_size: int, current_win_rate: float = 0.0):
         """
         Sample a batch with adaptive win prioritization.
-        
+
         Args:
             batch_size (int): The number of samples to return.
             current_win_rate (float): The agent's current win rate to guide sampling.
@@ -382,12 +387,16 @@ class CausalReplayBuffer:
         batch_logits = []
 
         # Calculate number of samples from each buffer based on the adaptive ratio
-        win_samples_count = min(int(batch_size * self.adaptive_win_ratio), len(self.win_buffer))
+        win_samples_count = min(
+            int(batch_size * self.adaptive_win_ratio), len(self.win_buffer)
+        )
         regular_samples_count = batch_size - win_samples_count
 
         # 1. Sample from the win buffer
         if win_samples_count > 0:
-            win_indices = np.random.choice(len(self.win_buffer), size=win_samples_count, replace=True)
+            win_indices = np.random.choice(
+                len(self.win_buffer), size=win_samples_count, replace=True
+            )
             for idx in win_indices:
                 batch_obs.append(self.win_buffer[idx]["obs"])
                 batch_logits.append(self.win_buffer[idx]["action_logits"])
@@ -395,10 +404,14 @@ class CausalReplayBuffer:
         # 2. Sample from the regular buffer
         if regular_samples_count > 0 and len(valid_normal_samples) > 0:
             if len(valid_normal_samples) >= regular_samples_count:
-                regular_indices = np.random.choice(len(valid_normal_samples), size=regular_samples_count, replace=False)
-            else: # Fallback if not enough normal samples
-                regular_indices = np.random.choice(len(valid_normal_samples), size=regular_samples_count, replace=True)
-            
+                regular_indices = np.random.choice(
+                    len(valid_normal_samples), size=regular_samples_count, replace=False
+                )
+            else:  # Fallback if not enough normal samples
+                regular_indices = np.random.choice(
+                    len(valid_normal_samples), size=regular_samples_count, replace=True
+                )
+
             for idx in regular_indices:
                 batch_obs.append(valid_normal_samples[idx]["obs"])
                 batch_logits.append(valid_normal_samples[idx]["action_logits"])
@@ -414,7 +427,9 @@ class CausalReplayBuffer:
         if len(self.buffer) < self.sample_size:
             return current_obs, None, None
 
-        buffer_obs, buffer_logits = self.sample(self.sample_size, current_win_rate=win_rate)
+        buffer_obs, buffer_logits = self.sample(
+            self.sample_size, current_win_rate=win_rate
+        )
         if buffer_obs is None:
             return current_obs, None, None
 
@@ -623,11 +638,11 @@ class EnhancedRewardCalculator:
                 reward += damage_ratio_bonus
                 reward_breakdown["damage_ratio"] = damage_ratio_bonus
 
-        # --- RECOMMENDATION: Remove the penalty that discourages blocking ---
-        # Comment out or remove the step penalty to allow defensive actions
-        # step_penalty = -0.005
-        # reward += step_penalty
-        # reward_breakdown["step_penalty"] = step_penalty
+        # --- CRITICAL FIX: Restore step penalty to force action ---
+        # The agent MUST have incentive to act quickly and decisively
+        step_penalty = -0.01  # RESTORE: Strong step penalty forces active play
+        reward += step_penalty
+        reward_breakdown["step_penalty"] = step_penalty
 
         # Additional passivity penalty
         if self.no_damage_frames > 150:  # about 2.5 seconds of nothing happening
@@ -963,15 +978,16 @@ class SimpleCNN(nn.Module):
             )
             visual_output_size = self.visual_cnn(dummy_visual).shape[1]
 
-        # Vector feedforward processor (replaces LSTM)
+        # CRITICAL FIX: LSTM processor for temporal patterns
+        self.vector_lstm = nn.LSTM(
+            input_size=vector_feature_count,
+            hidden_size=64,
+            num_layers=1,
+            batch_first=True,
+            dropout=0.0
+        )
         self.vector_processor = nn.Sequential(
-            nn.Linear(vector_feature_count, 256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
+            nn.Linear(64, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
@@ -996,9 +1012,11 @@ class SimpleCNN(nn.Module):
         # Process visual features
         visual_features = self.visual_cnn(visual_obs.float() / 255.0)
 
-        # Process vector features - take last timestep from sequence
-        vector_input = vector_obs[:, -1, :]  # Use last timestep
-        vector_features = self.vector_processor(vector_input)
+        # CRITICAL FIX: Process vector features through LSTM for temporal patterns
+        lstm_output, (hidden, cell) = self.vector_lstm(vector_obs)
+        # Use the last timestep output
+        vector_lstm_out = lstm_output[:, -1, :]  # Shape: [batch_size, 64]
+        vector_features = self.vector_processor(vector_lstm_out)
 
         # Combine and fuse
         combined = torch.cat([visual_features, vector_features], dim=1)
@@ -1045,7 +1063,9 @@ class SimpleVerifier(nn.Module):
         # Energy network - FIXED: Remove BatchNorm1d to avoid single batch issues
         # Updated input size to include step embedding
         # energy net for better action (NO TRANSFORMER)
-        energy_input_dim = features_dim + 64 + self.step_embedding_dim  # NO context embedding
+        energy_input_dim = (
+            features_dim + 64 + self.step_embedding_dim
+        )  # NO context embedding
         self.energy_net = nn.Sequential(
             nn.Linear(energy_input_dim, 512),  # Include step embedding
             nn.ReLU(),
@@ -1142,22 +1162,20 @@ class AggressiveAgent:
         thinking_lr: float = 0.025,
     ):
         self.verifier = verifier
-        self.thinking_steps = thinking_steps
-        self.thinking_lr = thinking_lr
+        self.thinking_steps = 6  # SIMPLIFIED: Reduce from 8 to 6 steps like old code
+        self.thinking_lr = 0.1   # SIMPLIFIED: Higher learning rate for faster convergence
         self.action_dim = verifier.action_dim
         # --- RECOMMENDATION 1: Increase exploration pressure ---
         self.epsilon = 0.80  # Start higher
         self.epsilon_decay = 0.9997  # Slightly slower decay
-        self.min_epsilon = 0.15  # CRITICAL: Increase minimum exploration
+        self.min_epsilon = 0.10  # MATCH OLD CODE: More aggressive exploration
 
-        # --- RECOMMENDATION 2: Make MCMC sampling healthier ---
-        self.mcmc_step_size = 0.10  # SLIGHTLY REDUCE: Let noise have more effect
-        self.langevin_noise_std = (
-            0.12  # INCREASE: Force more exploration during thinking
-        )
-        self.temperature = 1.0  # Keep as is for now, but could be tuned
+        # --- SIMPLIFIED THINKING: More like old gradient descent ---
+        self.mcmc_step_size = self.thinking_lr  # SIMPLIFIED: Use thinking_lr directly
+        self.langevin_noise_std = 0.01         # REDUCED: Less noise, more deterministic
+        self.temperature = 0.1                 # REDUCED: More deterministic action selection
         self.clamp_grad = True
-        self.clamp_max = 3.0
+        self.clamp_max = 1.0                   # REDUCED: Smaller gradient clamps
 
         # EBT-style replay buffer
         self.use_replay_buffer = True
@@ -1173,7 +1191,7 @@ class AggressiveAgent:
         )
         self.recent_actions = []  # Track recent actions for diversity
         self.recent_actions_window = 20  # Window size for recent actions
-        
+
         # Win rate tracking for adaptive buffer sampling
         self.recent_episodes = deque(maxlen=100)  # Track last 100 episodes
         self.current_win_rate = 0.0
@@ -1247,7 +1265,9 @@ class AggressiveAgent:
             # Try to get initial condition from replay buffer
 
             # buffer logic from replay buffer, sample 1 with current win rate
-            _, buffer_logits = self.replay_buffer.sample(1, current_win_rate=self.current_win_rate)
+            _, buffer_logits = self.replay_buffer.sample(
+                1, current_win_rate=self.current_win_rate
+            )
             if buffer_logits is not None and len(buffer_logits) > 0:
                 predicted_action_logits = (
                     buffer_logits[0].clone().detach().requires_grad_(True)
@@ -1395,18 +1415,18 @@ class AggressiveAgent:
 
         # Determine final action
         with torch.no_grad():
-            # --- RECOMMENDATION 6: Add temperature to final action selection ---
-            # Anneal temperature over time. A simple way is to tie it to epsilon
-            action_selection_temp = max(0.1, self.epsilon * 0.5 + 0.05)
-
+            # SIMPLIFIED: More deterministic action selection like old code
             final_action_probs = F.softmax(
-                predicted_action_logits / action_selection_temp, dim=-1
+                predicted_action_logits / self.temperature, dim=-1
             )
             if deterministic:
                 final_action = torch.argmax(final_action_probs, dim=-1)
             else:
-                # Use multinomial sampling instead of argmax
-                final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
+                # More deterministic: use argmax most of the time
+                if np.random.random() < 0.8:  # 80% deterministic
+                    final_action = torch.argmax(final_action_probs, dim=-1)
+                else:
+                    final_action = torch.multinomial(final_action_probs, 1).squeeze(-1)
 
         # Update tracking
         final_action_idx = final_action.item() if batch_size == 1 else final_action
@@ -1507,7 +1527,9 @@ class AggressiveAgent:
         """Update win rate tracking for adaptive buffer sampling"""
         self.recent_episodes.append(1.0 if is_winning else 0.0)
         if len(self.recent_episodes) > 0:
-            self.current_win_rate = sum(self.recent_episodes) / len(self.recent_episodes)
+            self.current_win_rate = sum(self.recent_episodes) / len(
+                self.recent_episodes
+            )
 
     def update_last_action_outcome(self, obs, action_logits, is_winning=False):
         """Update the replay buffer with outcome information for the last action"""
@@ -1861,6 +1883,7 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
             "vector_obs": vector_obs.astype(np.float32),
             "context_sequence": context_sequence.astype(np.float32),
         }
+
 
 # Rich context sequence methods removed - NO TRANSFORMER
 
