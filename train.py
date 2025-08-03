@@ -25,10 +25,11 @@ class TrainAndLoggingCallback(BaseCallback):
     Custom callback for training and logging
     """
 
-    def __init__(self, check_freq, save_path, verbose=1):
+    def __init__(self, check_freq, save_path, resume_model_name=None, verbose=1):
         super(TrainAndLoggingCallback, self).__init__(verbose)
         self.check_freq = check_freq
         self.save_path = save_path
+        self.resume_model_name = resume_model_name
 
     def _init_callback(self):
         if self.save_path is not None:
@@ -36,9 +37,14 @@ class TrainAndLoggingCallback(BaseCallback):
 
     def _on_step(self):
         if self.n_calls % self.check_freq == 0:
-            model_path = os.path.join(
-                self.save_path, "best_model_{}".format(self.n_calls)
-            )
+            if self.resume_model_name:
+                model_path = os.path.join(
+                    self.save_path, "{}_{}".format(self.resume_model_name, self.n_calls)
+                )
+            else:
+                model_path = os.path.join(
+                    self.save_path, "best_model_{}".format(self.n_calls)
+                )
             self.model.save(model_path)
             print(f"Model saved at step {self.n_calls}")
         return True
@@ -88,16 +94,27 @@ def train_model(args):
         "gae_lambda": args.gae_lambda,
         "verbose": 1,
         "tensorboard_log": args.log_dir,
+        "device": "cuda",
     }
 
     print(f"Model parameters: {model_params}")
 
     # Create model
-    model = PPO("CnnPolicy", env, **model_params)
+    if args.resume:
+        print(f"📂 Loading model from: {args.resume}")
+        model = PPO.load(args.resume, env=env)
+        print("✅ Model loaded successfully!")
+    else:
+        model = PPO("CnnPolicy", env, **model_params)
 
     # Create callback
+    resume_model_name = None
+    if args.resume:
+        # Extract model name from resume path (e.g., "best_model_940000" from "train/best_model_940000.zip")
+        resume_model_name = os.path.splitext(os.path.basename(args.resume))[0]
+    
     callback = TrainAndLoggingCallback(
-        check_freq=args.save_freq, save_path=args.save_dir
+        check_freq=args.save_freq, save_path=args.save_dir, resume_model_name=resume_model_name
     )
 
     # Train the model
@@ -251,6 +268,11 @@ def main():
         type=int,
         default=50000,
         help="Timesteps per optimization trial",
+    )
+    
+    # Resume training
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Path to model checkpoint to resume from"
     )
 
     args = parser.parse_args()
