@@ -408,9 +408,9 @@ class MinimalFixTrainer:
                 episode_reward += reward
                 episode_steps += 1
 
-                # Check for win
+                # Check for match win (best of 3)
                 reward_breakdown = info.get("reward_breakdown", {})
-                if "round_won" in reward_breakdown:
+                if "match_won" in reward_breakdown:
                     wins += 1
                     break
 
@@ -673,7 +673,7 @@ def main():
         help="Maximum number of training episodes",
     )
     parser.add_argument(
-        "--max-episode-steps", type=int, default=1200, help="Maximum steps per episode"
+        "--max-episode-steps", type=int, default=3500, help="Maximum steps per episode"
     )
     parser.add_argument(
         "--eval-frequency",

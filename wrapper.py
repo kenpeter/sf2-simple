@@ -55,7 +55,7 @@ MAX_HEALTH = 176
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 224
 VECTOR_FEATURE_DIM = 32
-MAX_FIGHT_STEPS = 1200
+MAX_FIGHT_STEPS = 3500
 
 print(f"🥊 MINIMAL FIX Configuration:")
 print(f"   - Only fixing quality threshold (0.6 → 0.3)")
@@ -249,6 +249,10 @@ class IntelligentRewardCalculator:
 
         self.round_won = False
         self.round_lost = False
+        
+        # Track rounds for best-of-3
+        self.player_rounds_won = 0
+        self.opponent_rounds_won = 0
 
     def calculate_reward(self, player_health, opponent_health, done, info):
         """Your original reward calculation - UNCHANGED."""
@@ -276,21 +280,46 @@ class IntelligentRewardCalculator:
             reward += damage_penalty
             reward_breakdown["damage_taken"] = damage_penalty
 
-        if done:
+        # Check for win/loss conditions
+        if opponent_health <= 0 and player_health > 0:
+            win_bonus = self.winning_bonus
+            reward += win_bonus
+            reward_breakdown["round_won"] = win_bonus
+            self.round_won = True
+            self.player_rounds_won += 1
+        elif player_health <= 0 and opponent_health > 0:
+            loss_penalty = -1.0
+            reward += loss_penalty
+            reward_breakdown["round_lost"] = loss_penalty
+            self.round_lost = True
+            self.opponent_rounds_won += 1
+        elif done:
             if player_health > opponent_health:
                 win_bonus = self.winning_bonus
                 reward += win_bonus
                 reward_breakdown["round_won"] = win_bonus
                 self.round_won = True
+                self.player_rounds_won += 1
             elif opponent_health > player_health:
                 loss_penalty = -1.0
                 reward += loss_penalty
                 reward_breakdown["round_lost"] = loss_penalty
                 self.round_lost = True
+                self.opponent_rounds_won += 1
             else:
                 draw_penalty = -0.3
                 reward += draw_penalty
                 reward_breakdown["draw"] = draw_penalty
+        
+        # Check for match win (best of 3)
+        if self.player_rounds_won >= 2:
+            match_win_bonus = self.winning_bonus * 2.0
+            reward += match_win_bonus
+            reward_breakdown["match_won"] = match_win_bonus
+        elif self.opponent_rounds_won >= 2:
+            match_loss_penalty = -2.0
+            reward += match_loss_penalty
+            reward_breakdown["match_lost"] = match_loss_penalty
         else:
             health_diff = (player_health - opponent_health) / MAX_HEALTH
             if abs(health_diff) > 0.1:
@@ -314,6 +343,8 @@ class IntelligentRewardCalculator:
         self.match_started = False
         self.round_won = False
         self.round_lost = False
+        self.player_rounds_won = 0
+        self.opponent_rounds_won = 0
 
 
 class SimplifiedFeatureTracker:
@@ -556,10 +587,19 @@ class StreetFighterVisionWrapper(gym.Wrapper):
         player_health = info.get("player_health", MAX_HEALTH)
         opponent_health = info.get("opponent_health", MAX_HEALTH)
 
-        if hasattr(self.env, "data") and hasattr(self.env.data, "memory"):
+        if hasattr(self.env, "data"):
             try:
-                player_health = self.env.data.memory.read_byte(0x8004)
-                opponent_health = self.env.data.memory.read_byte(0x8008)
+                # Try stable-retro variables first
+                if hasattr(self.env.data, "variables"):
+                    vars_dict = self.env.data.variables()
+                    if "player_health" in vars_dict:
+                        player_health = vars_dict["player_health"]
+                    if "opponent_health" in vars_dict:
+                        opponent_health = vars_dict["opponent_health"]
+                # Fallback to memory if variables don't work
+                elif hasattr(self.env.data, "memory"):
+                    player_health = self.env.data.memory.read_byte(0x8004)
+                    opponent_health = self.env.data.memory.read_byte(0x8008)
             except:
                 pass
 
@@ -685,9 +725,6 @@ class EnhancedQualityBasedExperienceBuffer:
         # THE CORE FIX: This will now work because threshold is 0.3 instead of 0.6
         if quality_score >= self.quality_threshold:
             self.good_experiences.append(experience)
-            print(
-                f"✅ Good experience added (quality: {quality_score:.3f} >= {self.quality_threshold:.3f})"
-            )
             self.golden_buffer.add_experience(experience, quality_score)
         else:
             self.bad_experiences.append(experience)
