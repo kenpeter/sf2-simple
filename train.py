@@ -95,7 +95,7 @@ def make_env():
     # vec env
     env = DummyVecEnv([lambda: env])
     # frame stack 4
-    env = VecFrameStack(env, 256, channels_order="last")
+    env = VecFrameStack(env, 1024, channels_order="last")
     # return env
     return env
 
