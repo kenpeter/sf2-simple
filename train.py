@@ -40,25 +40,31 @@ class TrainAndLoggingCallback(BaseCallback):
             os.makedirs(self.save_path, exist_ok=True)
 
     def _on_step(self):
-        # Check for match completion (episode done) and track wins
-        if hasattr(self, 'locals') and 'dones' in self.locals:
-            dones = self.locals['dones']
-            if any(dones):  # Episode finished
-                # Get environment to check who won
-                if hasattr(self.training_env, 'get_attr'):
-                    try:
-                        agent_rounds_won = self.training_env.get_attr('agent_rounds_won')[0]
-                        self.matches_played += 1
-                        if agent_rounds_won >= 1:  # Agent won the match (single round)
-                            self.matches_won += 1
-                    except:
-                        pass
+        # Check for match completion (episode done) and track wins  
+        if hasattr(self, 'locals') and 'infos' in self.locals:
+            infos = self.locals['infos']
+            for info in infos:
+                if info and 'agent_won' in info:  # Episode finished with win/loss info
+                    self.matches_played += 1
+                    if info['agent_won']:  # Agent won the match
+                        self.matches_won += 1
         
         if self.n_calls % self.check_freq == 0:
             if self.resume_model_name:
-                model_path = os.path.join(
-                    self.save_path, "{}_{}".format(self.resume_model_name, self.n_calls)
-                )
+                # Extract the previous number from resume model name and add current steps
+                import re
+                match = re.search(r'_(\d+)$', self.resume_model_name)
+                if match:
+                    previous_steps = int(match.group(1))
+                    total_steps = previous_steps + self.n_calls
+                    base_name = re.sub(r'_\d+$', '', self.resume_model_name)
+                    model_path = os.path.join(
+                        self.save_path, "{}_{}".format(base_name, total_steps)
+                    )
+                else:
+                    model_path = os.path.join(
+                        self.save_path, "{}_{}".format(self.resume_model_name, self.n_calls)
+                    )
             else:
                 model_path = os.path.join(
                     self.save_path, "best_model_{}".format(self.n_calls)

@@ -113,6 +113,7 @@ class StreetFighter(gym.Env):
         if self.agent_rounds_won >= 1:
             # Agent won single round - reset the game
             done = True
+            info['agent_won'] = True
             # Reset game to beginning
             self.game.reset()
             self.agent_rounds_won = 0
@@ -120,6 +121,7 @@ class StreetFighter(gym.Env):
         elif self.enemy_rounds_won >= 1:
             # Agent lost single round - reset the game
             done = True
+            info['agent_won'] = False
             # Reset game to beginning
             self.game.reset()
             self.agent_rounds_won = 0
