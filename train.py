@@ -30,12 +30,30 @@ class TrainAndLoggingCallback(BaseCallback):
         self.check_freq = check_freq
         self.save_path = save_path
         self.resume_model_name = resume_model_name
+        
+        # Win rate tracking
+        self.matches_played = 0
+        self.matches_won = 0
 
     def _init_callback(self):
         if self.save_path is not None:
             os.makedirs(self.save_path, exist_ok=True)
 
     def _on_step(self):
+        # Check for match completion (episode done) and track wins
+        if hasattr(self, 'locals') and 'dones' in self.locals:
+            dones = self.locals['dones']
+            if any(dones):  # Episode finished
+                # Get environment to check who won
+                if hasattr(self.training_env, 'get_attr'):
+                    try:
+                        agent_rounds_won = self.training_env.get_attr('agent_rounds_won')[0]
+                        self.matches_played += 1
+                        if agent_rounds_won >= 1:  # Agent won the match (single round)
+                            self.matches_won += 1
+                    except:
+                        pass
+        
         if self.n_calls % self.check_freq == 0:
             if self.resume_model_name:
                 model_path = os.path.join(
@@ -46,7 +64,13 @@ class TrainAndLoggingCallback(BaseCallback):
                     self.save_path, "best_model_{}".format(self.n_calls)
                 )
             self.model.save(model_path)
-            print(f"Model saved at step {self.n_calls}")
+            
+            # Calculate and display win rate
+            if self.matches_played > 0:
+                win_rate = (self.matches_won / self.matches_played) * 100
+                print(f"Model saved at step {self.n_calls} | Win Rate: {win_rate:.1f}% ({self.matches_won}/{self.matches_played})")
+            else:
+                print(f"Model saved at step {self.n_calls}")
         return True
 
 

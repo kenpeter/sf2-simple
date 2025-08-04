@@ -102,18 +102,23 @@ class StreetFighter(gym.Env):
             self.agent_rounds_won += 1
             round_ended = True
         
-        # No additional rewards for round win/loss - only health difference matters
+        # Add normalized rewards for round win/loss
+        if round_ended:
+            if current_health <= 0:
+                reward -= 1.0  # Normalized penalty for losing round
+            elif current_enemy_health <= 0:
+                reward += 1.0  # Normalized bonus for winning round
         
-        # Check if best of 3 is complete - no match rewards, just reset
-        if self.agent_rounds_won >= 2:
-            # Agent won best of 3 - reset the game
+        # Check if single round is complete - no match rewards, just reset
+        if self.agent_rounds_won >= 1:
+            # Agent won single round - reset the game
             done = True
             # Reset game to beginning
             self.game.reset()
             self.agent_rounds_won = 0
             self.enemy_rounds_won = 0
-        elif self.enemy_rounds_won >= 2:
-            # Agent lost best of 3 - reset the game
+        elif self.enemy_rounds_won >= 1:
+            # Agent lost single round - reset the game
             done = True
             # Reset game to beginning
             self.game.reset()
