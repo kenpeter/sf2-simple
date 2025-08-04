@@ -9,6 +9,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 import retro
+from discretizer import StreetFighter2Discretizer
 
 # --- FIX for TypeError in retro.make ---
 _original_retro_make = retro.make
@@ -36,12 +37,14 @@ class StreetFighter(gym.Env):
 
         # Create the retro environment
         try:
-            self.game = retro.make(
+            game = retro.make(
                 "StreetFighterIISpecialChampionEdition-Genesis",
                 state="ken_bison_12.state",
                 use_restricted_actions=retro.Actions.FILTERED,
             )
-            print("✅ Street Fighter ROM found and loaded!")
+            # Wrap with discretizer for special moves
+            self.game = StreetFighter2Discretizer(game)
+            print("✅ Street Fighter ROM found and loaded with special moves!")
         except FileNotFoundError:
             print("❌ Street Fighter ROM not found.")
             print("   To use Street Fighter: python -m retro.import /path/to/rom/file")
@@ -52,8 +55,8 @@ class StreetFighter(gym.Env):
             low=0, high=255, shape=(84, 84, 1), dtype=np.uint8
         )
 
-        # Use MultiBinary action space like Test notebook
-        self.action_space = spaces.MultiBinary(12)
+        # Use discrete action space from discretizer (includes special moves)
+        self.action_space = self.game.action_space
         
         # Round tracking for best of 3
         self.agent_rounds_won = 0
@@ -83,7 +86,8 @@ class StreetFighter(gym.Env):
         current_health = info.get('agent_hp', self.health)
         current_enemy_health = info.get('enemy_hp', self.enemy_health)
         
-        reward = (self.enemy_health - current_enemy_health)*2 + (current_health - self.health)
+        # More aggressive reward: heavily reward dealing damage, lightly penalize taking damage
+        reward = (self.enemy_health - current_enemy_health)*5 + (current_health - self.health)*0.5
         
         # Check for round end and update round counters
         round_ended = False
@@ -96,10 +100,17 @@ class StreetFighter(gym.Env):
             self.agent_rounds_won += 1
             round_ended = True
         
+        # Add round win/loss rewards for immediate feedback
+        if round_ended:
+            if current_health <= 0:
+                reward -= 100  # Penalty for losing round
+            elif current_enemy_health <= 0:
+                reward += 200  # Big bonus for winning round
+        
         # Check if best of 3 is complete
         if self.agent_rounds_won >= 2:
             # Agent won best of 3 - reset the game
-            reward += 50  # Big bonus for winning match
+            reward += 500  # Huge bonus for winning match
             done = True
             # Reset game to beginning
             self.game.reset()
@@ -107,7 +118,7 @@ class StreetFighter(gym.Env):
             self.enemy_rounds_won = 0
         elif self.enemy_rounds_won >= 2:
             # Agent lost best of 3 - reset the game
-            reward -= 50  # Big penalty for losing match
+            reward -= 300  # Big penalty for losing match
             done = True
             # Reset game to beginning
             self.game.reset()
@@ -156,6 +167,12 @@ class StreetFighter(gym.Env):
         Close the environment
         """
         self.game.close()
+    
+    def get_action_meaning(self, action):
+        """
+        Get the meaning of an action (for debugging)
+        """
+        return self.game.get_action_meaning(action)
 
 
 def make_env():
