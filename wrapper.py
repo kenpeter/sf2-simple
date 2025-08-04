@@ -57,10 +57,10 @@ class StreetFighter(gym.Env):
 
         # Use discrete action space from discretizer (includes special moves)
         self.action_space = self.game.action_space
-        
-        # Round tracking for best of 3
-        self.agent_rounds_won = 0
-        self.enemy_rounds_won = 0
+
+        # Health tracking
+        self.agent_hp = 176
+        self.enemy_hp = 176
 
     def preprocess(self, observation):
         """
@@ -75,87 +75,59 @@ class StreetFighter(gym.Env):
         """
         Take a step in the environment
         """
-        obs, reward, done, truncated, info = self.game.step(action)
+        obs, _, done, truncated, info = self.game.step(action)
         obs = self.preprocess(obs)
-        
-        # Preprocess frame from game - no frame delta like Test notebook
-        frame_delta = obs
-        
-        # Simple health-based reward
-        current_health = info.get('agent_hp', self.health)
-        current_enemy_health = info.get('enemy_hp', self.enemy_health)
-        
-        # Normalized rewards: 
-        # Agent hits opponent: +0.75 reward per HP damage dealt
-        # Opponent hits agent: -0.25 reward per HP damage taken
-        # This maintains 3:1 ratio but with normalized values
-        reward = (self.enemy_health - current_enemy_health) * 0.75 + (current_health - self.health) * 0.25
-        
-        # Check for round end and update round counters
-        round_ended = False
-        if current_health <= 0 and self.health > 0:
-            # Agent lost this round
-            self.enemy_rounds_won += 1
-            round_ended = True
-        elif current_enemy_health <= 0 and self.enemy_health > 0:
-            # Agent won this round
-            self.agent_rounds_won += 1
-            round_ended = True
-        
-        # Add normalized rewards for round win/loss
-        if round_ended:
-            if current_health <= 0:
-                reward -= 1.0  # Normalized penalty for losing round
-            elif current_enemy_health <= 0:
-                reward += 1.0  # Normalized bonus for winning round
-        
-        # Check if single round is complete - no match rewards, just reset
-        if self.agent_rounds_won >= 1:
-            # Agent won single round - reset the game
-            done = True
-            info['agent_won'] = True
-            # Reset game to beginning
-            self.game.reset()
-            self.agent_rounds_won = 0
-            self.enemy_rounds_won = 0
-        elif self.enemy_rounds_won >= 1:
-            # Agent lost single round - reset the game
-            done = True
-            info['agent_won'] = False
-            # Reset game to beginning
-            self.game.reset()
-            self.agent_rounds_won = 0
-            self.enemy_rounds_won = 0
-        
+
+        # Get current health values from the game info
+        current_agent_hp = info.get("agent_hp", self.agent_hp)
+        current_enemy_hp = info.get("enemy_hp", self.enemy_hp)
+
+        # Calculate health change (agent_hp_change - enemy_hp_change)
+        # we want to create health advantage compared your opponent
+        delta_hp_diff = (current_agent_hp - self.agent_hp) - (
+            current_enemy_hp - self.enemy_hp
+        )
+
+        # Normalize health reward by max health (176) and add small time penalty
+        # health double diff
+        reward = delta_hp_diff / 176.0 - 0.0001
+
         # Update health tracking
-        self.health = current_health
-        self.enemy_health = current_enemy_health
-        
-        return frame_delta, reward, done, truncated, info
+        self.agent_hp = current_agent_hp
+        self.enemy_hp = current_enemy_hp
+
+        # Check for round end
+        done = False
+        if self.agent_hp <= 0 or self.enemy_hp <= 0:
+            done = True
+            if self.enemy_hp <= 0 and self.agent_hp > 0:
+                reward += 1.0  # Large win bonus
+                info["agent_won"] = True
+            else:
+                reward -= 1.0  # Large loss penalty
+                info["agent_won"] = False
+
+        return obs, reward, done, truncated, info
 
     def reset(self, **kwargs):
         """
         Reset the environment
         """
-        result = self.game.reset()
-        
+        result = self.game.reset(**kwargs)
+
         # Handle tuple return from game.reset()
         if isinstance(result, tuple):
             obs, info = result
         else:
             obs = result
             info = {}
-            
+
         obs = self.preprocess(obs)
-        
-        # Initialize health values like Test notebook
-        self.health = 176
-        self.enemy_health = 176
-        
-        # Reset round counters
-        self.agent_rounds_won = 0
-        self.enemy_rounds_won = 0
-        
+
+        # Initialize health values from the game info dictionary
+        self.agent_hp = info.get("agent_hp", 176)
+        self.enemy_hp = info.get("enemy_hp", 176)
+
         return obs, info
 
     def render(self, mode="human"):
@@ -169,7 +141,7 @@ class StreetFighter(gym.Env):
         Close the environment
         """
         self.game.close()
-    
+
     def get_action_meaning(self, action):
         """
         Get the meaning of an action (for debugging)
