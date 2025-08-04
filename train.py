@@ -19,7 +19,6 @@ os.makedirs("logs", exist_ok=True)
 
 print("🥊 Street Fighter RL Training - Simple PPO Implementation")
 
-
 class TrainAndLoggingCallback(BaseCallback):
     """
     Custom callback for training and logging
@@ -30,7 +29,7 @@ class TrainAndLoggingCallback(BaseCallback):
         self.check_freq = check_freq
         self.save_path = save_path
         self.resume_model_name = resume_model_name
-        
+
         # Win rate tracking
         self.matches_played = 0
         self.matches_won = 0
@@ -40,41 +39,45 @@ class TrainAndLoggingCallback(BaseCallback):
             os.makedirs(self.save_path, exist_ok=True)
 
     def _on_step(self):
-        # Check for match completion (episode done) and track wins  
-        if hasattr(self, 'locals') and 'infos' in self.locals:
-            infos = self.locals['infos']
+        # Check for match completion (episode done) and track wins
+        if hasattr(self, "locals") and "infos" in self.locals:
+            infos = self.locals["infos"]
             for info in infos:
-                if info and 'agent_won' in info:  # Episode finished with win/loss info
+                if info and "agent_won" in info:  # Episode finished with win/loss info
                     self.matches_played += 1
-                    if info['agent_won']:  # Agent won the match
+                    if info["agent_won"]:  # Agent won the match
                         self.matches_won += 1
-        
+
         if self.n_calls % self.check_freq == 0:
             if self.resume_model_name:
                 # Extract the previous number from resume model name and add current steps
                 import re
-                match = re.search(r'_(\d+)$', self.resume_model_name)
+
+                match = re.search(r"_(\d+)$", self.resume_model_name)
                 if match:
                     previous_steps = int(match.group(1))
                     total_steps = previous_steps + self.n_calls
-                    base_name = re.sub(r'_\d+$', '', self.resume_model_name)
+                    base_name = re.sub(r"_\d+$", "", self.resume_model_name)
                     model_path = os.path.join(
                         self.save_path, "{}_{}".format(base_name, total_steps)
                     )
                 else:
                     model_path = os.path.join(
-                        self.save_path, "{}_{}".format(self.resume_model_name, self.n_calls)
+                        self.save_path,
+                        "{}_{}".format(self.resume_model_name, self.n_calls),
                     )
             else:
                 model_path = os.path.join(
                     self.save_path, "best_model_{}".format(self.n_calls)
                 )
             self.model.save(model_path)
-            
+
             # Calculate and display win rate
             if self.matches_played > 0:
                 win_rate = (self.matches_won / self.matches_played) * 100
-                print(f"Model saved at step {self.n_calls} | Win Rate: {win_rate:.1f}% ({self.matches_won}/{self.matches_played})")
+                print(
+                    f"Model saved at step {self.n_calls} | Win Rate: {win_rate:.1f}% ({self.matches_won}/{self.matches_played})"
+                )
             else:
                 print(f"Model saved at step {self.n_calls}")
         return True
@@ -118,9 +121,11 @@ def train_model(args):
     # Model parameters
     model_params = {
         "n_steps": args.n_steps,
+        # what is this gamma?
         "gamma": args.gamma,
         "learning_rate": args.learning_rate,
         "clip_range": args.clip_range,
+        # what is gae lambda?
         "gae_lambda": args.gae_lambda,
         "ent_coef": 0.01,  # Encourage exploration to prevent blocking
         "verbose": 1,
@@ -143,13 +148,17 @@ def train_model(args):
     if args.resume:
         # Extract model name from resume path (e.g., "best_model_940000" from "train/best_model_940000.zip")
         resume_model_name = os.path.splitext(os.path.basename(args.resume))[0]
-    
+
+    # it is a call back func
     callback = TrainAndLoggingCallback(
-        check_freq=args.save_freq, save_path=args.save_dir, resume_model_name=resume_model_name
+        check_freq=args.save_freq,
+        save_path=args.save_dir,
+        resume_model_name=resume_model_name,
     )
 
     # Train the model
     print(f"Training for {args.total_timesteps:,} timesteps...")
+    # model will use this callback for log
     model.learn(total_timesteps=args.total_timesteps, callback=callback)
 
     # Save final model
@@ -300,10 +309,13 @@ def main():
         default=50000,
         help="Timesteps per optimization trial",
     )
-    
+
     # Resume training
     parser.add_argument(
-        "--resume", type=str, default=None, help="Path to model checkpoint to resume from"
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to model checkpoint to resume from",
     )
 
     args = parser.parse_args()
