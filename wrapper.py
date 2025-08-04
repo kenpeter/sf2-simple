@@ -52,148 +52,60 @@ class StreetFighter(gym.Env):
             low=0, high=255, shape=(84, 84, 1), dtype=np.uint8
         )
 
-        # Use the filtered action space from retro
-        self.action_space = self.game.action_space
-
-        # Health tracking for reward shaping
-        self.player_health = 0
-        self.enemy_health = 0
-
-        # Position tracking
-        self.agent_x = 0
-        self.agent_y = 0
-        self.enemy_x = 0
-        self.enemy_y = 0
-
-        # Round tracking for best of 3
-        self.agent_rounds_won = 0
-        self.enemy_rounds_won = 0
-        
-        # Gaussian distance reward parameters
-        self.OPTIMAL_DISTANCE = 50
-        self.DISTANCE_TOLERANCE = 20  # Sigma: How wide the "sweet spot" is
-        self.DISTANCE_REWARD_WEIGHT = 0.05
+        # Use MultiBinary action space like Test notebook
+        self.action_space = spaces.MultiBinary(12)
 
     def preprocess(self, observation):
         """
         Preprocess observation: convert to grayscale and resize to 84x84
         """
-        # to gray scale
-        gray = cv2.cvtColor(observation, cv2.COLOR_RGB2GRAY)
-
-        # resize to 84x84
-        resized = cv2.resize(gray, (84, 84), interpolation=cv2.INTER_AREA)
-
-        # add channel dimension
-        return np.expand_dims(resized, axis=-1)
+        gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
+        resize = cv2.resize(gray, (84, 84), interpolation=cv2.INTER_CUBIC)
+        state = np.reshape(resize, (84, 84, 1))
+        return state
 
     def step(self, action):
         """
         Take a step in the environment
         """
         obs, reward, done, truncated, info = self.game.step(action)
-
-        # Preprocess observation
         obs = self.preprocess(obs)
-
-        # --- REWARD SHAPING ---
-        current_player_health = info.get("agent_hp", 0)
-        current_enemy_health = info.get("enemy_hp", 0)
-
-        # Position tracking
-        current_agent_x = info.get("agent_x", 0)
-        current_agent_y = info.get("agent_y", 0)
-        current_enemy_x = info.get("enemy_x", 0)
-        current_enemy_y = info.get("enemy_y", 0)
-
-        # Reward for damaging the opponent
-        damage_to_enemy = self.enemy_health - current_enemy_health
-
-        # Penalty for taking damage
-        damage_to_player = self.player_health - current_player_health
-
-        # Check for round end and update round counters
-        round_ended = False
-        if current_player_health <= 0 and self.player_health > 0:
-            # Agent lost this round
-            self.enemy_rounds_won += 1
-            round_ended = True
-        elif current_enemy_health <= 0 and self.enemy_health > 0:
-            # Agent won this round
-            self.agent_rounds_won += 1
-            round_ended = True
-
-        # --- Gaussian Distance Reward ---
-        distance = abs(current_agent_x - current_enemy_x)
         
-        # Gaussian function: e^(-(x-mu)^2 / (2*sigma^2))
-        distance_reward = np.exp(-np.power(distance - self.OPTIMAL_DISTANCE, 2) / (2 * np.power(self.DISTANCE_TOLERANCE, 2)))
-        distance_reward *= self.DISTANCE_REWARD_WEIGHT
+        # Preprocess frame from game - no frame delta like Test notebook
+        frame_delta = obs
         
-        # --- Combine Rewards ---
-        # The total reward is a combination of health changes and optimal distance
-        reward = damage_to_enemy * 1.5 - damage_to_player * 1.0 + distance_reward - 0.001
-
-        # Add round win/loss rewards
-        if round_ended:
-            if current_player_health <= 0:
-                reward -= 20  # Penalty for losing round
-            elif current_enemy_health <= 0:
-                reward += 20  # Bonus for winning round
-
-        # Check if best of 3 is complete
-        if self.agent_rounds_won >= 2:
-            # Agent won best of 3 - reset the game
-            reward += 50  # Big bonus for winning match
-            done = True
-            # Reset game to beginning
-            self.game.reset()
-            self.agent_rounds_won = 0
-            self.enemy_rounds_won = 0
-        elif self.enemy_rounds_won >= 2:
-            # Agent lost best of 3 - reset the game
-            reward -= 50  # Big penalty for losing match
-            done = True
-            # Reset game to beginning
-            self.game.reset()
-            self.agent_rounds_won = 0
-            self.enemy_rounds_won = 0
-
-        # Update the stored health values for the next step
-        self.player_health = current_player_health
+        # Health-based reward like Test notebook
+        # Use agent_hp and enemy_hp keys
+        current_health = info.get('agent_hp', self.health)
+        current_enemy_health = info.get('enemy_hp', self.enemy_health)
+        
+        reward = (self.enemy_health - current_enemy_health)*2 + (current_health - self.health)
+        
+        # Update health tracking
+        self.health = current_health
         self.enemy_health = current_enemy_health
-
-        # Update position values
-        self.agent_x = current_agent_x
-        self.agent_y = current_agent_y
-        self.enemy_x = current_enemy_x
-        self.enemy_y = current_enemy_y
-
-        return obs, reward, done, truncated, info
+        
+        return frame_delta, reward, done, truncated, info
 
     def reset(self, **kwargs):
         """
         Reset the environment
         """
-        obs, info = self.game.reset(**kwargs)
-
-        # Reset health scores from info dict
-        self.player_health = info.get("agent_hp", 0)
-        self.enemy_health = info.get("enemy_hp", 0)
-
-        # Reset position values
-        self.agent_x = info.get("agent_x", 0)
-        self.agent_y = info.get("agent_y", 0)
-        self.enemy_x = info.get("enemy_x", 0)
-        self.enemy_y = info.get("enemy_y", 0)
-
-        # Reset round counters
-        self.agent_rounds_won = 0
-        self.enemy_rounds_won = 0
-
-        # Preprocess observation
+        result = self.game.reset()
+        
+        # Handle tuple return from game.reset()
+        if isinstance(result, tuple):
+            obs, info = result
+        else:
+            obs = result
+            info = {}
+            
         obs = self.preprocess(obs)
-
+        
+        # Initialize health values like Test notebook
+        self.health = 176
+        self.enemy_health = 176
+        
         return obs, info
 
     def render(self, mode="human"):

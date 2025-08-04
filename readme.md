@@ -10,7 +10,7 @@ python train.py --mode train --total_timesteps 1000000
 
 
 
-python train.py --mode train --resume train/best_model_940000.zip --total_timesteps 6000000
+python train.py --mode train --resume train/best_model_7000000.zip --total_timesteps 100000
 
   ta.json 
 {
