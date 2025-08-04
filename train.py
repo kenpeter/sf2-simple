@@ -19,6 +19,7 @@ os.makedirs("logs", exist_ok=True)
 
 print("🥊 Street Fighter RL Training - Simple PPO Implementation")
 
+
 class TrainAndLoggingCallback(BaseCallback):
     """
     Custom callback for training and logging
@@ -87,10 +88,15 @@ def make_env():
     """
     Create environment with frame stacking
     """
+    # env street figher
     env = StreetFighter()
+    # monitor
     env = Monitor(env)
+    # vec env
     env = DummyVecEnv([lambda: env])
-    env = VecFrameStack(env, 4, channels_order="last")
+    # frame stack 4
+    env = VecFrameStack(env, 8, channels_order="last")
+    # return env
     return env
 
 
@@ -159,6 +165,7 @@ def train_model(args):
     # Train the model
     print(f"Training for {args.total_timesteps:,} timesteps...")
     # model will use this callback for log
+    # the func learn will call this callback inside
     model.learn(total_timesteps=args.total_timesteps, callback=callback)
 
     # Save final model
@@ -213,12 +220,14 @@ def optimize_hyperparameters(args):
 
     def objective(trial):
         # Get hyperparameters
+        # auto param
         params = optimize_ppo(trial)
 
         # Create environment
         env = make_env()
 
         # Create model with trial parameters
+        # pass dynamic param to ppo
         model = PPO("CnnPolicy", env, **params, verbose=0)
 
         # Train for a shorter period for optimization
