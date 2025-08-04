@@ -7,6 +7,8 @@ import gymnasium as gym
 import numpy as np
 
 
+# discretizer
+# param gym action wrapper
 class Discretizer(gym.ActionWrapper):
     """
     Wrap a gym environment and make it use discrete actions.
@@ -14,6 +16,7 @@ class Discretizer(gym.ActionWrapper):
         combos: ordered list of lists of valid button combinations
     """
 
+    # self, env, combo
     def __init__(self, env, combos):
         super().__init__(env)
         assert isinstance(env.action_space, gym.spaces.MultiBinary)
@@ -86,9 +89,13 @@ class StreetFighter2Discretizer(Discretizer):
                 ["DOWN", "LEFT", "Z"],
                 ["RIGHT", "Z"],
                 ["DOWN", "RIGHT", "Z"],
-                # Special move combinations for Ken/Ryu
-                ["DOWN", "DOWN", "RIGHT", "B"],  # Hadoken
-                ["RIGHT", "DOWN", "DOWN", "RIGHT", "B"],  # Dragon punch
-                ["LEFT", "DOWN", "LEFT", "Y"],  # Hurricane kick
+                # Special move combinations for Ken/Ryu (facing right)
+                ["DOWN", "DOWN", "RIGHT", "B"],  # Hadoken (facing right)
+                ["RIGHT", "DOWN", "DOWN", "RIGHT", "B"],  # Dragon punch (facing right)
+                ["LEFT", "DOWN", "LEFT", "Y"],  # Hurricane kick (facing right)
+                # Special move combinations for Ken/Ryu (facing left)
+                ["DOWN", "DOWN", "LEFT", "B"],  # Hadoken (facing left)
+                ["LEFT", "DOWN", "DOWN", "LEFT", "B"],  # Dragon punch (facing left)
+                ["RIGHT", "DOWN", "RIGHT", "Y"],  # Hurricane kick (facing left)
             ],
         )

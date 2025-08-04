@@ -33,10 +33,12 @@ class StreetFighter(gym.Env):
     """
 
     def __init__(self):
+        # super init
         super().__init__()
 
         # Create the retro environment
         try:
+            # retro make game env
             game = retro.make(
                 "StreetFighterIISpecialChampionEdition-Genesis",
                 state="ken_bison_12.state",

@@ -5,7 +5,7 @@ __win rate at 52.9%__
 
 
 
-python train.py --mode train --resume train/best_model_1000000.zip --total_timesteps 6000000
+python train.py --mode train --resume train/best_model_5320000.zip --total_timesteps 6000000
 
   ta.json 
 {
