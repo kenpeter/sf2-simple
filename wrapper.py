@@ -81,13 +81,15 @@ class StreetFighter(gym.Env):
         # Preprocess frame from game - no frame delta like Test notebook
         frame_delta = obs
         
-        # Health-based reward like Test notebook
-        # Use agent_hp and enemy_hp keys
+        # Simple health-based reward
         current_health = info.get('agent_hp', self.health)
         current_enemy_health = info.get('enemy_hp', self.enemy_health)
         
-        # More aggressive reward: heavily reward dealing damage, lightly penalize taking damage
-        reward = (self.enemy_health - current_enemy_health)*5 + (current_health - self.health)*0.5
+        # Normalized rewards: 
+        # Agent hits opponent: +0.75 reward per HP damage dealt
+        # Opponent hits agent: -0.25 reward per HP damage taken
+        # This maintains 3:1 ratio but with normalized values
+        reward = (self.enemy_health - current_enemy_health) * 0.75 + (current_health - self.health) * 0.25
         
         # Check for round end and update round counters
         round_ended = False
@@ -100,17 +102,11 @@ class StreetFighter(gym.Env):
             self.agent_rounds_won += 1
             round_ended = True
         
-        # Add round win/loss rewards for immediate feedback
-        if round_ended:
-            if current_health <= 0:
-                reward -= 100  # Penalty for losing round
-            elif current_enemy_health <= 0:
-                reward += 200  # Big bonus for winning round
+        # No additional rewards for round win/loss - only health difference matters
         
-        # Check if best of 3 is complete
+        # Check if best of 3 is complete - no match rewards, just reset
         if self.agent_rounds_won >= 2:
             # Agent won best of 3 - reset the game
-            reward += 500  # Huge bonus for winning match
             done = True
             # Reset game to beginning
             self.game.reset()
@@ -118,7 +114,6 @@ class StreetFighter(gym.Env):
             self.enemy_rounds_won = 0
         elif self.enemy_rounds_won >= 2:
             # Agent lost best of 3 - reset the game
-            reward -= 300  # Big penalty for losing match
             done = True
             # Reset game to beginning
             self.game.reset()

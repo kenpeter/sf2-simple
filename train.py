@@ -92,6 +92,7 @@ def train_model(args):
         "learning_rate": args.learning_rate,
         "clip_range": args.clip_range,
         "gae_lambda": args.gae_lambda,
+        "ent_coef": 0.01,  # Encourage exploration to prevent blocking
         "verbose": 1,
         "tensorboard_log": args.log_dir,
         "device": "cuda",
