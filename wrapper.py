@@ -54,6 +54,10 @@ class StreetFighter(gym.Env):
 
         # Use MultiBinary action space like Test notebook
         self.action_space = spaces.MultiBinary(12)
+        
+        # Round tracking for best of 3
+        self.agent_rounds_won = 0
+        self.enemy_rounds_won = 0
 
     def preprocess(self, observation):
         """
@@ -81,6 +85,35 @@ class StreetFighter(gym.Env):
         
         reward = (self.enemy_health - current_enemy_health)*2 + (current_health - self.health)
         
+        # Check for round end and update round counters
+        round_ended = False
+        if current_health <= 0 and self.health > 0:
+            # Agent lost this round
+            self.enemy_rounds_won += 1
+            round_ended = True
+        elif current_enemy_health <= 0 and self.enemy_health > 0:
+            # Agent won this round
+            self.agent_rounds_won += 1
+            round_ended = True
+        
+        # Check if best of 3 is complete
+        if self.agent_rounds_won >= 2:
+            # Agent won best of 3 - reset the game
+            reward += 50  # Big bonus for winning match
+            done = True
+            # Reset game to beginning
+            self.game.reset()
+            self.agent_rounds_won = 0
+            self.enemy_rounds_won = 0
+        elif self.enemy_rounds_won >= 2:
+            # Agent lost best of 3 - reset the game
+            reward -= 50  # Big penalty for losing match
+            done = True
+            # Reset game to beginning
+            self.game.reset()
+            self.agent_rounds_won = 0
+            self.enemy_rounds_won = 0
+        
         # Update health tracking
         self.health = current_health
         self.enemy_health = current_enemy_health
@@ -105,6 +138,10 @@ class StreetFighter(gym.Env):
         # Initialize health values like Test notebook
         self.health = 176
         self.enemy_health = 176
+        
+        # Reset round counters
+        self.agent_rounds_won = 0
+        self.enemy_rounds_won = 0
         
         return obs, info
 
