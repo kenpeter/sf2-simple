@@ -1,7 +1,7 @@
-![win_rate](https://github.com/user-attachments/assets/266fb8bb-f97f-4572-a313-b6bcdc16fc5c)
+<img width="675" height="765" alt="win" src="https://github.com/user-attachments/assets/39307387-24b6-4749-9597-c637d0e4606d" />
 
 
-__win rate at 53.4%!!!!!!!!!!!!!!__
+__win rate at 50.8%__
 
 
 
