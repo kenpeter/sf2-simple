@@ -1,6 +1,6 @@
-__win rate at 52.9%__
+__win rate at 63.2%__
 
-<img width="675" height="765" alt="win" src="https://github.com/user-attachments/assets/36d22336-535c-4d3e-8d9d-839ea2ff22df" />
+<img width="516" height="570" alt="win" src="https://github.com/user-attachments/assets/0d63a5d9-53da-4f83-be8a-57ec06722942" />
 
 
 
