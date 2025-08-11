@@ -8,31 +8,16 @@
 __win rate at 55%!!!!!!!!!!!!!!__
 
 
-python train.py --num_episodes 100 --batch_size 64 --learning_rate 1e-4 --features_dim 256 --thinking_steps 6 --thinking_lr 0.025 --buffer_capacity 30000 --gamma 0.99 --contrastive_margin 1.0 --contrastive_weight 0.5 --max_grad_norm 1.0 --train_frequency 1 --log_frequency 10 --save_frequency 30 --max_episode_steps 3000 --verify_health
 
-
-
-
-
-# cli 
-python train.py \
-    --num_episodes 1000 \
+ python train.py \
+    --num_episodes 2000 \
+    --thinking_steps 12 \
+    --thinking_lr 0.03 \
+    --learning_rate 8e-4 \
     --batch_size 64 \
-    --learning_rate 5e-4 \
-    --thinking_steps 8 \
-    --thinking_lr 0.025 \
-    --buffer_capacity 30000 \
-    --gamma 0.99 \
-    --contrastive_margin 0.5 \
-    --contrastive_weight 0.4 \
-    --max_grad_norm 2.0 \
-    --train_frequency 2 \
-    --log_frequency 5 \
-    --save_frequency 100 \
-    --weight_decay 5e-6 \
-    --tau 0.005 \
-    --features_dim 256
-  --load_checkpoint checkpoints/enhanced_rgb_tier2_checkpoint_ep_540.pth
+    --features_dim 256 \
+    --contrastive_weight 0.5 \
+    --verify_health
 
 
 

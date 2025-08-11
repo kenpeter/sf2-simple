@@ -747,7 +747,75 @@ class StreetFighterDiscreteActions:
         return self.action_map.get(action_idx, [])
 
 
-# NO TRANSFORMERS - Pure Energy-Based Thinking Only
+# Energy-Based Transformer for Thinking Loop
+
+class TransformerThinkingModule(nn.Module):
+    """4-layer transformer with 4 heads each for energy-based thinking."""
+    
+    def __init__(self, input_dim: int = 256, d_model: int = 256, nhead: int = 4, 
+                 num_layers: int = 4, dim_feedforward: int = 512):
+        super().__init__()
+        
+        self.d_model = d_model
+        self.input_projection = nn.Linear(input_dim, d_model)
+        
+        # 4 transformer layers with 4 heads each
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=0.1,
+            activation='relu',
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output projection for energy computation
+        self.energy_projection = nn.Sequential(
+            nn.Linear(d_model, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+        
+        # Positional encoding for sequence processing
+        self.pos_encoding = nn.Parameter(torch.randn(100, d_model) * 0.1)
+        
+    def forward(self, x: torch.Tensor, seq_len: int = 1) -> torch.Tensor:
+        """
+        Forward pass for transformer thinking.
+        Args:
+            x: Input tensor [batch_size, input_dim] or [batch_size, seq_len, input_dim]
+            seq_len: Sequence length for thinking steps
+        Returns:
+            Energy values [batch_size, 1]
+        """
+        batch_size = x.shape[0]
+        
+        # Handle both single and sequence inputs
+        if len(x.shape) == 2:
+            # Single input, expand to sequence
+            x = x.unsqueeze(1).repeat(1, seq_len, 1)  # [batch, seq_len, input_dim]
+        
+        # Project to model dimension
+        x = self.input_projection(x)  # [batch, seq_len, d_model]
+        
+        # Add positional encoding
+        pos_enc = self.pos_encoding[:seq_len].unsqueeze(0).expand(batch_size, -1, -1)
+        x = x + pos_enc
+        
+        # Apply transformer layers
+        transformer_out = self.transformer(x)  # [batch, seq_len, d_model]
+        
+        # Use final token for energy computation
+        final_token = transformer_out[:, -1, :]  # [batch, d_model]
+        
+        # Compute energy
+        energy = self.energy_projection(final_token)  # [batch, 1]
+        
+        return energy
 
 
 # SimpleCNN for visual processing
@@ -832,9 +900,9 @@ class SimpleCNN(nn.Module):
         return output
 
 
-# SimpleVerifier with Hybrid Transformer context
+# SimpleVerifier with Transformer Thinking
 class SimpleVerifier(nn.Module):
-    """Enhanced verifier with better energy modeling for aggressive play."""
+    """Enhanced verifier with transformer-based energy thinking."""
 
     def __init__(
         self,
@@ -856,18 +924,27 @@ class SimpleVerifier(nn.Module):
         self.action_embed = nn.Sequential(
             nn.Linear(self.action_dim, 128),
             nn.ReLU(),
-            nn.BatchNorm1d(128),  # Better normalization
+            nn.BatchNorm1d(128),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
 
-        # Enhanced energy network with better capacity
+        # Transformer thinking module for energy computation
+        self.transformer_thinking = TransformerThinkingModule(
+            input_dim=features_dim + 64,
+            d_model=256,
+            nhead=4,
+            num_layers=4,
+            dim_feedforward=512
+        )
+
+        # Fallback energy network for compatibility
         self.energy_net = nn.Sequential(
             nn.Linear(features_dim + 64, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),  # Better normalization
+            nn.BatchNorm1d(512),
             nn.Dropout(0.3),
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -880,7 +957,8 @@ class SimpleVerifier(nn.Module):
             nn.Linear(64, 1),
         )
 
-        self.energy_scale = 0.7  # Slightly increased for better separation
+        self.energy_scale = 0.7
+        self.use_transformer = True  # Flag to enable transformer thinking
 
     def forward(
         self, context: torch.Tensor, candidate_action: torch.Tensor
@@ -896,7 +974,12 @@ class SimpleVerifier(nn.Module):
 
         # Enhanced temporal-aware fusion
         combined = torch.cat([context_features, action_embedded], dim=-1)
-        energy = self.energy_net(combined) * self.energy_scale
+        
+        # Use transformer thinking if enabled
+        if self.use_transformer:
+            energy = self.transformer_thinking(combined, seq_len=1) * self.energy_scale
+        else:
+            energy = self.energy_net(combined) * self.energy_scale
 
         return energy
 
@@ -980,19 +1063,44 @@ class AggressiveAgent:
 
         candidate_action.requires_grad_(True)
 
-        # Enhanced thinking loop with better optimization
+        # Transformer-enhanced thinking loop with iterative refinement
         best_energy = float("inf")
         best_action = candidate_action.clone().detach()
-
+        
+        # Store thinking sequence for transformer processing
+        thinking_sequence = []
+        
         for step in range(self.thinking_steps):
             try:
-                energy = self.verifier(obs_device, candidate_action)
+                # Get context features for transformer thinking
+                if isinstance(obs_device, dict):
+                    context_features = self.verifier.features_extractor(obs_device)
+                else:
+                    context_features = obs_device
+                
+                # Get action embedding
+                action_embedded = self.verifier.action_embed(candidate_action)
+                
+                # Combine features for this thinking step
+                step_features = torch.cat([context_features, action_embedded], dim=-1)
+                thinking_sequence.append(step_features)
+                
+                # Use transformer for energy computation with thinking sequence
+                if len(thinking_sequence) > 1 and self.verifier.use_transformer:
+                    # Stack sequence for transformer processing
+                    sequence_tensor = torch.stack(thinking_sequence, dim=1)  # [batch, seq_len, features]
+                    energy = self.verifier.transformer_thinking(sequence_tensor, seq_len=len(thinking_sequence))
+                    energy = energy * self.verifier.energy_scale
+                else:
+                    # Fallback to standard energy computation
+                    energy = self.verifier(obs_device, candidate_action)
 
                 current_energy = energy.mean().item()
                 if current_energy < best_energy:
                     best_energy = current_energy
                     best_action = candidate_action.clone().detach()
 
+                # Gradient-based refinement
                 gradients = torch.autograd.grad(
                     outputs=energy.sum(),
                     inputs=candidate_action,
@@ -1002,7 +1110,7 @@ class AggressiveAgent:
 
                 with torch.no_grad():
                     # Enhanced gradient descent with adaptive learning rate
-                    step_size = self.thinking_lr * (0.85**step)  # More aggressive decay
+                    step_size = self.thinking_lr * (0.85**step)
                     candidate_action = candidate_action - step_size * gradients
                     candidate_action = F.softmax(candidate_action, dim=-1)
                     candidate_action.requires_grad_(True)
@@ -1122,13 +1230,13 @@ class EnhancedStreetFighterWrapper(gym.Wrapper):
         self.termination_validated = False
 
         print(
-            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE + PURE ENERGY-BASED THINKING)"
+            f"🚀 EnhancedStreetFighterWrapper initialized (SINGLE ROUND MODE + TRANSFORMER ENERGY THINKING)"
         )
         print(f"   - Game Mode: SINGLE ROUND (episode ends after one fight)")
         print(f"   - Memory-first health detection with data.json addresses")
         print(f"   - Visual fallback for final frame validation")
         print(f"   - Enhanced termination detection with cross-validation")
-        print(f"   - NO TRANSFORMERS: Pure energy-based thinking only")
+        print(f"   - TRANSFORMER THINKING: 4 layers, 4 heads each for energy-based thinking")
         print(f"   - Enhanced rewards: Massive win bonus + combo scaling")
 
     def _initialize_frame_stack(self, initial_frame):
@@ -1601,6 +1709,7 @@ __all__ = [
     "EnhancedRewardCalculator",
     "SimplifiedFeatureTracker",
     "StreetFighterDiscreteActions",
+    "TransformerThinkingModule",
     "SimpleCNN",
     "SimpleVerifier",
     "AggressiveAgent",
@@ -1621,7 +1730,7 @@ __all__ = [
 ]
 
 print(
-    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE + PURE ENERGY-BASED THINKING)"
+    f"🚀 ENHANCED Street Fighter wrapper loaded successfully! (SINGLE ROUND MODE + TRANSFORMER ENERGY THINKING)"
 )
 print(f"   - ✅ Game Mode: SINGLE ROUND (episode ends after one fight)")
 print(f"   - ✅ Memory-first health detection with data.json addresses")
@@ -1631,11 +1740,11 @@ print(
     f"   - ✅ RGB images with frame stacking: ACTIVE ({SCREEN_WIDTH}x{SCREEN_HEIGHT})"
 )
 print(f"   - ✅ Time-decayed rewards and aggressive exploration: ACTIVE")
-print(f"   - ✅ NO TRANSFORMERS: Pure energy-based thinking only")
+print(f"   - ✅ TRANSFORMER THINKING: 4 layers, 4 heads each for energy-based thinking")
 print(f"   - ✅ Race condition fix: FULLY IMPLEMENTED")
-print(f"   - ✅ MCMC sampling: Gradient-based energy thinking")
+print(f"   - ✅ MCMC sampling: Gradient-based energy thinking with transformer refinement")
 print(f"   - ✅ Normalized features: All inputs properly scaled")
 print(f"   - ✅ Enhanced rewards: Massive win bonus + combo scaling")
 print(
-    f"🎯 Ready for robust SINGLE ROUND training with pure energy-based decision making!"
+    f"🎯 Ready for robust SINGLE ROUND training with transformer-enhanced energy-based decision making!"
 )
