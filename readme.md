@@ -3,6 +3,9 @@ __win rate at 63.2%__
 <img width="516" height="570" alt="win" src="https://github.com/user-attachments/assets/59fe8e24-bafc-40d7-b628-7c8bd63aba12" />
 
 
+[training_small.webm](https://github.com/user-attachments/assets/f2f6f763-b9a5-4aeb-8150-f2e86ebe5a55)
+
+
 
 
 python train.py --mode train --resume train/best_model_1420000.zip --total_timesteps 6000000
