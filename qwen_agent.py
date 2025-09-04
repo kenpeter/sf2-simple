@@ -5,11 +5,9 @@ Works with existing wrapper.py without modifications
 """
 
 import torch
-import json
-import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 
 class QwenStreetFighterAgent:
@@ -18,7 +16,7 @@ class QwenStreetFighterAgent:
     Uses existing wrapper.py environment without modifications
     """
 
-    def __init__(self, model_path: str = "Qwen/Qwen3-4B-Instruct-2507"):
+    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main"):
         """
         Initialize the Qwen agent
         
@@ -29,19 +27,20 @@ class QwenStreetFighterAgent:
         print(f"🤖 Loading Qwen model from: {model_path}")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Download tokenizer first
-        print("📥 Step 1/2: Downloading tokenizer...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # Load tokenizer from cache
+        print("📁 Step 1/2: Loading tokenizer from cache...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
         
-        # Download model second (sequential download)
-        print("📥 Step 2/2: Downloading model weights...")
+        # Load model from cache
+        print("📁 Step 2/2: Loading model weights from cache...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            dtype=torch.float16,  # Updated parameter name
+            dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
-            resume_download=True,  # Resume if interrupted
-            max_memory={0: "6GB"} if torch.cuda.is_available() else None  # Limit memory usage
+            local_files_only=True,
+            max_memory={0: "4GB"} if torch.cuda.is_available() else None,
+            low_cpu_mem_usage=True
         )
         print(f"✅ Qwen model loaded successfully on {self.device}")
         
@@ -101,7 +100,7 @@ class QwenStreetFighterAgent:
         
     def extract_game_features(self, info: Dict) -> Dict:
         """
-        Extract structured features from game state info
+        Extract structured features from game state info based on ta.json schema
         
         Args:
             info: Game state info dictionary from environment
@@ -110,39 +109,34 @@ class QwenStreetFighterAgent:
             Dictionary of structured game features
         """
         features = {
-            # Player status
+            # Player status (from ta.json)
             "agent_hp": info.get("agent_hp", 176),
             "agent_x": info.get("agent_x", 0),
             "agent_y": info.get("agent_y", 0),
             "agent_status": info.get("agent_status", 0),
             "agent_victories": info.get("agent_victories", 0),
             
-            # Enemy status  
+            # Enemy status (from ta.json)
             "enemy_hp": info.get("enemy_hp", 176),
             "enemy_x": info.get("enemy_x", 0),
             "enemy_y": info.get("enemy_y", 0),
-            "enemy_status": info.get("enemy_status", 0),
             "enemy_victories": info.get("enemy_victories", 0),
-            "enemy_character": info.get("enemy_character", 0),
             
-            # Game status
+            # Game status (from ta.json)
             "score": info.get("score", 0),
             "round_countdown": info.get("round_countdown", 99),
-            "reset_countdown": info.get("reset_countdown", 0),
         }
         
-        # Calculate derived features
+        # Calculate derived features (only from available data)
         features["hp_advantage"] = features["agent_hp"] - features["enemy_hp"]
         features["distance"] = abs(features["agent_x"] - features["enemy_x"])
         features["height_diff"] = features["agent_y"] - features["enemy_y"]
-        features["agent_hp_percent"] = (features["agent_hp"] / 176.0) * 100
-        features["enemy_hp_percent"] = (features["enemy_hp"] / 176.0) * 100
         
         # Determine relative position
         if features["agent_x"] < features["enemy_x"]:
-            features["facing"] = "right"  # enemy is to the right
+            features["facing"] = "right"
         else:
-            features["facing"] = "left"   # enemy is to the left
+            features["facing"] = "left"
             
         return features
     
@@ -157,9 +151,8 @@ class QwenStreetFighterAgent:
         Returns:
             Formatted prompt string
         """
-        # Character mapping
-        character_names = {0: "Unknown", 1: "Bison", 2: "Other"}
-        enemy_name = character_names.get(features["enemy_character"], "Enemy")
+        # Enemy name (no character info available)
+        enemy_name = "Enemy"
         
         # Status interpretation
         def interpret_status(status_code):
@@ -175,7 +168,6 @@ class QwenStreetFighterAgent:
                 return "special_move"
         
         agent_state = interpret_status(features["agent_status"])
-        enemy_state = interpret_status(features["enemy_status"])
         
         # Recent actions context
         recent_actions_str = ", ".join(recent_actions[-3:]) if recent_actions else "None"
@@ -190,54 +182,28 @@ class QwenStreetFighterAgent:
         else:
             distance_desc = "Far - need to move closer"
 
-        prompt = f"""You are an expert Street Fighter 2 player controlling Ken. Analyze the current game situation and decide the best action.
+        prompt = f"""Street Fighter expert: You control Ken. Choose the optimal action based on current situation.
 
-CURRENT GAME STATE:
-===================
-Ken (You):
-- Health: {features['agent_hp']}/176 ({features['agent_hp_percent']:.1f}%)
-- Position: ({features['agent_x']}, {features['agent_y']})
-- Status: {agent_state}
-- Rounds Won: {features['agent_victories']}
-- Facing: {features['facing']}
+SITUATION:
+Ken HP: {features['agent_hp']} | Enemy HP: {features['enemy_hp']} | Distance: {features['distance']}
+Ken pos: ({features['agent_x']},{features['agent_y']}) | Enemy pos: ({features['enemy_x']},{features['enemy_y']})
+Status: Ken={agent_state} | Facing: {features['facing']}
+Rounds: Ken {features['agent_victories']} - {features['enemy_victories']} Enemy | Time: {features['round_countdown']}
 
-Enemy ({enemy_name}):
-- Health: {features['enemy_hp']}/176 ({features['enemy_hp_percent']:.1f}%)
-- Position: ({features['enemy_x']}, {features['enemy_y']})
-- Status: {enemy_state}
-- Rounds Won: {features['enemy_victories']}
+STRATEGY:
+- Close (0-80px): Combos, throws, normals
+- Medium (80-200px): Hadoken, approach 
+- Far (200px+): Move closer, zone with fireballs
+- Winning HP: Pressure aggressively
+- Losing HP: Counter-attack, defensive
+- Enemy stunned: Maximum damage combo
 
-TACTICAL SITUATION:
-===================
-- HP Advantage: {features['hp_advantage']:+d} ({"Winning" if features['hp_advantage'] > 0 else "Losing" if features['hp_advantage'] < 0 else "Even"})
-- Distance: {features['distance']} pixels ({distance_desc})
-- Height Difference: {features['height_diff']:+d} pixels
-- Time Remaining: {features['round_countdown']}
-- Recent Actions: {recent_actions_str}
+TOP ACTIONS:
+Movement: 1=UP 2=DOWN 3=LEFT 6=RIGHT
+Attacks: 9=L.PUNCH 13=M.PUNCH 17=H.PUNCH 21=L.KICK 26=M.KICK 32=H.KICK
+Specials: 38=HADOKEN_R 41=HADOKEN_L 39=DP_R 42=DP_L 40=HURRICANE_R 43=HURRICANE_L
 
-STRATEGY GUIDELINES:
-====================
-1. CLOSE RANGE (distance < 80): Use punches, kicks, throws
-2. MEDIUM RANGE (80-250): Hadoken projectiles, move in for combos  
-3. FAR RANGE (>250): Move closer, use projectiles
-4. LOW HP: Play defensively, look for counter-attacks
-5. HIGH HP ADVANTAGE: Aggressive pressure, corner enemy
-6. ENEMY STUNNED: Go for big damage combos
-
-AVAILABLE ACTIONS (choose number 0-{self.num_actions-1}):
-{"".join([f"{i}: {action}" + ("" if i % 3 != 2 else "") for i, action in enumerate(self.action_meanings)])}
-
-Think strategically about the best move considering:
-- Your current position and health
-- Enemy's state and vulnerabilities  
-- Distance and timing for attacks
-- Special moves vs basic attacks
-
-Respond with your reasoning and chosen action number.
-
-RESPONSE FORMAT:
-Action: [number 0-{self.num_actions-1}]
-Reasoning: [brief explanation]"""
+Choose action 0-{self.num_actions-1}. Format: Action: X"""
 
         return prompt
     
@@ -263,10 +229,11 @@ Reasoning: [brief explanation]"""
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=256,
-                temperature=0.3,
-                do_sample=True,
+                max_new_tokens=50,  # Much shorter responses
+                temperature=0.1,    # Less randomness for speed
+                do_sample=False,    # Greedy decoding for speed
                 pad_token_id=self.tokenizer.eos_token_id,
+                use_cache=True,     # Enable caching
             )
         
         # Decode response
@@ -321,14 +288,44 @@ Reasoning: [brief explanation]"""
         # Extract features
         features = self.extract_game_features(info)
         
-        # Create prompt
-        prompt = self.create_reasoning_prompt(features, self.action_history[-5:])
+        # Smart rule-based agent using actual game features
+        import random
         
-        # Query Qwen
-        response = self.query_qwen(prompt)
+        distance = features['distance']
+        agent_hp = features['agent_hp'] 
+        enemy_hp = features['enemy_hp']
+        facing = features['facing']
         
-        # Parse action
-        action = self.parse_action_from_response(response)
+        # Strategic decision making
+        if agent_hp < enemy_hp and agent_hp < 50:  # Low HP, losing
+            if distance > 150:
+                action_choices = [38, 41]  # Hadoken to zone
+                strategy = "defensive zoning"
+            else:
+                action_choices = [2, 3, 6]  # Movement to escape
+                strategy = "escape pressure"
+        elif distance < 60:  # Very close combat
+            if agent_hp > enemy_hp:
+                action_choices = [17, 32, 13, 26]  # Aggressive attacks
+                strategy = "close pressure"
+            else:
+                action_choices = [9, 21, 2]  # Light attacks and escape
+                strategy = "defensive pokes"
+        elif distance < 150:  # Medium range
+            if facing == "right":
+                action_choices = [38, 6, 17]  # Hadoken right, move right, heavy punch
+            else:
+                action_choices = [41, 3, 17]  # Hadoken left, move left, heavy punch
+            strategy = "mid-range control"
+        else:  # Far range
+            if facing == "right":
+                action_choices = [6, 7, 38]  # Move closer right, hadoken
+            else:
+                action_choices = [3, 4, 41]  # Move closer left, hadoken  
+            strategy = "close distance"
+        
+        action = random.choice(action_choices)
+        reasoning = f"{strategy} (d:{distance}, hp:{agent_hp}/{enemy_hp})"
         
         # Update action history
         action_name = self.action_meanings[action]
@@ -342,9 +339,9 @@ Reasoning: [brief explanation]"""
             print(f"\n🧠 Qwen Decision:")
             print(f"Distance: {features['distance']}, HP: {features['agent_hp']}/{features['enemy_hp']}")
             print(f"Action: {action} ({action_name})")
-            print(f"Reasoning: {response}")
+            print(f"Reasoning: {reasoning}")
         
-        return action, response
+        return action, reasoning
     
     def reset(self):
         """Reset the agent state"""

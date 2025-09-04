@@ -9,7 +9,7 @@ from wrapper import make_env
 from qwen_agent import QwenStreetFighterAgent
 
 
-def demo_qwen_gameplay(model_path: str = "Qwen/Qwen3-4B-Instruct-2507", 
+def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main", 
                        episodes: int = 3, 
                        render: bool = True,
                        verbose: bool = True):
@@ -103,7 +103,7 @@ def test_qwen_simple():
     obs, info = env.reset()
     
     # Create agent  
-    agent = QwenStreetFighterAgent()
+    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main")
     
     # Test a few decisions
     for i in range(3):
@@ -125,8 +125,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Qwen Street Fighter Demo")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen3-4B-Instruct-2507",
-                       help="Qwen model path (try: Qwen3-4B-Instruct-2507, Qwen3-8B, or Qwen2.5-7B/14B-Instruct)")
+    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main",
+                       help="Qwen model path (local cache directory)")
     parser.add_argument("--episodes", type=int, default=3,
                        help="Number of episodes to play")
     parser.add_argument("--no-render", action="store_true",
