@@ -9,7 +9,7 @@ from wrapper import make_env
 from qwen_agent import QwenStreetFighterAgent
 
 
-def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main", 
+def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct", 
                        episodes: int = 3, 
                        render: bool = True,
                        verbose: bool = True):
@@ -45,15 +45,15 @@ def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/
             
             episode_reward = 0
             steps = 0
-            max_steps = 1000  # Prevent infinite episodes
+            max_steps = 5000  # Allow full match completion
             
             while steps < max_steps:
                 if render:
                     env.render()
                     time.sleep(0.05)  # Slow down for visibility
                 
-                # Get action from Qwen agent
-                action, reasoning = agent.get_action(info, verbose=verbose)
+                # Get action from Qwen vision agent
+                action, reasoning = agent.get_action(obs, info, verbose=verbose)
                 
                 # Take step in environment
                 obs, reward, done, truncated, info = env.step(action)
@@ -103,12 +103,12 @@ def test_qwen_simple():
     obs, info = env.reset()
     
     # Create agent  
-    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main")
+    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct")
     
     # Test a few decisions
     for i in range(3):
         print(f"\nTest {i+1}:")
-        action, reasoning = agent.get_action(info, verbose=True)
+        action, reasoning = agent.get_action(obs, info, verbose=True)
         
         # Take action
         obs, reward, done, truncated, info = env.step(action)
@@ -125,8 +125,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Qwen Street Fighter Demo")
-    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main",
-                       help="Qwen model path (local cache directory)")
+    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct",
+                       help="SmolVLM model local path")
     parser.add_argument("--episodes", type=int, default=3,
                        help="Number of episodes to play")
     parser.add_argument("--no-render", action="store_true",

@@ -60,6 +60,25 @@ __win rate at 63.2%__
   This way you get complete control over the download process!
 
 
+
+
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/config.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/generation_config.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/preprocessor_config.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/chat_template.json
+
+
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/added_tokens.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/merges.txt
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/tokenizer.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/tokenizer_config.json
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/vocab.json
+
+  wget https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/model.safetensors
+
+
+
+
 python train.py --mode train --resume train/best_model_1420000.zip --total_timesteps 6000000
 
   ta.json 

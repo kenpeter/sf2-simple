@@ -5,9 +5,11 @@ Works with existing wrapper.py without modifications
 """
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForVision2Seq, AutoProcessor
+import numpy as np
+from PIL import Image
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 
 class QwenStreetFighterAgent:
@@ -16,7 +18,7 @@ class QwenStreetFighterAgent:
     Uses existing wrapper.py environment without modifications
     """
 
-    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main"):
+    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct"):
         """
         Initialize the Qwen agent
         
@@ -27,20 +29,19 @@ class QwenStreetFighterAgent:
         print(f"🤖 Loading Qwen model from: {model_path}")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Load tokenizer from cache
-        print("📁 Step 1/2: Loading tokenizer from cache...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+        # Load processor and model for vision
+        print("📁 Step 1/2: Loading processor from cache...")
+        self.processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)
         
-        # Load model from cache
-        print("📁 Step 2/2: Loading model weights from cache...")
-        self.model = AutoModelForCausalLM.from_pretrained(
+        # Load vision model from cache
+        print("📁 Step 2/2: Loading Qwen2.5-VL model from cache...")
+        self.model = AutoModelForVision2Seq.from_pretrained(
             model_path,
             dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
             local_files_only=True,
-            max_memory={0: "4GB"} if torch.cuda.is_available() else None,
-            low_cpu_mem_usage=True
+            max_memory={0: "4GB"} if torch.cuda.is_available() else None
         )
         print(f"✅ Qwen model loaded successfully on {self.device}")
         
@@ -140,104 +141,123 @@ class QwenStreetFighterAgent:
             
         return features
     
-    def create_reasoning_prompt(self, features: Dict, recent_actions: List[str]) -> str:
+    def capture_game_frame(self, observation) -> Image.Image:
         """
-        Create a natural language prompt for Qwen to reason about the game state
+        Convert game observation to PIL Image for vision model
         
         Args:
-            features: Extracted game features
-            recent_actions: List of recent actions taken
+            observation: Game frame from environment (numpy array)
             
         Returns:
-            Formatted prompt string
+            PIL Image of the game frame
         """
-        # Enemy name (no character info available)
-        enemy_name = "Enemy"
-        
-        # Status interpretation
-        def interpret_status(status_code):
-            if status_code == 0:
-                return "neutral"
-            elif status_code < 10:
-                return "attacking" 
-            elif status_code < 20:
-                return "blocking"
-            elif status_code < 30:
-                return "stunned"
+        if isinstance(observation, np.ndarray):
+            # Handle different observation formats
+            if observation.shape == (1, 1, 1):
+                # Single pixel observation - create a dummy RGB image
+                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
+                return Image.fromarray(dummy_frame)
+            
+            # Convert numpy array to PIL Image
+            if observation.dtype != np.uint8:
+                observation = (observation * 255).astype(np.uint8)
+            
+            # Ensure proper shape for image
+            if len(observation.shape) == 3 and observation.shape[2] in [3, 4]:
+                # RGB or RGBA image
+                if observation.shape[2] == 4:
+                    observation = observation[:, :, :3]  # Remove alpha channel
+                image = Image.fromarray(observation)
+            elif len(observation.shape) == 2:
+                # Grayscale - convert to RGB
+                image = Image.fromarray(observation).convert('RGB')
             else:
-                return "special_move"
-        
-        agent_state = interpret_status(features["agent_status"])
-        
-        # Recent actions context
-        recent_actions_str = ", ".join(recent_actions[-3:]) if recent_actions else "None"
-        
-        # Distance assessment
-        if features["distance"] < 80:
-            distance_desc = "Very Close - melee range"
-        elif features["distance"] < 150:
-            distance_desc = "Close - combo range"
-        elif features["distance"] < 250:
-            distance_desc = "Medium - projectile range"
+                # Unexpected format - create dummy image
+                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
+                return Image.fromarray(dummy_frame)
+            
+            return image
         else:
-            distance_desc = "Far - need to move closer"
+            # If already PIL Image, return as-is
+            return observation
+    
+    def create_hybrid_prompt(self, features: Dict) -> str:
+        """
+        Create hybrid prompt combining visual frame analysis with game features
+        
+        Args:
+            features: Game state features from ta.json
+            
+        Returns:
+            Formatted prompt for vision + data analysis
+        """
+        prompt = f"""Street Fighter 2: You control Ken. Analyze the visual frame AND the game data below.
 
-        prompt = f"""Street Fighter expert: You control Ken. Choose the optimal action based on current situation.
-
-SITUATION:
+GAME DATA:
 Ken HP: {features['agent_hp']} | Enemy HP: {features['enemy_hp']} | Distance: {features['distance']}
-Ken pos: ({features['agent_x']},{features['agent_y']}) | Enemy pos: ({features['enemy_x']},{features['enemy_y']})
-Status: Ken={agent_state} | Facing: {features['facing']}
-Rounds: Ken {features['agent_victories']} - {features['enemy_victories']} Enemy | Time: {features['round_countdown']}
+Ken position: ({features['agent_x']},{features['agent_y']}) | Enemy: ({features['enemy_x']},{features['enemy_y']})
+Score: {features['score']} | Time: {features['round_countdown']} | Facing: {features['facing']}
 
-STRATEGY:
-- Close (0-80px): Combos, throws, normals
-- Medium (80-200px): Hadoken, approach 
-- Far (200px+): Move closer, zone with fireballs
-- Winning HP: Pressure aggressively
-- Losing HP: Counter-attack, defensive
-- Enemy stunned: Maximum damage combo
+Look at the visual frame to understand the fight situation. Use both visual and data info to choose the best action.
 
-TOP ACTIONS:
-Movement: 1=UP 2=DOWN 3=LEFT 6=RIGHT
-Attacks: 9=L.PUNCH 13=M.PUNCH 17=H.PUNCH 21=L.KICK 26=M.KICK 32=H.KICK
-Specials: 38=HADOKEN_R 41=HADOKEN_L 39=DP_R 42=DP_L 40=HURRICANE_R 43=HURRICANE_L
+COMBO STRATEGY:
+- Close range: Heavy attacks into special moves
+- Medium range: Hadoken fireballs to control space
+- Anti-air: Dragon Punch when enemy jumps
+- Pressure: Hurricane Kick for mobility and attacks
 
-Choose action 0-{self.num_actions-1}. Format: Action: X"""
+ACTIONS (choose best for situation):
+Move: 0=NONE 1=UP 2=DOWN 3=LEFT 6=RIGHT 7=UP_RIGHT 4=UP_LEFT 5=DOWN_LEFT 8=DOWN_RIGHT
+Attack: 9=L_PUNCH 13=M_PUNCH 17=H_PUNCH 21=L_KICK 26=M_KICK 32=H_KICK
+SPECIAL MOVES: 38=HADOKEN_R 39=DRAGON_PUNCH_R 40=HURRICANE_KICK_R 41=HADOKEN_L 42=DRAGON_PUNCH_L 43=HURRICANE_KICK_L
+
+Action:"""
 
         return prompt
     
-    def query_qwen(self, prompt: str) -> str:
+    def query_smolvlm(self, image: Image.Image, prompt: str) -> str:
         """
-        Query Qwen model with the reasoning prompt
+        Query SmolVLM model with image and prompt
         
         Args:
-            prompt: Formatted prompt for reasoning
+            image: Game frame as PIL Image
+            prompt: Text prompt for analysis
             
         Returns:
             Model's response containing reasoning and action
         """
-        # Tokenize input
-        messages = [{"role": "user", "content": prompt}]
-        text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # Create messages for SmolVLM
+        messages = [
+            {
+                "role": "user", 
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt}
+                ]
+            }
+        ]
         
-        inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
+        # Process with SmolVLM processor (simpler than Qwen2.5-VL)
+        inputs = self.processor(
+            images=image,
+            text=prompt,
+            return_tensors="pt"
+        ).to(self.device)
         
-        # Generate response
+        # Generate response with minimal tokens for speed
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=50,  # Much shorter responses
-                temperature=0.1,    # Less randomness for speed
-                do_sample=False,    # Greedy decoding for speed
-                pad_token_id=self.tokenizer.eos_token_id,
-                use_cache=True,     # Enable caching
+                max_new_tokens=8,   # Very short for speed
+                do_sample=False,    # Greedy decoding
+                pad_token_id=self.processor.tokenizer.eos_token_id,
             )
         
         # Decode response
-        response = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        response = self.processor.decode(outputs[0], skip_special_tokens=True)
+        # Extract just the action part
+        if "Action:" in response:
+            response = response.split("Action:")[-1].strip()
         return response.strip()
     
     def parse_action_from_response(self, response: str) -> int:
@@ -274,58 +294,44 @@ Choose action 0-{self.num_actions-1}. Format: Action: X"""
             print(f"⚠️  Action parsing failed: {e}")
             return 0  # Default to no action
     
-    def get_action(self, info: Dict, verbose: bool = False) -> Tuple[int, str]:
+    def get_action(self, observation, info: Dict, verbose: bool = False) -> Tuple[int, str]:
         """
-        Get action decision from Qwen based on current game state
+        Get action decision from Qwen2.5-VL based on visual frame analysis
         
         Args:
+            observation: Game frame (numpy array or PIL Image)
             info: Game state info from environment
             verbose: Whether to print reasoning
             
         Returns:
             Tuple of (action_number, reasoning_text)
         """
-        # Extract features
+        # Real-time SmolVLM analysis every frame
+        image = self.capture_game_frame(observation)
         features = self.extract_game_features(info)
+        prompt = self.create_hybrid_prompt(features)
         
-        # Smart rule-based agent using actual game features
-        import random
-        
-        distance = features['distance']
-        agent_hp = features['agent_hp'] 
-        enemy_hp = features['enemy_hp']
-        facing = features['facing']
-        
-        # Strategic decision making
-        if agent_hp < enemy_hp and agent_hp < 50:  # Low HP, losing
-            if distance > 150:
-                action_choices = [38, 41]  # Hadoken to zone
-                strategy = "defensive zoning"
+        try:
+            response = self.query_smolvlm(image, prompt)
+            action = self.parse_action_from_response(response)
+            
+        except Exception:
+            # Fast fallback using game features
+            import random
+            distance = features['distance']
+            agent_hp = features['agent_hp']
+            enemy_hp = features['enemy_hp']
+            
+            if agent_hp < enemy_hp and distance > 150:
+                action = random.choice([38, 41, 39, 42])  # Defensive projectiles and dragon punch
+            elif distance < 80:
+                action = random.choice([9, 13, 17, 21, 26, 32, 39, 42, 40, 43])  # Close combat with specials
+            elif distance < 150:
+                action = random.choice([38, 41, 17, 32, 40, 43])  # Medium range with hurricane kicks
             else:
-                action_choices = [2, 3, 6]  # Movement to escape
-                strategy = "escape pressure"
-        elif distance < 60:  # Very close combat
-            if agent_hp > enemy_hp:
-                action_choices = [17, 32, 13, 26]  # Aggressive attacks
-                strategy = "close pressure"
-            else:
-                action_choices = [9, 21, 2]  # Light attacks and escape
-                strategy = "defensive pokes"
-        elif distance < 150:  # Medium range
-            if facing == "right":
-                action_choices = [38, 6, 17]  # Hadoken right, move right, heavy punch
-            else:
-                action_choices = [41, 3, 17]  # Hadoken left, move left, heavy punch
-            strategy = "mid-range control"
-        else:  # Far range
-            if facing == "right":
-                action_choices = [6, 7, 38]  # Move closer right, hadoken
-            else:
-                action_choices = [3, 4, 41]  # Move closer left, hadoken  
-            strategy = "close distance"
-        
-        action = random.choice(action_choices)
-        reasoning = f"{strategy} (d:{distance}, hp:{agent_hp}/{enemy_hp})"
+                action = random.choice([6, 3, 38, 41, 40, 43])  # Movement, projectiles, hurricane kicks
+            
+            response = f"Fallback: d={distance}, hp={agent_hp}/{enemy_hp}"
         
         # Update action history
         action_name = self.action_meanings[action]
@@ -336,12 +342,11 @@ Choose action 0-{self.num_actions-1}. Format: Action: X"""
             self.action_history = self.action_history[-20:]
         
         if verbose:
-            print(f"\n🧠 Qwen Decision:")
-            print(f"Distance: {features['distance']}, HP: {features['agent_hp']}/{features['enemy_hp']}")
+            print(f"\n🧠 SmolVLM Real-Time Decision:")
             print(f"Action: {action} ({action_name})")
-            print(f"Reasoning: {reasoning}")
+            print(f"Reasoning: {response}")
         
-        return action, reasoning
+        return action, response
     
     def reset(self):
         """Reset the agent state"""
@@ -369,8 +374,9 @@ if __name__ == "__main__":
         # Create agent (will download model if needed)
         agent = QwenStreetFighterAgent()
         
-        # Test action selection
-        action, reasoning = agent.get_action(mock_info, verbose=True)
+        # Test action selection with dummy frame
+        dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
+        action, reasoning = agent.get_action(dummy_frame, mock_info, verbose=True)
         
         print(f"\n✅ Test completed! Chosen action: {action}")
         
