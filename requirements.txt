@@ -53,6 +53,8 @@ sympy==1.14.0
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2
 torch==2.7.0
+transformers>=4.36.0
+accelerate>=0.20.0
 tqdm==4.67.1
 triton==3.3.0
 typing-extensions==4.13.2

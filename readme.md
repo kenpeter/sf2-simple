@@ -8,6 +8,58 @@ __win rate at 63.2%__
 
 
 
+     ================================================================================
+     … +82 lines (ctrl+r to expand)
+  ⎿  Found 1 new diagnostic issue in 1 file (ctrl-r to expand)
+
+● Perfect! 🎯 Now you have all the direct download URLs. Here's your manual download strategy:
+
+  🚀 Manual Download (One file at a time):
+
+  Step 1: Create directory
+
+  mkdir -p ~/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main/
+  cd ~/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/main/
+
+  Step 2: Download small config files (fast)
+
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/.gitattributes'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/LICENSE'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/README.md'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/config.json'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/generation_config.json'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/merges.txt'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/model.safetensors.index.json'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/tokenizer.json'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/tokenizer_config.json'
+  wget 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/vocab.json'
+  # ... and the rest of the config files
+
+  Step 3: Download BIG files ONE AT A TIME
+
+  # Download first model file (3.96GB)
+  wget -c 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/model-00001-of-00003.safetensors'
+
+  # Then second model file (3.99GB)  
+  wget -c 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/model-00002-of-00003.safetensors'
+
+  # Finally third model file (99.6MB)
+  wget -c 'https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/resolve/main/model-00003-of-00003.safetensors'
+
+  Step 4: Test
+
+  python demo_qwen.py --episodes 3
+
+  💡 Benefits:
+
+  - ✅ One file at a time - no parallel downloads
+  - ✅ Resume support - wget -c to resume if interrupted
+  - ✅ Full bandwidth to single file
+  - ✅ Clear progress - you see exactly what's downloading
+
+  This way you get complete control over the download process!
+
+
 python train.py --mode train --resume train/best_model_1420000.zip --total_timesteps 6000000
 
   ta.json 
