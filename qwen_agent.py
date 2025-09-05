@@ -21,16 +21,17 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     Uses existing wrapper.py environment without modifications
     """
 
-    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct"):  # Constructor method for agent initialization
+    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct", force_cpu: bool = False):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
         
         Args:
             model_path: Path to Qwen model (local or HuggingFace)
+            force_cpu: Force CPU usage even if CUDA is available
         """
         # Initialize Qwen model
         print(f"🤖 Loading Qwen model from: {model_path}")  # Print model loading status
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"  # Set device to GPU if available, else CPU
+        self.device = "cpu" if (force_cpu or not torch.cuda.is_available()) else "cuda"  # Set device preference
         
         # Load processor and model for vision
         print("📁 Step 1/2: Loading processor from cache...")  # Print loading status for processor
@@ -41,10 +42,11 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.model = AutoModelForVision2Seq.from_pretrained(  # Load the vision-language model
             model_path,  # Model path
             dtype=torch.float16,  # Use 16-bit precision for memory efficiency
-            device_map="auto",  # Automatically map model to available devices
+            device_map="cpu" if not torch.cuda.is_available() else "auto",  # Use CPU if CUDA unavailable
             trust_remote_code=True,  # Allow custom code in model
             local_files_only=True,  # Only use local cached files
-            max_memory={0: "4GB"} if torch.cuda.is_available() else None  # Limit GPU memory usage to 4GB
+            max_memory={0: "3GB"} if torch.cuda.is_available() else None,  # Reduce GPU memory usage to 3GB
+            torch_dtype=torch.float16  # Explicitly set torch dtype
         )
         print(f"✅ Qwen model loaded successfully on {self.device}")  # Print successful loading message
         
@@ -276,16 +278,45 @@ Action:"""  # Create formatted prompt string with game state and action options
             images=[image],  # Image input
             return_tensors="pt"  # Return PyTorch tensors
         )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
+        
+        # Safely move tensors to device with error handling
+        try:
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
+        except RuntimeError as e:
+            print(f"⚠️ Error moving tensors to device: {e}")
+            # Fallback to CPU if CUDA fails
+            self.device = "cpu"
+            self.model = self.model.to("cpu")
+            inputs = {k: v.to("cpu") for k, v in inputs.items()}
         
         # Generate response with minimal tokens for speed
         with torch.no_grad():  # Disable gradient computation for inference
-            outputs = self.model.generate(  # Generate response from model
-                **inputs,  # Pass all input tensors
-                max_new_tokens=8,   # Very short response for speed
-                do_sample=False,    # Use greedy decoding (deterministic)
-                pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
-            )
+            try:
+                outputs = self.model.generate(  # Generate response from model
+                    **inputs,  # Pass all input tensors
+                    max_new_tokens=8,   # Very short response for speed
+                    do_sample=False,    # Use greedy decoding (deterministic)
+                    pad_token_id=self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id,  # Set padding token with fallback
+                    eos_token_id=self.processor.tokenizer.eos_token_id,  # Explicit EOS token
+                )
+            except RuntimeError as cuda_error:
+                print(f"⚠️ CUDA error during generation: {cuda_error}")
+                # Move everything to CPU and retry
+                if self.device != "cpu":
+                    print("🔄 Falling back to CPU inference...")
+                    self.device = "cpu"
+                    self.model = self.model.to("cpu")
+                    inputs = {k: v.to("cpu") for k, v in inputs.items()}
+                    
+                    outputs = self.model.generate(  # Retry on CPU
+                        **inputs,
+                        max_new_tokens=8,
+                        do_sample=False,
+                        pad_token_id=self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id,
+                        eos_token_id=self.processor.tokenizer.eos_token_id,
+                    )
+                else:
+                    raise cuda_error  # Re-raise if already on CPU
         
         # Decode response  
         response = self.processor.decode(outputs[0], skip_special_tokens=True)  # Decode tokens to text
