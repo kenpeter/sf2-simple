@@ -1,24 +1,27 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # Shebang line to run script with python3 directly
 """
 🥊 Qwen-powered Street Fighter 2 Agent
 Works with existing wrapper.py without modifications
 """
 
-import torch
+# Import PyTorch for deep learning functionality
+import torch  
+# Import HuggingFace transformers for vision models
 from transformers import AutoModelForVision2Seq, AutoProcessor
-import numpy as np
-from PIL import Image
-import re
-from typing import Dict, Tuple
+# Import NumPy for numerical array operations
+import numpy as np  
+from PIL import Image  # Import PIL for image processing
+import re  # Import regular expressions for text pattern matching
+from typing import Dict, Tuple  # Import typing hints for better code documentation
 
 
-class QwenStreetFighterAgent:
+class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     """
     Qwen-powered agent for Street Fighter 2
     Uses existing wrapper.py environment without modifications
     """
 
-    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct"):
+    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct"):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
         
@@ -26,112 +29,112 @@ class QwenStreetFighterAgent:
             model_path: Path to Qwen model (local or HuggingFace)
         """
         # Initialize Qwen model
-        print(f"🤖 Loading Qwen model from: {model_path}")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"🤖 Loading Qwen model from: {model_path}")  # Print model loading status
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"  # Set device to GPU if available, else CPU
         
         # Load processor and model for vision
-        print("📁 Step 1/2: Loading processor from cache...")
-        self.processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)
+        print("📁 Step 1/2: Loading processor from cache...")  # Print loading status for processor
+        self.processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)  # Load tokenizer and image processor
         
         # Load vision model from cache
-        print("📁 Step 2/2: Loading Qwen2.5-VL model from cache...")
-        self.model = AutoModelForVision2Seq.from_pretrained(
-            model_path,
-            dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True,
-            local_files_only=True,
-            max_memory={0: "4GB"} if torch.cuda.is_available() else None
+        print("📁 Step 2/2: Loading Qwen2.5-VL model from cache...")  # Print loading status for model
+        self.model = AutoModelForVision2Seq.from_pretrained(  # Load the vision-language model
+            model_path,  # Model path
+            dtype=torch.float16,  # Use 16-bit precision for memory efficiency
+            device_map="auto",  # Automatically map model to available devices
+            trust_remote_code=True,  # Allow custom code in model
+            local_files_only=True,  # Only use local cached files
+            max_memory={0: "4GB"} if torch.cuda.is_available() else None  # Limit GPU memory usage to 4GB
         )
-        print(f"✅ Qwen model loaded successfully on {self.device}")
+        print(f"✅ Qwen model loaded successfully on {self.device}")  # Print successful loading message
         
         # Action space - matches discretizer.py
-        self.action_meanings = [
-            "NO_ACTION",           # 0
-            "UP",                  # 1
-            "DOWN",                # 2
-            "LEFT",                # 3
-            "UP_LEFT",             # 4
-            "DOWN_LEFT",           # 5
-            "RIGHT",               # 6
-            "UP_RIGHT",            # 7
-            "DOWN_RIGHT",          # 8
-            "LIGHT_PUNCH",         # 9
-            "LIGHT_PUNCH_DOWN",    # 10
-            "LIGHT_PUNCH_LEFT",    # 11
-            "LIGHT_PUNCH_RIGHT",   # 12
-            "MEDIUM_PUNCH",        # 13
-            "MEDIUM_PUNCH_DOWN",   # 14
-            "MEDIUM_PUNCH_LEFT",   # 15
-            "MEDIUM_PUNCH_RIGHT",  # 16
-            "HEAVY_PUNCH",         # 17
-            "HEAVY_PUNCH_DOWN",    # 18
-            "HEAVY_PUNCH_LEFT",    # 19
-            "HEAVY_PUNCH_RIGHT",   # 20
-            "LIGHT_KICK",          # 21
-            "LIGHT_KICK_DOWN",     # 22
-            "LIGHT_KICK_LEFT",     # 23
-            "LIGHT_KICK_DOWN_LEFT", # 24
-            "LIGHT_KICK_RIGHT",    # 25
-            "MEDIUM_KICK",         # 26
-            "MEDIUM_KICK_DOWN",    # 27
-            "MEDIUM_KICK_LEFT",    # 28
-            "MEDIUM_KICK_DOWN_LEFT", # 29
-            "MEDIUM_KICK_RIGHT",   # 30
-            "MEDIUM_KICK_DOWN_RIGHT", # 31
-            "HEAVY_KICK",          # 32
-            "HEAVY_KICK_DOWN",     # 33
-            "HEAVY_KICK_LEFT",     # 34
-            "HEAVY_KICK_DOWN_LEFT", # 35
-            "HEAVY_KICK_RIGHT",    # 36
-            "HEAVY_KICK_DOWN_RIGHT", # 37
-            "HADOKEN_RIGHT",       # 38
-            "DRAGON_PUNCH_RIGHT",  # 39
-            "HURRICANE_KICK_RIGHT", # 40
-            "HADOKEN_LEFT",        # 41
-            "DRAGON_PUNCH_LEFT",   # 42
-            "HURRICANE_KICK_LEFT", # 43
+        self.action_meanings = [  # Define all possible actions the agent can take
+            "NO_ACTION",           # 0 - Do nothing action
+            "UP",                  # 1 - Jump upward
+            "DOWN",                # 2 - Crouch downward
+            "LEFT",                # 3 - Move left
+            "UP_LEFT",             # 4 - Jump diagonally left
+            "DOWN_LEFT",           # 5 - Crouch walk left
+            "RIGHT",               # 6 - Move right
+            "UP_RIGHT",            # 7 - Jump diagonally right
+            "DOWN_RIGHT",          # 8 - Crouch walk right
+            "LIGHT_PUNCH",         # 9 - Quick punch attack
+            "LIGHT_PUNCH_DOWN",    # 10 - Crouching light punch
+            "LIGHT_PUNCH_LEFT",    # 11 - Light punch while moving left
+            "LIGHT_PUNCH_RIGHT",   # 12 - Light punch while moving right
+            "MEDIUM_PUNCH",        # 13 - Medium strength punch
+            "MEDIUM_PUNCH_DOWN",   # 14 - Crouching medium punch
+            "MEDIUM_PUNCH_LEFT",   # 15 - Medium punch while moving left
+            "MEDIUM_PUNCH_RIGHT",  # 16 - Medium punch while moving right
+            "HEAVY_PUNCH",         # 17 - Strong punch attack
+            "HEAVY_PUNCH_DOWN",    # 18 - Crouching heavy punch
+            "HEAVY_PUNCH_LEFT",    # 19 - Heavy punch while moving left
+            "HEAVY_PUNCH_RIGHT",   # 20 - Heavy punch while moving right
+            "LIGHT_KICK",          # 21 - Quick kick attack
+            "LIGHT_KICK_DOWN",     # 22 - Crouching light kick
+            "LIGHT_KICK_LEFT",     # 23 - Light kick while moving left
+            "LIGHT_KICK_DOWN_LEFT", # 24 - Crouching light kick moving left
+            "LIGHT_KICK_RIGHT",    # 25 - Light kick while moving right
+            "MEDIUM_KICK",         # 26 - Medium strength kick
+            "MEDIUM_KICK_DOWN",    # 27 - Crouching medium kick
+            "MEDIUM_KICK_LEFT",    # 28 - Medium kick while moving left
+            "MEDIUM_KICK_DOWN_LEFT", # 29 - Crouching medium kick moving left
+            "MEDIUM_KICK_RIGHT",   # 30 - Medium kick while moving right
+            "MEDIUM_KICK_DOWN_RIGHT", # 31 - Crouching medium kick moving right
+            "HEAVY_KICK",          # 32 - Strong kick attack
+            "HEAVY_KICK_DOWN",     # 33 - Crouching heavy kick
+            "HEAVY_KICK_LEFT",     # 34 - Heavy kick while moving left
+            "HEAVY_KICK_DOWN_LEFT", # 35 - Crouching heavy kick moving left
+            "HEAVY_KICK_RIGHT",    # 36 - Heavy kick while moving right
+            "HEAVY_KICK_DOWN_RIGHT", # 37 - Crouching heavy kick moving right
+            "HADOKEN_RIGHT",       # 38 - Fireball special move facing right
+            "DRAGON_PUNCH_RIGHT",  # 39 - Uppercut special move facing right
+            "HURRICANE_KICK_RIGHT", # 40 - Spinning kick special move facing right
+            "HADOKEN_LEFT",        # 41 - Fireball special move facing left
+            "DRAGON_PUNCH_LEFT",   # 42 - Uppercut special move facing left
+            "HURRICANE_KICK_LEFT", # 43 - Spinning kick special move facing left
         ]
         
-        self.num_actions = len(self.action_meanings)
+        self.num_actions = len(self.action_meanings)  # Store total number of actions available
         
         # Action timing - frames each action takes to complete
-        self.action_frames = {
-            0: 1,    # NO_ACTION - instant
-            1: 3,    # UP - short jump startup
-            2: 3,    # DOWN - crouch
-            3: 2,    # LEFT - walk
-            6: 2,    # RIGHT - walk
-            7: 5,    # UP_RIGHT - jump
-            4: 5,    # UP_LEFT - jump
-            5: 4,    # DOWN_LEFT - crouch walk
-            8: 4,    # DOWN_RIGHT - crouch walk
-            9: 8,    # LIGHT_PUNCH - fast attack
-            13: 12,  # MEDIUM_PUNCH - medium attack
-            17: 18,  # HEAVY_PUNCH - slow heavy attack
-            21: 10,  # LIGHT_KICK - fast kick
-            26: 15,  # MEDIUM_KICK - medium kick
-            32: 20,  # HEAVY_KICK - slow heavy kick
-            38: 25,  # HADOKEN_RIGHT - fireball animation
-            39: 22,  # DRAGON_PUNCH_RIGHT - uppercut animation
-            40: 18,  # HURRICANE_KICK_RIGHT - spinning kick
-            41: 25,  # HADOKEN_LEFT - fireball animation
-            42: 22,  # DRAGON_PUNCH_LEFT - uppercut animation  
-            43: 18,  # HURRICANE_KICK_LEFT - spinning kick
+        self.action_frames = {  # Dictionary mapping action IDs to animation frame durations
+            0: 1,    # NO_ACTION - instant response
+            1: 3,    # UP - short jump startup frames
+            2: 3,    # DOWN - crouch animation frames
+            3: 2,    # LEFT - walk animation frames
+            6: 2,    # RIGHT - walk animation frames
+            7: 5,    # UP_RIGHT - jump animation frames
+            4: 5,    # UP_LEFT - jump animation frames
+            5: 4,    # DOWN_LEFT - crouch walk animation frames
+            8: 4,    # DOWN_RIGHT - crouch walk animation frames
+            9: 8,    # LIGHT_PUNCH - fast attack animation frames
+            13: 12,  # MEDIUM_PUNCH - medium attack animation frames
+            17: 18,  # HEAVY_PUNCH - slow heavy attack animation frames
+            21: 10,  # LIGHT_KICK - fast kick animation frames
+            26: 15,  # MEDIUM_KICK - medium kick animation frames
+            32: 20,  # HEAVY_KICK - slow heavy kick animation frames
+            38: 25,  # HADOKEN_RIGHT - fireball animation frames
+            39: 22,  # DRAGON_PUNCH_RIGHT - uppercut animation frames
+            40: 18,  # HURRICANE_KICK_RIGHT - spinning kick animation frames
+            41: 25,  # HADOKEN_LEFT - fireball animation frames
+            42: 22,  # DRAGON_PUNCH_LEFT - uppercut animation frames  
+            43: 18,  # HURRICANE_KICK_LEFT - spinning kick animation frames
         }
         
         # Game state tracking
-        self.action_history = []
-        self.last_features = {}
-        self.frame_counter = 0
-        self.last_action = 0
-        self.last_reasoning = "Initial state"
-        self.action_repeat_count = 0
-        self.last_distance = 0
-        self.action_cooldown = 0
-        self.last_executed_action = 0
+        self.action_history = []  # List to store history of past actions
+        self.last_features = {}  # Dictionary to store previous game features
+        self.frame_counter = 0  # Counter to track current frame number
+        self.last_action = 0  # Store the last action taken
+        self.last_reasoning = "Initial state"  # Store reasoning for last decision
+        self.action_repeat_count = 0  # Count how many times same action repeated
+        self.last_distance = 0  # Store previous distance between characters
+        self.action_cooldown = 0  # Frames remaining until next action allowed
+        self.last_executed_action = 0  # Store the last action that was executed
         
-    def extract_game_features(self, info: Dict) -> Dict:
+    def extract_game_features(self, info: Dict) -> Dict:  # Method to extract game features from info dict
         """
         Extract structured features from game state info based on ta.json schema
         
@@ -141,39 +144,39 @@ class QwenStreetFighterAgent:
         Returns:
             Dictionary of structured game features
         """
-        features = {
+        features = {  # Dictionary to store extracted game features
             # Player status (from ta.json)
-            "agent_hp": info.get("agent_hp", 176),
-            "agent_x": info.get("agent_x", 0),
-            "agent_y": info.get("agent_y", 0),
-            "agent_status": info.get("agent_status", 0),
-            "agent_victories": info.get("agent_victories", 0),
+            "agent_hp": info.get("agent_hp", 176),  # Get agent health points, default 176
+            "agent_x": info.get("agent_x", 0),  # Get agent x-coordinate position
+            "agent_y": info.get("agent_y", 0),  # Get agent y-coordinate position
+            "agent_status": info.get("agent_status", 0),  # Get agent animation status
+            "agent_victories": info.get("agent_victories", 0),  # Get agent wins count
             
             # Enemy status (from ta.json)
-            "enemy_hp": info.get("enemy_hp", 176),
-            "enemy_x": info.get("enemy_x", 0),
-            "enemy_y": info.get("enemy_y", 0),
-            "enemy_victories": info.get("enemy_victories", 0),
+            "enemy_hp": info.get("enemy_hp", 176),  # Get enemy health points, default 176
+            "enemy_x": info.get("enemy_x", 0),  # Get enemy x-coordinate position
+            "enemy_y": info.get("enemy_y", 0),  # Get enemy y-coordinate position
+            "enemy_victories": info.get("enemy_victories", 0),  # Get enemy wins count
             
             # Game status (from ta.json)
-            "score": info.get("score", 0),
-            "round_countdown": info.get("round_countdown", 99),
+            "score": info.get("score", 0),  # Get current score
+            "round_countdown": info.get("round_countdown", 99),  # Get time remaining in round
         }
         
         # Calculate derived features (only from available data)
-        features["hp_advantage"] = features["agent_hp"] - features["enemy_hp"]
-        features["distance"] = abs(features["agent_x"] - features["enemy_x"])
-        features["height_diff"] = features["agent_y"] - features["enemy_y"]
+        features["hp_advantage"] = features["agent_hp"] - features["enemy_hp"]  # Calculate health advantage
+        features["distance"] = abs(features["agent_x"] - features["enemy_x"])  # Calculate horizontal distance
+        features["height_diff"] = features["agent_y"] - features["enemy_y"]  # Calculate vertical distance
         
         # Determine relative position
-        if features["agent_x"] < features["enemy_x"]:
-            features["facing"] = "right"
-        else:
-            features["facing"] = "left"
+        if features["agent_x"] < features["enemy_x"]:  # If agent is to the left of enemy
+            features["facing"] = "right"  # Agent should face right
+        else:  # If agent is to the right of enemy
+            features["facing"] = "left"  # Agent should face left
             
-        return features
+        return features  # Return the features dictionary
     
-    def capture_game_frame(self, observation) -> Image.Image:
+    def capture_game_frame(self, observation) -> Image.Image:  # Method to convert observation to PIL Image
         """
         Convert game observation to PIL Image for vision model
         
@@ -183,37 +186,37 @@ class QwenStreetFighterAgent:
         Returns:
             PIL Image of the game frame
         """
-        if isinstance(observation, np.ndarray):
+        if isinstance(observation, np.ndarray):  # Check if observation is numpy array
             # Handle different observation formats
-            if observation.shape == (1, 1, 1):
+            if observation.shape == (1, 1, 1):  # Check for minimal observation shape
                 # Single pixel observation - create a dummy RGB image
-                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
-                return Image.fromarray(dummy_frame)
+                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)  # Create blank RGB frame
+                return Image.fromarray(dummy_frame)  # Convert to PIL Image and return
             
             # Convert numpy array to PIL Image
-            if observation.dtype != np.uint8:
-                observation = (observation * 255).astype(np.uint8)
+            if observation.dtype != np.uint8:  # Check if values need scaling
+                observation = (observation * 255).astype(np.uint8)  # Scale to 0-255 and convert to uint8
             
             # Ensure proper shape for image
-            if len(observation.shape) == 3 and observation.shape[2] in [3, 4]:
+            if len(observation.shape) == 3 and observation.shape[2] in [3, 4]:  # Check for RGB/RGBA format
                 # RGB or RGBA image
-                if observation.shape[2] == 4:
-                    observation = observation[:, :, :3]  # Remove alpha channel
-                image = Image.fromarray(observation)
-            elif len(observation.shape) == 2:
+                if observation.shape[2] == 4:  # Check if has alpha channel
+                    observation = observation[:, :, :3]  # Remove alpha channel, keep RGB only
+                image = Image.fromarray(observation)  # Convert numpy array to PIL Image
+            elif len(observation.shape) == 2:  # Check for grayscale format
                 # Grayscale - convert to RGB
-                image = Image.fromarray(observation).convert('RGB')
-            else:
+                image = Image.fromarray(observation).convert('RGB')  # Convert grayscale to RGB
+            else:  # Handle unexpected formats
                 # Unexpected format - create dummy image
-                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
-                return Image.fromarray(dummy_frame)
+                dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)  # Create blank RGB frame
+                return Image.fromarray(dummy_frame)  # Convert to PIL Image and return
             
-            return image
-        else:
+            return image  # Return the processed PIL Image
+        else:  # If not numpy array
             # If already PIL Image, return as-is
-            return observation
+            return observation  # Return observation unchanged
     
-    def create_hybrid_prompt(self, features: Dict) -> str:
+    def create_hybrid_prompt(self, features: Dict) -> str:  # Method to create prompt for vision model
         """
         Create hybrid prompt combining visual frame analysis with game features
         
@@ -236,11 +239,11 @@ Move: 0=NONE 1=UP 2=DOWN 3=LEFT 6=RIGHT
 Attack: 9=L_PUNCH 13=M_PUNCH 17=H_PUNCH 21=L_KICK 26=M_KICK 32=H_KICK
 Special: 38=HADOKEN_R 39=DRAGON_PUNCH_R 40=HURRICANE_KICK_R 41=HADOKEN_L 42=DRAGON_PUNCH_L 43=HURRICANE_KICK_L
 
-Action:"""
+Action:"""  # Create formatted prompt string with game state and action options
 
-        return prompt
+        return prompt  # Return the formatted prompt string
     
-    def query_smolvlm(self, image: Image.Image, prompt: str) -> str:
+    def query_smolvlm(self, image: Image.Image, prompt: str) -> str:  # Method to query vision-language model
         """
         Query SmolVLM model with image and prompt
         
@@ -252,46 +255,46 @@ Action:"""
             Model's response containing reasoning and action
         """
         # Create messages for SmolVLM (Idefics3 format)
-        messages = [
-            {
-                "role": "user", 
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": prompt}
+        messages = [  # Create message list in chat format
+            {  # User message containing image and text
+                "role": "user",  # Set role as user
+                "content": [  # Content list with image and text
+                    {"type": "image"},  # Image component
+                    {"type": "text", "text": prompt}  # Text prompt component
                 ]
             }
         ]
         
         # Create formatted text input
-        text_input = self.processor.apply_chat_template(
-            messages, images=[image], add_generation_prompt=True
+        text_input = self.processor.apply_chat_template(  # Apply chat template formatting
+            messages, images=[image], add_generation_prompt=True  # Include generation prompt
         )
         
         # Process the text and image to get tensors
-        inputs = self.processor(
-            text=text_input, 
-            images=[image], 
-            return_tensors="pt"
+        inputs = self.processor(  # Process inputs for model
+            text=text_input,  # Formatted text input
+            images=[image],  # Image input
+            return_tensors="pt"  # Return PyTorch tensors
         )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
         
         # Generate response with minimal tokens for speed
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=8,   # Very short for speed
-                do_sample=False,    # Greedy decoding
-                pad_token_id=self.processor.tokenizer.pad_token_id,
+        with torch.no_grad():  # Disable gradient computation for inference
+            outputs = self.model.generate(  # Generate response from model
+                **inputs,  # Pass all input tensors
+                max_new_tokens=8,   # Very short response for speed
+                do_sample=False,    # Use greedy decoding (deterministic)
+                pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
             )
         
         # Decode response  
-        response = self.processor.decode(outputs[0], skip_special_tokens=True)
+        response = self.processor.decode(outputs[0], skip_special_tokens=True)  # Decode tokens to text
         # Extract just the action part after the prompt
-        if "Action:" in response:
-            response = response.split("Action:")[-1].strip()
-        return response.strip()
+        if "Action:" in response:  # Check if Action: marker exists
+            response = response.split("Action:")[-1].strip()  # Extract text after Action: marker
+        return response.strip()  # Return cleaned response
     
-    def analyze_frame_context(self, image: Image.Image, features: Dict) -> str:
+    def analyze_frame_context(self, image: Image.Image, features: Dict) -> str:  # Method to analyze visual frame context
         """
         Analyze the visual frame for additional context
         
@@ -302,45 +305,45 @@ Action:"""
         Returns:
             Additional context from visual analysis
         """
-        import numpy as np
+        import numpy as np  # Import numpy for array operations
         
         # Convert PIL image to numpy for analysis
-        frame = np.array(image)
+        frame = np.array(image)  # Convert PIL Image to numpy array
         
         # Analyze frame characteristics
-        context = []
+        context = []  # Initialize empty list for context markers
         
         # Check frame brightness (could indicate special effects, fireballs, etc.)
-        brightness = np.mean(frame)
-        if brightness > 140:
-            context.append("bright_flash")  # Special moves, hits
-        elif brightness < 80:
-            context.append("dark_frame")    # Normal state
+        brightness = np.mean(frame)  # Calculate average brightness across all pixels
+        if brightness > 140:  # Check if frame is very bright
+            context.append("bright_flash")  # Indicates special moves or hits
+        elif brightness < 80:  # Check if frame is dark
+            context.append("dark_frame")    # Indicates normal game state
         
         # Check for color patterns that might indicate projectiles or special states
         # Look for blue tints (often fireballs) or red tints (often hits/damage)
-        blue_intensity = np.mean(frame[:, :, 2]) if len(frame.shape) == 3 else 0
-        red_intensity = np.mean(frame[:, :, 0]) if len(frame.shape) == 3 else 0
+        blue_intensity = np.mean(frame[:, :, 2]) if len(frame.shape) == 3 else 0  # Calculate blue channel average
+        red_intensity = np.mean(frame[:, :, 0]) if len(frame.shape) == 3 else 0  # Calculate red channel average
         
-        if blue_intensity > red_intensity + 20:
-            context.append("blue_projectile")  # Possible fireball
-        elif red_intensity > blue_intensity + 20:
-            context.append("red_flash")       # Possible hit/damage
+        if blue_intensity > red_intensity + 20:  # Check if blue significantly dominates
+            context.append("blue_projectile")  # Likely indicates fireball projectile
+        elif red_intensity > blue_intensity + 20:  # Check if red significantly dominates
+            context.append("red_flash")       # Likely indicates hit or damage effect
         
         # Analyze frame regions for movement patterns
-        if len(frame.shape) == 3:
+        if len(frame.shape) == 3:  # Check if frame has color channels
             # Check left and right sides for character positions
-            left_activity = np.std(frame[:, :frame.shape[1]//3])
-            right_activity = np.std(frame[:, 2*frame.shape[1]//3:])
+            left_activity = np.std(frame[:, :frame.shape[1]//3])  # Calculate left side pixel variation
+            right_activity = np.std(frame[:, 2*frame.shape[1]//3:])  # Calculate right side pixel variation
             
-            if left_activity > right_activity * 1.5:
-                context.append("left_active")   # More activity on left
-            elif right_activity > left_activity * 1.5:
-                context.append("right_active")  # More activity on right
+            if left_activity > right_activity * 1.5:  # Check if left side has more activity
+                context.append("left_active")   # More visual activity on left side
+            elif right_activity > left_activity * 1.5:  # Check if right side has more activity
+                context.append("right_active")  # More visual activity on right side
         
-        return context
+        return context  # Return list of visual context indicators
     
-    def strategic_decision_making(self, features: Dict, image: Image.Image) -> Tuple[int, str]:
+    def strategic_decision_making(self, features: Dict, image: Image.Image) -> Tuple[int, str]:  # Main AI decision making method
         """
         Intelligent rule-based decision making with proper reasoning and frame analysis
         
@@ -351,73 +354,73 @@ Action:"""
         Returns:
             Tuple of (action_number, reasoning_text)
         """
-        distance = features['distance']
-        hp_advantage = features['hp_advantage']
-        facing = features['facing']
+        distance = features['distance']  # Get distance between characters
+        hp_advantage = features['hp_advantage']  # Get health point advantage
+        facing = features['facing']  # Get which direction agent should face
         
         # Decrement action cooldown
-        if self.action_cooldown > 0:
-            self.action_cooldown -= 1
+        if self.action_cooldown > 0:  # Check if still in animation cooldown
+            self.action_cooldown -= 1  # Decrease cooldown counter
             # Still in cooldown - return NO_ACTION or continue previous action
-            if self.action_cooldown > 0:
+            if self.action_cooldown > 0:  # If still need to wait
                 action = 0  # NO_ACTION - wait for animation to finish
-                reasoning = f"waiting for {self.action_meanings[self.last_executed_action]} to complete ({self.action_cooldown} frames left)"
-                return action, reasoning
+                reasoning = f"waiting for {self.action_meanings[self.last_executed_action]} to complete ({self.action_cooldown} frames left)"  # Explain waiting
+                return action, reasoning  # Return wait action and reason
         
         # Force action variety if stuck repeating same action
-        force_movement = False
-        if self.action_repeat_count > 3:  # Reduced from 5 since we have timing now
-            force_movement = True
+        force_movement = False  # Initialize movement forcing flag
+        if self.action_repeat_count > 3:  # Check if repeating action too much
+            force_movement = True  # Force different action to avoid repetition
             
         # Check if distance hasn't changed (stuck position)  
-        distance_change = abs(distance - self.last_distance) if self.last_distance > 0 else 999
-        if distance_change < 10 and self.frame_counter > 20:  # Position hasn't changed much
-            force_movement = True
+        distance_change = abs(distance - self.last_distance) if self.last_distance > 0 else 999  # Calculate position change
+        if distance_change < 10 and self.frame_counter > 20:  # Check if stuck in same position
+            force_movement = True  # Force movement to break out of stuck state
             
-        self.last_distance = distance
+        self.last_distance = distance  # Store current distance for next frame
         
         # Analyze frame for visual context
-        visual_context = self.analyze_frame_context(image, features)
+        visual_context = self.analyze_frame_context(image, features)  # Get visual cues from frame analysis
         
         # Adjust strategy based on visual cues
-        base_reasoning = ""
-        if "bright_flash" in visual_context:
-            base_reasoning += "Flash detected - "
-        if "blue_projectile" in visual_context:
-            base_reasoning += "Projectile seen - "
-        if "red_flash" in visual_context:
-            base_reasoning += "Hit detected - "
+        base_reasoning = ""  # Initialize reasoning string
+        if "bright_flash" in visual_context:  # Check for bright flash indicator
+            base_reasoning += "Flash detected - "  # Add flash detection to reasoning
+        if "blue_projectile" in visual_context:  # Check for blue projectile indicator
+            base_reasoning += "Projectile seen - "  # Add projectile detection to reasoning
+        if "red_flash" in visual_context:  # Check for red flash indicator
+            base_reasoning += "Hit detected - "  # Add hit detection to reasoning
         
         # Force movement if stuck
-        if force_movement:
-            import random
-            movement_actions = [3, 6, 1, 2]  # LEFT, RIGHT, UP, DOWN
-            action = random.choice(movement_actions)
-            reasoning = base_reasoning + f"breaking pattern, forced movement (repeated {self.action_repeat_count}x)"
+        if force_movement:  # Check if need to force movement
+            import random  # Import random for action selection
+            movement_actions = [3, 6, 1, 2]  # LEFT, RIGHT, UP, DOWN movement actions
+            action = random.choice(movement_actions)  # Choose random movement action
+            reasoning = base_reasoning + f"breaking pattern, forced movement (repeated {self.action_repeat_count}x)"  # Explain forced movement
             
         # React to visual cues first
-        elif "blue_projectile" in visual_context and distance > 100:
+        elif "blue_projectile" in visual_context and distance > 100:  # Check for distant projectile
             # Enemy projectile detected - dodge or counter
             action = 1  # UP (jump to avoid)
-            reasoning = base_reasoning + "jumping to avoid projectile"
+            reasoning = base_reasoning + "jumping to avoid projectile"  # Explain jump action
             
-        elif "bright_flash" in visual_context and distance < 100:
+        elif "bright_flash" in visual_context and distance < 100:  # Check for close flash
             # Special move or hit flash detected - be defensive  
-            if facing == "right":
+            if facing == "right":  # Check facing direction
                 action = 42  # DRAGON_PUNCH_LEFT (away from enemy)
-                reasoning = base_reasoning + "defensive dragon punch after flash"
-            else:
+                reasoning = base_reasoning + "defensive dragon punch after flash"  # Explain defensive move
+            else:  # If facing left
                 action = 39  # DRAGON_PUNCH_RIGHT
-                reasoning = base_reasoning + "defensive dragon punch after flash"
+                reasoning = base_reasoning + "defensive dragon punch after flash"  # Explain defensive move
                 
-        elif "red_flash" in visual_context:
+        elif "red_flash" in visual_context:  # Check for red flash (hit indicator)
             # Hit detected - follow up or counter
-            if distance < 80:
+            if distance < 80:  # Check if close range
                 action = 17  # HEAVY_PUNCH
-                reasoning = base_reasoning + "following up after hit with heavy attack"
-            else:
-                action = 40 if facing == "right" else 43  # HURRICANE_KICK
-                reasoning = base_reasoning + "hurricane kick to capitalize on hit"
+                reasoning = base_reasoning + "following up after hit with heavy attack"  # Explain follow-up attack
+            else:  # If medium range
+                action = 40 if facing == "right" else 43  # HURRICANE_KICK based on facing
+                reasoning = base_reasoning + "hurricane kick to capitalize on hit"  # Explain hurricane kick
                 
         # Standard strategic decisions based on game state
         elif hp_advantage < -50:
@@ -584,45 +587,45 @@ Action:"""
         
         return action, response
     
-    def reset(self):
+    def reset(self):  # Method to reset agent state
         """Reset the agent state"""
-        self.action_history = []
-        self.last_features = {}
-        self.frame_counter = 0
-        self.last_action = 0
-        self.last_reasoning = "Reset state"
-        self.action_repeat_count = 0
-        self.last_distance = 0
-        self.action_cooldown = 0
-        self.last_executed_action = 0
+        self.action_history = []  # Clear action history list
+        self.last_features = {}  # Clear previous game features
+        self.frame_counter = 0  # Reset frame counter to zero
+        self.last_action = 0  # Reset last action to NO_ACTION
+        self.last_reasoning = "Reset state"  # Reset reasoning to initial state
+        self.action_repeat_count = 0  # Reset action repeat counter
+        self.last_distance = 0  # Reset last distance measurement
+        self.action_cooldown = 0  # Reset action cooldown timer
+        self.last_executed_action = 0  # Reset last executed action
 
 
 # Test script
-if __name__ == "__main__":
-    print("🥊 Testing Qwen Street Fighter Agent")
+if __name__ == "__main__":  # Check if script is run directly
+    print("🥊 Testing Qwen Street Fighter Agent")  # Print test header
     
     # Create mock info for testing
-    mock_info = {
-        "agent_hp": 150,
-        "agent_x": 200, 
-        "agent_y": 100,
-        "enemy_hp": 120,
-        "enemy_x": 300,
-        "enemy_y": 100,
-        "agent_status": 0,
-        "enemy_status": 5
+    mock_info = {  # Dictionary with mock game state data
+        "agent_hp": 150,  # Mock agent health points
+        "agent_x": 200,  # Mock agent x-coordinate
+        "agent_y": 100,  # Mock agent y-coordinate
+        "enemy_hp": 120,  # Mock enemy health points
+        "enemy_x": 300,  # Mock enemy x-coordinate
+        "enemy_y": 100,  # Mock enemy y-coordinate
+        "agent_status": 0,  # Mock agent animation status
+        "enemy_status": 5  # Mock enemy animation status
     }
     
-    try:
+    try:  # Try to run test with error handling
         # Create agent (will download model if needed)
-        agent = QwenStreetFighterAgent()
+        agent = QwenStreetFighterAgent()  # Initialize agent with default model path
         
         # Test action selection with dummy frame
-        dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)
-        action, reasoning = agent.get_action(dummy_frame, mock_info, verbose=True)
+        dummy_frame = np.zeros((224, 320, 3), dtype=np.uint8)  # Create black RGB frame
+        action, reasoning = agent.get_action(dummy_frame, mock_info, verbose=True)  # Test action selection
         
-        print(f"\n✅ Test completed! Chosen action: {action}")
+        print(f"\n✅ Test completed! Chosen action: {action}")  # Print successful test result
         
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
-        print("Note: You'll need to download Qwen weights separately")
+    except Exception as e:  # Catch any exceptions
+        print(f"❌ Test failed: {e}")  # Print error message
+        print("Note: You'll need to download Qwen weights separately")  # Print note about model requirements
