@@ -95,6 +95,31 @@ class QwenStreetFighterAgent:
         
         self.num_actions = len(self.action_meanings)
         
+        # Action timing - frames each action takes to complete
+        self.action_frames = {
+            0: 1,    # NO_ACTION - instant
+            1: 3,    # UP - short jump startup
+            2: 3,    # DOWN - crouch
+            3: 2,    # LEFT - walk
+            6: 2,    # RIGHT - walk
+            7: 5,    # UP_RIGHT - jump
+            4: 5,    # UP_LEFT - jump
+            5: 4,    # DOWN_LEFT - crouch walk
+            8: 4,    # DOWN_RIGHT - crouch walk
+            9: 8,    # LIGHT_PUNCH - fast attack
+            13: 12,  # MEDIUM_PUNCH - medium attack
+            17: 18,  # HEAVY_PUNCH - slow heavy attack
+            21: 10,  # LIGHT_KICK - fast kick
+            26: 15,  # MEDIUM_KICK - medium kick
+            32: 20,  # HEAVY_KICK - slow heavy kick
+            38: 25,  # HADOKEN_RIGHT - fireball animation
+            39: 22,  # DRAGON_PUNCH_RIGHT - uppercut animation
+            40: 18,  # HURRICANE_KICK_RIGHT - spinning kick
+            41: 25,  # HADOKEN_LEFT - fireball animation
+            42: 22,  # DRAGON_PUNCH_LEFT - uppercut animation  
+            43: 18,  # HURRICANE_KICK_LEFT - spinning kick
+        }
+        
         # Game state tracking
         self.action_history = []
         self.last_features = {}
@@ -103,6 +128,8 @@ class QwenStreetFighterAgent:
         self.last_reasoning = "Initial state"
         self.action_repeat_count = 0
         self.last_distance = 0
+        self.action_cooldown = 0
+        self.last_executed_action = 0
         
     def extract_game_features(self, info: Dict) -> Dict:
         """
@@ -328,9 +355,18 @@ Action:"""
         hp_advantage = features['hp_advantage']
         facing = features['facing']
         
+        # Decrement action cooldown
+        if self.action_cooldown > 0:
+            self.action_cooldown -= 1
+            # Still in cooldown - return NO_ACTION or continue previous action
+            if self.action_cooldown > 0:
+                action = 0  # NO_ACTION - wait for animation to finish
+                reasoning = f"waiting for {self.action_meanings[self.last_executed_action]} to complete ({self.action_cooldown} frames left)"
+                return action, reasoning
+        
         # Force action variety if stuck repeating same action
         force_movement = False
-        if self.action_repeat_count > 5:  # More than 5 frames of same action
+        if self.action_repeat_count > 3:  # Reduced from 5 since we have timing now
             force_movement = True
             
         # Check if distance hasn't changed (stuck position)  
@@ -352,8 +388,15 @@ Action:"""
         if "red_flash" in visual_context:
             base_reasoning += "Hit detected - "
         
+        # Force movement if stuck
+        if force_movement:
+            import random
+            movement_actions = [3, 6, 1, 2]  # LEFT, RIGHT, UP, DOWN
+            action = random.choice(movement_actions)
+            reasoning = base_reasoning + f"breaking pattern, forced movement (repeated {self.action_repeat_count}x)"
+            
         # React to visual cues first
-        if "blue_projectile" in visual_context and distance > 100:
+        elif "blue_projectile" in visual_context and distance > 100:
             # Enemy projectile detected - dodge or counter
             action = 1  # UP (jump to avoid)
             reasoning = base_reasoning + "jumping to avoid projectile"
@@ -407,18 +450,25 @@ Action:"""
                     reasoning = base_reasoning + "winning big, moving in for pressure"
                     
         elif distance < 50:
-            # Very close range - combo time
-            action = 9  # LIGHT_PUNCH
-            reasoning = base_reasoning + "very close range, light attack to start combo"
+            # Very close range - combo sequences
+            import random
+            combo_actions = [9, 13, 17, 21, 26]  # Mix of punches and kicks
+            action = random.choice(combo_actions)
+            reasoning = base_reasoning + "very close range, combo attack"
             
         elif distance < 100:
-            # Close range - heavy attacks and specials
-            if facing == "right":
-                action = 39  # DRAGON_PUNCH_RIGHT
-                reasoning = base_reasoning + "close range, dragon punch for damage"
+            # Close range - mix of attacks and movement
+            import random
+            close_actions = [17, 32, 39, 42, 40, 43, 6, 3]  # Heavy attacks, specials, movement
+            action = random.choice(close_actions)
+            if action in [6, 3]:
+                reasoning = base_reasoning + "close range, repositioning"
+            elif action in [39, 42]:
+                reasoning = base_reasoning + "close range, dragon punch"
+            elif action in [40, 43]:
+                reasoning = base_reasoning + "close range, hurricane kick"
             else:
-                action = 42  # DRAGON_PUNCH_LEFT
-                reasoning = base_reasoning + "close range, dragon punch for damage"
+                reasoning = base_reasoning + "close range, heavy attack"
                 
         elif distance < 180:
             # Medium range - control space
@@ -437,6 +487,16 @@ Action:"""
                 action = 3  # LEFT
                 reasoning = base_reasoning + "long range, moving forward to engage"
         
+        # Set action cooldown based on selected action
+        self.action_cooldown = self.action_frames.get(action, 5)  # Default 5 frames if not found
+        self.last_executed_action = action
+        
+        # Track action repeats for next frame
+        if action == self.last_action:
+            self.action_repeat_count += 1
+        else:
+            self.action_repeat_count = 0
+            
         return action, reasoning
     
     def parse_action_from_response(self, response: str) -> int:
@@ -531,6 +591,10 @@ Action:"""
         self.frame_counter = 0
         self.last_action = 0
         self.last_reasoning = "Reset state"
+        self.action_repeat_count = 0
+        self.last_distance = 0
+        self.action_cooldown = 0
+        self.last_executed_action = 0
 
 
 # Test script
