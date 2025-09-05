@@ -294,9 +294,9 @@ Action:"""  # Create formatted prompt string with game state and action options
             response = response.split("Action:")[-1].strip()  # Extract text after Action: marker
         return response.strip()  # Return cleaned response
     
-    def analyze_frame_context(self, image: Image.Image, features: Dict) -> str:  # Method to analyze visual frame context
+    def analyze_frame_context(self, image: Image.Image, features: Dict) -> str:  # Method to analyze visual frame context with OpenCV
         """
-        Analyze the visual frame for additional context
+        Analyze the visual frame for additional context using OpenCV computer vision
         
         Args:
             image: Game frame as PIL Image
@@ -306,6 +306,7 @@ Action:"""  # Create formatted prompt string with game state and action options
             Additional context from visual analysis
         """
         import numpy as np  # Import numpy for array operations
+        import cv2  # Import OpenCV for computer vision
         
         # Convert PIL image to numpy for analysis
         frame = np.array(image)  # Convert PIL Image to numpy array
@@ -313,35 +314,104 @@ Action:"""  # Create formatted prompt string with game state and action options
         # Analyze frame characteristics
         context = []  # Initialize empty list for context markers
         
-        # Check frame brightness (could indicate special effects, fireballs, etc.)
+        # BASIC ANALYSIS (keep existing for compatibility)
         brightness = np.mean(frame)  # Calculate average brightness across all pixels
         if brightness > 140:  # Check if frame is very bright
             context.append("bright_flash")  # Indicates special moves or hits
         elif brightness < 80:  # Check if frame is dark
             context.append("dark_frame")    # Indicates normal game state
         
-        # Check for color patterns that might indicate projectiles or special states
-        # Look for blue tints (often fireballs) or red tints (often hits/damage)
-        blue_intensity = np.mean(frame[:, :, 2]) if len(frame.shape) == 3 else 0  # Calculate blue channel average
-        red_intensity = np.mean(frame[:, :, 0]) if len(frame.shape) == 3 else 0  # Calculate red channel average
-        
-        if blue_intensity > red_intensity + 20:  # Check if blue significantly dominates
-            context.append("blue_projectile")  # Likely indicates fireball projectile
-        elif red_intensity > blue_intensity + 20:  # Check if red significantly dominates
-            context.append("red_flash")       # Likely indicates hit or damage effect
-        
-        # Analyze frame regions for movement patterns
+        # ENHANCED OPENCV ANALYSIS
         if len(frame.shape) == 3:  # Check if frame has color channels
-            # Check left and right sides for character positions
-            left_activity = np.std(frame[:, :frame.shape[1]//3])  # Calculate left side pixel variation
-            right_activity = np.std(frame[:, 2*frame.shape[1]//3:])  # Calculate right side pixel variation
+            # Convert to different color spaces for better analysis
+            hsv_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)  # Convert to HSV for better color detection
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)  # Convert to grayscale for edge detection
             
-            if left_activity > right_activity * 1.5:  # Check if left side has more activity
+            # Edge detection for character and projectile detection
+            edges = cv2.Canny(gray_frame, 50, 150)  # Detect edges using Canny edge detector
+            edge_density = np.sum(edges > 0) / edges.size  # Calculate edge density
+            
+            if edge_density > 0.15:  # High edge density indicates action
+                context.append("high_action")  # Lots of movement/attacks happening
+            elif edge_density < 0.05:  # Low edge density indicates calm state
+                context.append("calm_state")  # Little movement
+            
+            # Detect blue objects (fireballs) using HSV color space
+            blue_mask = cv2.inRange(hsv_frame, np.array([100, 50, 50]), np.array([130, 255, 255]))  # Blue color range
+            blue_pixels = np.sum(blue_mask > 0)  # Count blue pixels
+            if blue_pixels > 500:  # Threshold for detecting significant blue objects
+                context.append("blue_projectile")  # Likely fireball detected
+            
+            # Detect red/orange flashes (hits, special effects)
+            red_mask = cv2.inRange(hsv_frame, np.array([0, 50, 50]), np.array([20, 255, 255]))  # Red color range
+            orange_mask = cv2.inRange(hsv_frame, np.array([10, 50, 50]), np.array([30, 255, 255]))  # Orange color range
+            hit_pixels = np.sum(red_mask > 0) + np.sum(orange_mask > 0)  # Count red/orange pixels
+            if hit_pixels > 800:  # Threshold for detecting hits/explosions
+                context.append("red_flash")  # Hit or explosion effect detected
+            
+            # Analyze motion using frame regions
+            height, width = frame.shape[:2]  # Get frame dimensions
+            left_region = gray_frame[:, :width//3]  # Left third of frame
+            right_region = gray_frame[:, 2*width//3:]  # Right third of frame
+            center_region = gray_frame[:, width//3:2*width//3]  # Center third of frame
+            
+            # Calculate activity levels using standard deviation
+            left_activity = np.std(left_region)  # Left side activity
+            right_activity = np.std(right_region)  # Right side activity
+            center_activity = np.std(center_region)  # Center activity
+            
+            # Determine where most action is happening
+            if center_activity > max(left_activity, right_activity) * 1.3:  # Center has most activity
+                context.append("center_action")  # Action in center of screen
+            elif left_activity > right_activity * 1.5:  # Left side more active
                 context.append("left_active")   # More visual activity on left side
-            elif right_activity > left_activity * 1.5:  # Check if right side has more activity
+            elif right_activity > left_activity * 1.5:  # Right side more active
                 context.append("right_active")  # More visual activity on right side
+            
+            # Detect character silhouettes using contour detection
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)  # Find contours
+            large_contours = [c for c in contours if cv2.contourArea(c) > 1000]  # Filter large contours (characters)
+            
+            if len(large_contours) >= 2:  # Two characters visible
+                context.append("both_visible")  # Both fighters clearly visible
+            elif len(large_contours) == 1:  # One character prominent
+                context.append("one_prominent")  # One fighter more visible
         
         return context  # Return list of visual context indicators
+    
+    def enhanced_decision_making(self, features: Dict, image: Image.Image, prompt: str) -> Tuple[int, str]:  # Enhanced AI decision making with OpenCV + SmolVLM
+        """
+        Enhanced decision making combining OpenCV analysis with SmolVLM reasoning
+        
+        Args:
+            features: Game state features
+            image: Current game frame for visual analysis  
+            prompt: Formatted prompt for SmolVLM
+            
+        Returns:
+            Tuple of (action_number, reasoning_text)
+        """
+        # Get enhanced visual context using OpenCV
+        visual_context = self.analyze_frame_context(image, features)  # Get visual cues from OpenCV analysis
+        
+        # Create enhanced prompt with visual context
+        enhanced_prompt = prompt + f"\n\nVisual Context: {', '.join(visual_context)}\n\nBased on the image and context, choose the best action number:"  # Add visual context to prompt
+        
+        # Use SmolVLM for actual vision-language reasoning
+        try:  # Try to get SmolVLM decision
+            vlm_response = self.query_smolvlm(image, enhanced_prompt)  # Get SmolVLM decision
+            action = self.parse_action_from_response(vlm_response)  # Parse action from response
+            reasoning = f"SmolVLM: {vlm_response} | Context: {', '.join(visual_context)}"  # Combine reasoning
+            
+            # Validate action and fall back to rule-based if needed
+            if 0 <= action < self.num_actions:  # Check if action is valid
+                return action, reasoning  # Return SmolVLM decision
+            else:  # If invalid action, fall back to rule-based
+                return self.strategic_decision_making(features, image)  # Fall back to rule-based
+                
+        except Exception as e:  # If SmolVLM fails, fall back to rule-based
+            print(f"⚠️ SmolVLM failed: {e}, falling back to rule-based")  # Print error message
+            return self.strategic_decision_making(features, image)  # Fall back to rule-based decision
     
     def strategic_decision_making(self, features: Dict, image: Image.Image) -> Tuple[int, str]:  # Main AI decision making method
         """
@@ -558,8 +628,8 @@ Action:"""  # Create formatted prompt string with game state and action options
             features = self.extract_game_features(info)
             prompt = self.create_hybrid_prompt(features)
             
-            # Intelligent rule-based reasoning system with frame analysis
-            action, response = self.strategic_decision_making(features, image)
+            # Enhanced decision making: OpenCV analysis + SmolVLM reasoning
+            action, response = self.enhanced_decision_making(features, image, prompt)
             
             # Cache the new decision
             self.last_action = action
