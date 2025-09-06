@@ -103,7 +103,7 @@ def test_qwen_simple():  # Function for simple agent testing
     obs, info = env.reset()  # Reset environment and get initial state
     
     # Create agent  
-    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main")  # Create agent with model path
+    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct")  # Create agent with 3B model
     
     # Test a few decisions
     for i in range(3):  # Loop through 3 test iterations
@@ -125,7 +125,7 @@ if __name__ == "__main__":  # Check if script is run directly
     import argparse  # Import argument parser module
     
     parser = argparse.ArgumentParser(description="Qwen Street Fighter Demo")  # Create argument parser
-    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main",  # Model path argument
+    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # 3B model path argument
                        help="SmolVLM model local path")  # Help text for model argument
     parser.add_argument("--episodes", type=int, default=3,  # Episodes count argument
                        help="Number of episodes to play")  # Help text for episodes argument

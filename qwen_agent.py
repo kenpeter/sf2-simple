@@ -68,19 +68,12 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             "📁 Step 2/2: Loading Qwen2.5-VL model from cache..."
         )  # Print loading status for model
 
-        # Configure INT4 quantization for maximum gaming speed
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,  # Enable 4-bit quantization for maximum speed
-            bnb_4bit_compute_dtype=torch.float16,  # Compute in float16
-            bnb_4bit_use_double_quant=True,  # Double quantization for better compression
-            bnb_4bit_quant_type="nf4",  # Use NormalFloat4 for better accuracy
-        )
-
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # Load the vision-language model
-            model_path,  # Model path
-            quantization_config=quantization_config,  # Use proper quantization config
-            device_map="auto",  # Automatically map model to available devices
-            local_files_only=True,  # Only use local cached files
+        # Load model without quantization for debugging vision capability
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model_path,
+            device_map="cuda",
+            torch_dtype=torch.float16,  # Use same dtype as working example
+            local_files_only=True,
         )
         print(
             f"✅ Qwen model loaded successfully on {self.device}"
@@ -330,29 +323,31 @@ Choose action number:"""  # Simplified prompt for faster processing
             }
         ]
 
-        # Create formatted text input
-        text_input = (
-            self.processor.apply_chat_template(  # Apply chat template formatting
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,  # Include generation prompt
-            )
+        # Simplified approach - directly process text and image like the working example
+        text_input = self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
         )
 
-        # Process the text and image to get tensors
-        vision_info = process_vision_info(messages)  # Process vision info
-        if len(vision_info) == 3:
-            image_inputs, video_inputs, _ = vision_info  # Handle 3-tuple return
+        # Debug the inputs being generated
+        inputs = self.processor(
+            text=text_input,
+            images=image,
+            return_tensors="pt"
+        )
+        
+        # DEBUG: Print what we're actually sending to the model
+        print(f"\n🔧 DEBUG INPUT PROCESSING:")
+        print(f"Text input length: {len(text_input)}")
+        print(f"Image type: {type(image)}")
+        print(f"Image size: {image.size}")
+        print(f"Input keys: {list(inputs.keys())}")
+        if 'pixel_values' in inputs:
+            print(f"✅ pixel_values shape: {inputs['pixel_values'].shape}")
         else:
-            image_inputs, video_inputs = vision_info  # Handle 2-tuple return
-
-        inputs = self.processor(  # Process inputs for model
-            text=[text_input],  # Formatted text input as list
-            images=image_inputs,  # Image input
-            videos=video_inputs,  # Video input (empty)
-            padding=True,  # Enable padding
-            return_tensors="pt",  # Return PyTorch tensors
-        )
+            print(f"❌ NO pixel_values in inputs!")
+        print(f"Text preview: {text_input[:200]}...")
 
         # Move tensors to device and filter out unsupported parameters
         inputs = {
@@ -365,7 +360,7 @@ Choose action number:"""  # Simplified prompt for faster processing
         with torch.no_grad():  # Disable gradient computation for inference
             outputs = self.model.generate(  # Generate response from model
                 **inputs,  # Pass all input tensors
-                max_new_tokens=2,  # Minimal tokens for gaming speed (just need action number)
+                max_new_tokens=100,  # More tokens for detailed debugging analysis
                 do_sample=False,  # Use greedy decoding (deterministic)
                 pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
                 num_beams=1,  # Single beam for maximum speed
@@ -383,386 +378,241 @@ Choose action number:"""  # Simplified prompt for faster processing
             ].strip()  # Extract text after Action: marker
         return response.strip()  # Return cleaned response
 
-    def analyze_frame_context(
-        self, image: Image.Image, features: Dict
-    ) -> str:  # Method to analyze visual frame context with OpenCV
+    def extract_game_state_from_vision(self, image: Image.Image) -> Dict:
         """
-        Analyze the visual frame for additional context using OpenCV computer vision
-
+        Extract detailed game state information using pure Qwen2.5-VL vision analysis
+        
         Args:
             image: Game frame as PIL Image
-            features: Game state features
-
+            
         Returns:
-            Additional context from visual analysis
+            Dictionary containing extracted game state information
         """
-        import numpy as np  # Import numpy for array operations
-        import cv2  # Import OpenCV for computer vision
+        # First check if frame has content, then analyze if it does
+        analysis_prompt = '''Describe this image briefly. What do you see? Is it mostly black/empty or does it contain game content?'''
+        
+        try:
+            # Get structured analysis from Qwen2.5-VL
+            response = self.query_qwen_vl(image, analysis_prompt)
+            
+            # LOG: Print what the model actually sees and understands
+            import time
+            timestamp = time.strftime("%H:%M:%S")
+            print(f"\n🔍 VISION MODEL ANALYSIS (Frame {self.frame_counter} at {timestamp}):")
+            print(f"PROMPT: {analysis_prompt}")
+            print(f"\n🤖 MODEL RESPONSE:")
+            print(f"{response}")
+            print("-" * 80)
+            
+            # Try to extract JSON from response
+            import json
+            import re
+            
+            # Look for JSON in the response
+            json_match = re.search(r'\{[^}]*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                try:
+                    game_state = json.loads(json_str)
+                    print(f"✅ PARSED JSON: {game_state}")
+                    return game_state
+                except json.JSONDecodeError as je:
+                    print(f"❌ JSON PARSE ERROR: {je}")
+                    pass
+            
+            # Fallback: basic state analysis
+            fallback_state = self._fallback_state_analysis(response)
+            print(f"🔄 FALLBACK STATE: {fallback_state}")
+            return fallback_state
+            
+        except Exception as e:
+            print(f"❌ VISION ANALYSIS ERROR: {e}")
+            default_state = self._default_game_state()
+            print(f"⚠️ DEFAULT STATE: {default_state}")
+            return default_state
+    
+    def _fallback_state_analysis(self, response: str) -> Dict:
+        """Fallback method to extract basic game state from text response"""
+        # Basic text parsing for key information
+        state = self._default_game_state()
+        
+        response_lower = response.lower()
+        
+        # Detect health mentions
+        if "low health" in response_lower or "critical" in response_lower:
+            state["action_context"]["recent_hit"] = True
+            
+        # Detect projectiles
+        if "fireball" in response_lower or "projectile" in response_lower:
+            state["game_elements"]["projectiles_present"] = True
+            
+        # Detect action intensity
+        if any(word in response_lower for word in ["intense", "combo", "attacking", "fighting"]):
+            state["action_context"]["intensity_level"] = "intense"
+        elif any(word in response_lower for word in ["calm", "neutral", "waiting"]):
+            state["action_context"]["intensity_level"] = "calm"
+        else:
+            state["action_context"]["intensity_level"] = "moderate"
+            
+        return state
+    
+    def _default_game_state(self) -> Dict:
+        """Default game state structure"""
+        return {
+            "characters": {
+                "player1": {
+                    "name": "unknown",
+                    "position": "left",
+                    "health_percentage": 50,
+                    "stance": "standing",
+                    "special_state": "normal"
+                },
+                "player2": {
+                    "name": "unknown",
+                    "position": "right", 
+                    "health_percentage": 50,
+                    "stance": "standing",
+                    "special_state": "normal"
+                }
+            },
+            "game_elements": {
+                "projectiles_present": False,
+                "projectile_locations": [],
+                "special_effects": [],
+                "round_timer": "unknown",
+                "distance_between_fighters": "medium"
+            },
+            "action_context": {
+                "intensity_level": "moderate",
+                "primary_action_area": "center",
+                "recent_hit": False,
+                "combo_in_progress": False
+            }
+        }
 
-        # Convert PIL image to numpy for analysis
-        frame = np.array(image)  # Convert PIL Image to numpy array
-
-        # Analyze frame characteristics
-        context = []  # Initialize empty list for context markers
-
-        # BASIC ANALYSIS (keep existing for compatibility)
-        brightness = np.mean(frame)  # Calculate average brightness across all pixels
-        if brightness > 140:  # Check if frame is very bright
-            context.append("bright_flash")  # Indicates special moves or hits
-        elif brightness < 80:  # Check if frame is dark
-            context.append("dark_frame")  # Indicates normal game state
-
-        # ENHANCED OPENCV ANALYSIS
-        if len(frame.shape) == 3:  # Check if frame has color channels
-            # Convert to different color spaces for better analysis
-            hsv_frame = cv2.cvtColor(
-                frame, cv2.COLOR_RGB2HSV
-            )  # Convert to HSV for better color detection
-            gray_frame = cv2.cvtColor(
-                frame, cv2.COLOR_RGB2GRAY
-            )  # Convert to grayscale for edge detection
-
-            # Edge detection for character and projectile detection
-            edges = cv2.Canny(
-                gray_frame, 50, 150
-            )  # Detect edges using Canny edge detector
-            edge_density = np.sum(edges > 0) / edges.size  # Calculate edge density
-
-            if edge_density > 0.15:  # High edge density indicates action
-                context.append("high_action")  # Lots of movement/attacks happening
-            elif edge_density < 0.05:  # Low edge density indicates calm state
-                context.append("calm_state")  # Little movement
-
-            # Detect blue objects (fireballs) using HSV color space
-            blue_mask = cv2.inRange(
-                hsv_frame, np.array([100, 50, 50]), np.array([130, 255, 255])
-            )  # Blue color range
-            blue_pixels = np.sum(blue_mask > 0)  # Count blue pixels
-            if blue_pixels > 500:  # Threshold for detecting significant blue objects
-                context.append("blue_projectile")  # Likely fireball detected
-
-            # Detect red/orange flashes (hits, special effects)
-            red_mask = cv2.inRange(
-                hsv_frame, np.array([0, 50, 50]), np.array([20, 255, 255])
-            )  # Red color range
-            orange_mask = cv2.inRange(
-                hsv_frame, np.array([10, 50, 50]), np.array([30, 255, 255])
-            )  # Orange color range
-            hit_pixels = np.sum(red_mask > 0) + np.sum(
-                orange_mask > 0
-            )  # Count red/orange pixels
-            if hit_pixels > 800:  # Threshold for detecting hits/explosions
-                context.append("red_flash")  # Hit or explosion effect detected
-
-            # Analyze motion using frame regions
-            height, width = frame.shape[:2]  # Get frame dimensions
-            left_region = gray_frame[:, : width // 3]  # Left third of frame
-            right_region = gray_frame[:, 2 * width // 3 :]  # Right third of frame
-            center_region = gray_frame[
-                :, width // 3 : 2 * width // 3
-            ]  # Center third of frame
-
-            # Calculate activity levels using standard deviation
-            left_activity = np.std(left_region)  # Left side activity
-            right_activity = np.std(right_region)  # Right side activity
-            center_activity = np.std(center_region)  # Center activity
-
-            # Determine where most action is happening
-            if (
-                center_activity > max(left_activity, right_activity) * 1.3
-            ):  # Center has most activity
-                context.append("center_action")  # Action in center of screen
-            elif left_activity > right_activity * 1.5:  # Left side more active
-                context.append("left_active")  # More visual activity on left side
-            elif right_activity > left_activity * 1.5:  # Right side more active
-                context.append("right_active")  # More visual activity on right side
-
-            # Detect character silhouettes using contour detection
-            contours, _ = cv2.findContours(
-                edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )  # Find contours
-            large_contours = [
-                c for c in contours if cv2.contourArea(c) > 1000
-            ]  # Filter large contours (characters)
-
-            if len(large_contours) >= 2:  # Two characters visible
-                context.append("both_visible")  # Both fighters clearly visible
-            elif len(large_contours) == 1:  # One character prominent
-                context.append("one_prominent")  # One fighter more visible
-
-        return context  # Return list of visual context indicators
-
-    def enhanced_decision_making(
+    def vision_based_decision_making(
         self, features: Dict, image: Image.Image, prompt: str
-    ) -> Tuple[int, str]:  # Enhanced AI decision making with OpenCV + Qwen2.5-VL
+    ) -> Tuple[int, str]:  # Pure vision-based AI decision making with Qwen2.5-VL
         """
-        Enhanced decision making combining OpenCV analysis with Qwen2.5-VL reasoning
+        Enhanced decision making using pure Qwen2.5-VL vision analysis
 
         Args:
-            features: Game state features
+            features: Game state features (legacy, for compatibility)
             image: Current game frame for visual analysis
-            prompt: Formatted prompt for Qwen2.5-VL
+            prompt: Base prompt for Qwen2.5-VL
 
         Returns:
             Tuple of (action_number, reasoning_text)
         """
-        # Get enhanced visual context using OpenCV
-        visual_context = self.analyze_frame_context(
-            image, features
-        )  # Get visual cues from OpenCV analysis
-
-        # Create enhanced prompt with visual context
-        enhanced_prompt = (
-            prompt
-            + f"\n\nVisual Context: {', '.join(visual_context)}\n\nBased on the image and context, choose the best action number:"
-        )  # Add visual context to prompt
-
-        # Use Qwen2.5-VL for actual vision-language reasoning - NO FALLBACK TO RULE-BASED
-        try:  # Try to get Qwen2.5-VL decision
-            vlm_response = self.query_qwen_vl(
-                image, enhanced_prompt
-            )  # Get Qwen2.5-VL decision
-            action = self.parse_action_from_response(
-                vlm_response
-            )  # Parse action from response
-            reasoning = f"Qwen2.5-VL: {vlm_response} | Context: {', '.join(visual_context)}"  # Combine reasoning
-
-            # Validate action - if invalid, use NO_ACTION instead of fallback
-            if 0 <= action < self.num_actions:  # Check if action is valid
-                return action, reasoning  # Return Qwen2.5-VL decision
-            else:  # If invalid action, use NO_ACTION
-                return (
-                    0,
-                    f"Qwen2.5-VL invalid action ({action}), using NO_ACTION | Context: {', '.join(visual_context)}",
-                )
-
-        except Exception as e:  # If Qwen2.5-VL fails, retry once then use NO_ACTION
-            print(f"⚠️ Qwen2.5-VL failed: {e}, retrying once...")  # Print error message
-            try:
-                # Retry with simpler prompt
-                simple_prompt = f"Ken HP: {features['agent_hp']} Enemy HP: {features['enemy_hp']} Distance: {features['distance']}\nChoose action number 0-43:"
-                vlm_response = self.query_qwen_vl(
-                    image, simple_prompt
-                )  # Retry with simple prompt
-                action = self.parse_action_from_response(vlm_response)
-                if 0 <= action < self.num_actions:
-                    return action, f"Qwen2.5-VL (retry): {vlm_response}"
-            except:
-                pass
-
-            # If all fails, use NO_ACTION but keep using vision model
-            return (
-                0,
-                f"Qwen2.5-VL error, using NO_ACTION | Context: {', '.join(visual_context)}",
-            )
-
-    def strategic_decision_making(
-        self, features: Dict, image: Image.Image
-    ) -> Tuple[int, str]:  # Main AI decision making method
-        """
-        Intelligent rule-based decision making with proper reasoning and frame analysis
-
-        Args:
-            features: Game state features
-            image: Current game frame for visual analysis
-
-        Returns:
-            Tuple of (action_number, reasoning_text)
-        """
-        distance = features["distance"]  # Get distance between characters
-        hp_advantage = features["hp_advantage"]  # Get health point advantage
-        facing = features["facing"]  # Get which direction agent should face
-
-        # Decrement action cooldown
-        if self.action_cooldown > 0:  # Check if still in animation cooldown
-            self.action_cooldown -= 1  # Decrease cooldown counter
-            # Still in cooldown - return NO_ACTION or continue previous action
-            if self.action_cooldown > 0:  # If still need to wait
-                action = 0  # NO_ACTION - wait for animation to finish
-                reasoning = f"waiting for {self.action_meanings[self.last_executed_action]} to complete ({self.action_cooldown} frames left)"  # Explain waiting
-                return action, reasoning  # Return wait action and reason
-
-        # Force action variety if stuck repeating same action
-        force_movement = False  # Initialize movement forcing flag
-        if self.action_repeat_count > 3:  # Check if repeating action too much
-            force_movement = True  # Force different action to avoid repetition
-
-        # Check if distance hasn't changed (stuck position)
-        distance_change = (
-            abs(distance - self.last_distance) if self.last_distance > 0 else 999
-        )  # Calculate position change
-        if (
-            distance_change < 10 and self.frame_counter > 20
-        ):  # Check if stuck in same position
-            force_movement = True  # Force movement to break out of stuck state
-
-        self.last_distance = distance  # Store current distance for next frame
-
-        # Analyze frame for visual context
-        visual_context = self.analyze_frame_context(
-            image, features
-        )  # Get visual cues from frame analysis
-
-        # Adjust strategy based on visual cues
-        base_reasoning = ""  # Initialize reasoning string
-        if "bright_flash" in visual_context:  # Check for bright flash indicator
-            base_reasoning += "Flash detected - "  # Add flash detection to reasoning
-        if "blue_projectile" in visual_context:  # Check for blue projectile indicator
-            base_reasoning += (
-                "Projectile seen - "  # Add projectile detection to reasoning
-            )
-        if "red_flash" in visual_context:  # Check for red flash indicator
-            base_reasoning += "Hit detected - "  # Add hit detection to reasoning
-
-        # Force movement if stuck
-        if force_movement:  # Check if need to force movement
-            import random  # Import random for action selection
-
-            movement_actions = [3, 6, 1, 2]  # LEFT, RIGHT, UP, DOWN movement actions
-            action = random.choice(movement_actions)  # Choose random movement action
-            reasoning = (
-                base_reasoning
-                + f"breaking pattern, forced movement (repeated {self.action_repeat_count}x)"
-            )  # Explain forced movement
-
-        # React to visual cues first
-        elif (
-            "blue_projectile" in visual_context and distance > 100
-        ):  # Check for distant projectile
-            # Enemy projectile detected - dodge or counter
-            action = 1  # UP (jump to avoid)
-            reasoning = (
-                base_reasoning + "jumping to avoid projectile"
-            )  # Explain jump action
-
-        elif (
-            "bright_flash" in visual_context and distance < 100
-        ):  # Check for close flash
-            # Special move or hit flash detected - be defensive
-            if facing == "right":  # Check facing direction
-                action = 42  # DRAGON_PUNCH_LEFT (away from enemy)
-                reasoning = (
-                    base_reasoning + "defensive dragon punch after flash"
-                )  # Explain defensive move
-            else:  # If facing left
-                action = 39  # DRAGON_PUNCH_RIGHT
-                reasoning = (
-                    base_reasoning + "defensive dragon punch after flash"
-                )  # Explain defensive move
-
-        elif "red_flash" in visual_context:  # Check for red flash (hit indicator)
-            # Hit detected - follow up or counter
-            if distance < 80:  # Check if close range
-                action = 17  # HEAVY_PUNCH
-                reasoning = (
-                    base_reasoning + "following up after hit with heavy attack"
-                )  # Explain follow-up attack
-            else:  # If medium range
-                action = (
-                    40 if facing == "right" else 43
-                )  # HURRICANE_KICK based on facing
-                reasoning = (
-                    base_reasoning + "hurricane kick to capitalize on hit"
-                )  # Explain hurricane kick
-
-        # Standard strategic decisions based on game state
-        elif hp_advantage < -50:
-            # Losing badly - play defensively
-            if distance > 200:
-                if facing == "right":
-                    action = 38  # HADOKEN_RIGHT
-                    reasoning = (
-                        base_reasoning + "losing badly, keeping distance with fireball"
-                    )
+        # Extract detailed game state using pure vision
+        game_state = self.extract_game_state_from_vision(image)
+        
+        # Dynamic aggressive action selection with variety and combos
+        distance = game_state.get('game_elements', {}).get('distance_between_fighters', 'medium')
+        projectiles = game_state.get('game_elements', {}).get('projectiles_present', False)
+        my_health = game_state.get('characters', {}).get('player1', {}).get('health_percentage', 50)
+        enemy_health = game_state.get('characters', {}).get('player2', {}).get('health_percentage', 50)
+        
+        # Add frame-based variation to prevent loops
+        action_cycle = (self.frame_counter // 6) % 4  # Change strategy every 6 frames, 4 different patterns
+        
+        # LOG: Show what the vision system extracted
+        print(f"\n🎯 DECISION MAKING (Frame {self.frame_counter}):")
+        print(f"Distance: {distance}")
+        print(f"Projectiles: {projectiles}")
+        print(f"My Health: {my_health}%")
+        print(f"Enemy Health: {enemy_health}%")
+        print(f"Action Cycle: {action_cycle}")
+        
+        # More aggressive and varied action selection
+        if projectiles and distance == 'far':
+            # Multiple ways to handle projectiles
+            if action_cycle == 0:
+                action = 1  # JUMP over
+                reasoning = "Vision: Projectiles - jumping over"
+            elif action_cycle == 1:
+                action = 2  # DUCK under
+                reasoning = "Vision: Projectiles - ducking under"
+            elif action_cycle == 2:
+                action = 38  # Counter with hadoken
+                reasoning = "Vision: Projectiles - counter hadoken"
+            else:
+                action = 6  # Move forward aggressively
+                reasoning = "Vision: Projectiles - advancing through"
+                
+        elif distance == 'far':
+            # Long range - mix of approaches
+            if my_health < enemy_health:
+                # Behind in health - be aggressive
+                if action_cycle % 2 == 0:
+                    action = 6  # Move forward
+                    reasoning = "Vision: Far range, behind in health - advancing"
                 else:
-                    action = 41  # HADOKEN_LEFT
-                    reasoning = (
-                        base_reasoning + "losing badly, keeping distance with fireball"
-                    )
+                    action = 38  # Hadoken while advancing
+                    reasoning = "Vision: Far range, behind in health - hadoken pressure"
             else:
-                action = 42 if facing == "right" else 39  # DRAGON_PUNCH
-                reasoning = base_reasoning + "losing badly, defensive anti-air ready"
-
-        elif hp_advantage > 50:
-            # Winning - play aggressively
-            if distance < 60:
-                action = 17  # HEAVY_PUNCH
-                reasoning = base_reasoning + "winning big, close range heavy attack"
-            elif distance < 120:
-                action = 40 if facing == "right" else 43  # HURRICANE_KICK
-                reasoning = (
-                    base_reasoning + "winning big, aggressive hurricane kick pressure"
-                )
-            else:
-                if facing == "right":
-                    action = 6  # RIGHT
-                    reasoning = base_reasoning + "winning big, moving in for pressure"
+                # Ahead or even - control space
+                if action_cycle == 0:
+                    action = 38  # Hadoken
+                    reasoning = "Vision: Far range - space control hadoken"
+                elif action_cycle == 1:
+                    action = 6   # Move forward
+                    reasoning = "Vision: Far range - advancing"
+                elif action_cycle == 2:
+                    action = 1   # Jump forward
+                    reasoning = "Vision: Far range - jump approach"
                 else:
-                    action = 3  # LEFT
-                    reasoning = base_reasoning + "winning big, moving in for pressure"
-
-        elif distance < 50:
-            # Very close range - combo sequences
-            import random
-
-            combo_actions = [9, 13, 17, 21, 26]  # Mix of punches and kicks
-            action = random.choice(combo_actions)
-            reasoning = base_reasoning + "very close range, combo attack"
-
-        elif distance < 100:
-            # Close range - mix of attacks and movement
-            import random
-
-            close_actions = [
-                17,
-                32,
-                39,
-                42,
-                40,
-                43,
-                6,
-                3,
-            ]  # Heavy attacks, specials, movement
-            action = random.choice(close_actions)
-            if action in [6, 3]:
-                reasoning = base_reasoning + "close range, repositioning"
-            elif action in [39, 42]:
-                reasoning = base_reasoning + "close range, dragon punch"
-            elif action in [40, 43]:
-                reasoning = base_reasoning + "close range, hurricane kick"
+                    action = 17  # Heavy punch (for spacing)
+                    reasoning = "Vision: Far range - heavy spacing"
+                    
+        elif distance == 'close':
+            # Close range - combo sequences and mix-ups
+            if action_cycle == 0:
+                # Combo sequence 1: Heavy punch
+                action = 17  # HEAVY_PUNCH
+                reasoning = "Vision: Close range - heavy combo starter"
+            elif action_cycle == 1:
+                # Combo sequence 2: Dragon punch
+                action = 39  # DRAGON_PUNCH
+                reasoning = "Vision: Close range - anti-air dragon punch"
+            elif action_cycle == 2:
+                # Combo sequence 3: Hurricane kick
+                action = 40  # HURRICANE_KICK
+                reasoning = "Vision: Close range - hurricane kick pressure"
             else:
-                reasoning = base_reasoning + "close range, heavy attack"
-
-        elif distance < 180:
-            # Medium range - control space
-            if facing == "right":
-                action = 38  # HADOKEN_RIGHT
-                reasoning = base_reasoning + "medium range, fireball to control space"
+                # Combo sequence 4: Throw attempt
+                action = 21  # MEDIUM_KICK (closest to throw)
+                reasoning = "Vision: Close range - throw attempt"
+                
+        elif distance == 'medium':
+            # Medium range - varied approaches instead of just jumping
+            if action_cycle == 0:
+                action = 1   # JUMP attack
+                reasoning = "Vision: Medium range - jump attack vs M. Bison"
+            elif action_cycle == 1:
+                action = 38  # Hadoken
+                reasoning = "Vision: Medium range - hadoken pressure"
+            elif action_cycle == 2:
+                action = 6   # Move forward
+                reasoning = "Vision: Medium range - advancing"
             else:
-                action = 41  # HADOKEN_LEFT
-                reasoning = base_reasoning + "medium range, fireball to control space"
+                action = 17  # Heavy punch
+                reasoning = "Vision: Medium range - heavy poke"
         else:
-            # Long range - close the gap
-            if facing == "right":
-                action = 6  # RIGHT
-                reasoning = base_reasoning + "long range, moving forward to engage"
-            else:
-                action = 3  # LEFT
-                reasoning = base_reasoning + "long range, moving forward to engage"
-
-        # Set action cooldown based on selected action
-        self.action_cooldown = self.action_frames.get(
-            action, 5
-        )  # Default 5 frames if not found
-        self.last_executed_action = action
-
-        # Track action repeats for next frame
-        if action == self.last_action:
-            self.action_repeat_count += 1
-        else:
-            self.action_repeat_count = 0
-
+            # Fallback with more variety
+            import random
+            aggressive_actions = [6, 17, 38, 39, 40, 1, 21, 13]  # Mix of movement, attacks, specials
+            action = random.choice(aggressive_actions)
+            reasoning = f"Vision: Dynamic fallback - action {action}"
+        
+        # LOG: Final decision
+        action_name = self.action_meanings[action] if action < len(self.action_meanings) else 'UNKNOWN'
+        print(f"✅ FINAL DECISION: Action {action} ({action_name})")
+        print(f"Reasoning: {reasoning}")
+        print("=" * 60)
+        
         return action, reasoning
+
 
     def parse_action_from_response(self, response: str) -> int:
         """
@@ -803,7 +653,7 @@ Choose action number:"""  # Simplified prompt for faster processing
     ) -> Tuple[int, str]:
         """
         Get action decision from Qwen2.5-VL based on visual frame analysis
-        Processes every 3rd frame for optimal speed/accuracy balance
+        Processes every 30th frame to avoid black frames and ensure game stability
 
         Args:
             observation: Game frame (numpy array or PIL Image)
@@ -815,24 +665,24 @@ Choose action number:"""  # Simplified prompt for faster processing
         """
         self.frame_counter += 1
 
-        # Process every 3rd frame for optimal gaming speed/accuracy balance
+        # Process every 30th frame to give game plenty of time to initialize and render
         if (
-            self.frame_counter % 3 == 0 or self.frame_counter == 1
-        ):  # Process every 3rd frame
-            # SmolVLM analysis every 3rd frame
+            self.frame_counter % 30 == 0 or self.frame_counter == 60
+        ):  # Process every 30th frame, starting after initialization
+            # Vision analysis every 30th frame for better frame quality
             image = self.capture_game_frame(observation)
             features = self.extract_game_features(info)
             prompt = self.create_hybrid_prompt(features)
 
             # Enhanced decision making: OpenCV analysis + SmolVLM reasoning
-            action, response = self.enhanced_decision_making(features, image, prompt)
+            action, response = self.vision_based_decision_making(features, image, prompt)
 
             # Cache the new decision
             self.last_action = action
             self.last_reasoning = response
 
         else:
-            # Use cached action from last model inference (every 3rd frame caching)
+            # Use cached action from last model inference (every 30th frame caching)
             action = self.last_action
             response = self.last_reasoning + " (cached)"
 
