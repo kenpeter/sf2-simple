@@ -388,8 +388,27 @@ Choose action number:"""  # Simplified prompt for faster processing
         Returns:
             Dictionary containing extracted game state information
         """
-        # First check if frame has content, then analyze if it does
-        analysis_prompt = '''Describe this image briefly. What do you see? Is it mostly black/empty or does it contain game content?'''
+        # Enhanced prompt for M. Bison counter-tactics  
+        analysis_prompt = '''You are analyzing a Street Fighter 2 game frame vs M. BISON. Please provide ONLY the following information:
+
+HEALTH BARS: Look at the top of the screen. What percentage health does each player have? (0-100%)
+POSITIONS: Where is the left character and right character? (left-side, center, right-side)  
+DISTANCE: How far apart are the fighters? (close/medium/far)
+PROJECTILES: Are there any fireballs or projectiles visible? (yes/no)
+BISON MOVES: Is M. Bison doing any of these moves?
+- Psycho Crusher (blue energy, sliding across screen horizontally)
+- Scissor Kicks (jumping with spinning legs)
+- Head Stomp (jumping straight up/down)
+- Standing/walking normally
+
+Answer format:
+Player1 Health: X%
+Player2 Health: Y% 
+Player1 Position: [position]
+Player2 Position: [position]
+Distance: [close/medium/far]
+Projectiles: [yes/no]
+Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
         
         try:
             # Get structured analysis from Qwen2.5-VL
@@ -404,32 +423,50 @@ Choose action number:"""  # Simplified prompt for faster processing
             print(f"{response}")
             print("-" * 80)
             
-            # Try to extract JSON from response
-            import json
-            import re
-            
-            # Look for JSON in the response
-            json_match = re.search(r'\{[^}]*\}', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                try:
-                    game_state = json.loads(json_str)
-                    print(f"✅ PARSED JSON: {game_state}")
-                    return game_state
-                except json.JSONDecodeError as je:
-                    print(f"❌ JSON PARSE ERROR: {je}")
-                    pass
-            
-            # Fallback: basic state analysis
-            fallback_state = self._fallback_state_analysis(response)
-            print(f"🔄 FALLBACK STATE: {fallback_state}")
-            return fallback_state
+            # Parse structured response into game state
+            game_state = self._parse_structured_response(response)
+            print(f"✅ PARSED STATE: {game_state}")
+            return game_state
             
         except Exception as e:
             print(f"❌ VISION ANALYSIS ERROR: {e}")
             default_state = self._default_game_state()
             print(f"⚠️ DEFAULT STATE: {default_state}")
             return default_state
+    
+    def _parse_structured_response(self, response: str) -> Dict:
+        """Parse structured response into game state"""
+        import re
+        state = self._default_game_state()
+        
+        try:
+            # Extract health percentages
+            health_matches = re.findall(r'Player[12] Health:\s*(\d+)%', response, re.IGNORECASE)
+            if len(health_matches) >= 2:
+                state["characters"]["player1"]["health_percentage"] = int(health_matches[0])
+                state["characters"]["player2"]["health_percentage"] = int(health_matches[1])
+            
+            # Extract distance
+            distance_match = re.search(r'Distance:\s*(close|medium|far)', response, re.IGNORECASE)
+            if distance_match:
+                state["game_elements"]["distance_between_fighters"] = distance_match.group(1).lower()
+            
+            # Extract projectiles
+            projectile_match = re.search(r'Projectiles:\s*(yes|no)', response, re.IGNORECASE)
+            if projectile_match:
+                state["game_elements"]["projectiles_present"] = projectile_match.group(1).lower() == 'yes'
+            
+            # Extract Bison move (NEW!)
+            bison_move_match = re.search(r'Bison Move:\s*(psycho_crusher|scissor_kicks|head_stomp|normal)', response, re.IGNORECASE)
+            if bison_move_match:
+                state["enemy_action"] = bison_move_match.group(1).lower()
+            else:
+                state["enemy_action"] = "normal"
+                
+        except Exception as e:
+            print(f"⚠️ Parsing error: {e}")
+            
+        return state
     
     def _fallback_state_analysis(self, response: str) -> Dict:
         """Fallback method to extract basic game state from text response"""
@@ -507,103 +544,95 @@ Choose action number:"""  # Simplified prompt for faster processing
         # Extract detailed game state using pure vision
         game_state = self.extract_game_state_from_vision(image)
         
-        # Dynamic aggressive action selection with variety and combos
+        # Extract game state for anti-Bison strategy
         distance = game_state.get('game_elements', {}).get('distance_between_fighters', 'medium')
         projectiles = game_state.get('game_elements', {}).get('projectiles_present', False)
         my_health = game_state.get('characters', {}).get('player1', {}).get('health_percentage', 50)
         enemy_health = game_state.get('characters', {}).get('player2', {}).get('health_percentage', 50)
+        bison_move = game_state.get('enemy_action', 'normal')  # NEW: M. Bison's current move
         
         # Add frame-based variation to prevent loops
         action_cycle = (self.frame_counter // 6) % 4  # Change strategy every 6 frames, 4 different patterns
         
-        # LOG: Show what the vision system extracted
-        print(f"\n🎯 DECISION MAKING (Frame {self.frame_counter}):")
+        # LOG: Show what the vision system extracted including Bison moves
+        print(f"\n🎯 ANTI-BISON DECISION MAKING (Frame {self.frame_counter}):")
         print(f"Distance: {distance}")
         print(f"Projectiles: {projectiles}")
         print(f"My Health: {my_health}%")
         print(f"Enemy Health: {enemy_health}%")
+        print(f"🔴 BISON MOVE: {bison_move}")
         print(f"Action Cycle: {action_cycle}")
         
-        # More aggressive and varied action selection
-        if projectiles and distance == 'far':
-            # Multiple ways to handle projectiles
-            if action_cycle == 0:
-                action = 1  # JUMP over
-                reasoning = "Vision: Projectiles - jumping over"
-            elif action_cycle == 1:
-                action = 2  # DUCK under
-                reasoning = "Vision: Projectiles - ducking under"
-            elif action_cycle == 2:
-                action = 38  # Counter with hadoken
-                reasoning = "Vision: Projectiles - counter hadoken"
+        # PRIORITY 1: Counter Psycho Crusher spam!
+        if bison_move == 'psycho_crusher':
+            # M. Bison is doing Psycho Crusher - COUNTER IT!
+            if distance == 'close' or distance == 'medium':
+                action = 39  # DRAGON_PUNCH_RIGHT - beats Psycho Crusher on startup
+                reasoning = "🔥 COUNTERING PSYCHO CRUSHER with Dragon Punch!"
             else:
-                action = 6  # Move forward aggressively
-                reasoning = "Vision: Projectiles - advancing through"
+                action = 1   # JUMP - avoid Psycho Crusher
+                reasoning = "🔥 DODGING PSYCHO CRUSHER with jump!"
                 
-        elif distance == 'far':
-            # Long range - mix of approaches
-            if my_health < enemy_health:
-                # Behind in health - be aggressive
-                if action_cycle % 2 == 0:
-                    action = 6  # Move forward
-                    reasoning = "Vision: Far range, behind in health - advancing"
-                else:
-                    action = 38  # Hadoken while advancing
-                    reasoning = "Vision: Far range, behind in health - hadoken pressure"
+        elif bison_move == 'scissor_kicks':
+            # Counter Scissor Kicks
+            if distance == 'close':
+                action = 2   # DUCK - avoid high attack
+                reasoning = "🔥 DUCKING under Scissor Kicks!"
             else:
-                # Ahead or even - control space
-                if action_cycle == 0:
-                    action = 38  # Hadoken
-                    reasoning = "Vision: Far range - space control hadoken"
-                elif action_cycle == 1:
-                    action = 6   # Move forward
-                    reasoning = "Vision: Far range - advancing"
-                elif action_cycle == 2:
-                    action = 1   # Jump forward
-                    reasoning = "Vision: Far range - jump approach"
-                else:
-                    action = 17  # Heavy punch (for spacing)
-                    reasoning = "Vision: Far range - heavy spacing"
-                    
-        elif distance == 'close':
-            # Close range - combo sequences and mix-ups
-            if action_cycle == 0:
-                # Combo sequence 1: Heavy punch
-                action = 17  # HEAVY_PUNCH
-                reasoning = "Vision: Close range - heavy combo starter"
-            elif action_cycle == 1:
-                # Combo sequence 2: Dragon punch
-                action = 39  # DRAGON_PUNCH
-                reasoning = "Vision: Close range - anti-air dragon punch"
-            elif action_cycle == 2:
-                # Combo sequence 3: Hurricane kick
-                action = 40  # HURRICANE_KICK
-                reasoning = "Vision: Close range - hurricane kick pressure"
-            else:
-                # Combo sequence 4: Throw attempt
-                action = 21  # MEDIUM_KICK (closest to throw)
-                reasoning = "Vision: Close range - throw attempt"
+                action = 39  # Dragon punch as anti-air
+                reasoning = "🔥 Dragon Punch vs Scissor Kicks!"
                 
-        elif distance == 'medium':
-            # Medium range - varied approaches instead of just jumping
-            if action_cycle == 0:
-                action = 1   # JUMP attack
-                reasoning = "Vision: Medium range - jump attack vs M. Bison"
-            elif action_cycle == 1:
+        elif bison_move == 'head_stomp':
+            # Counter Head Stomp
+            action = 6   # Move away from stomp
+            reasoning = "🔥 MOVING away from Head Stomp!"
+            
+        # PRIORITY 2: Aggressive pressure when Bison is normal
+        elif bison_move == 'normal':
+            # M. Bison is in neutral - be aggressive!
+            if my_health < 30 and enemy_health > 50:
+                # Desperate situation - ultra aggressive
+                action = 39  # Dragon Punch
+                reasoning = "🔥 DESPERATE: Dragon Punch pressure (low HP vs healthy Bison)"
+            elif enemy_health < 30:
+                # Bison is low - finish him!
+                if distance == 'close':
+                    action = 17  # Heavy punch
+                    reasoning = "🔥 FINISHING MOVE: Heavy punch vs low HP Bison"
+                else:
+                    action = 38  # Hadoken for chip damage
+                    reasoning = "🔥 FINISHING MOVE: Hadoken for chip damage"
+            elif distance == 'far':
+                # Long range vs normal Bison - control space
                 action = 38  # Hadoken
-                reasoning = "Vision: Medium range - hadoken pressure"
-            elif action_cycle == 2:
-                action = 6   # Move forward
-                reasoning = "Vision: Medium range - advancing"
-            else:
-                action = 17  # Heavy punch
-                reasoning = "Vision: Medium range - heavy poke"
+                reasoning = "🔥 SPACE CONTROL: Hadoken vs neutral Bison"
+            elif distance == 'close':
+                # Close range vs normal Bison - pressure
+                if action_cycle == 0:
+                    action = 17  # Heavy punch
+                    reasoning = "🔥 CLOSE PRESSURE: Heavy punch vs neutral Bison"
+                elif action_cycle == 1:
+                    action = 21  # Throw attempt  
+                    reasoning = "🔥 CLOSE PRESSURE: Throw vs neutral Bison"
+                else:
+                    action = 39  # Dragon punch
+                    reasoning = "🔥 CLOSE PRESSURE: Dragon punch vs neutral Bison"
+            else:  # medium range
+                # Medium range vs normal Bison
+                if action_cycle == 0:
+                    action = 6   # Advance
+                    reasoning = "🔥 ADVANCE: Moving in vs neutral Bison"
+                elif action_cycle == 1:
+                    action = 38  # Hadoken
+                    reasoning = "🔥 PRESSURE: Hadoken vs neutral Bison"
+                else:
+                    action = 1   # Jump attack
+                    reasoning = "🔥 JUMP ATTACK: vs neutral Bison"
+        
+        # Fallback for unknown states
         else:
-            # Fallback with more variety
-            import random
-            aggressive_actions = [6, 17, 38, 39, 40, 1, 21, 13]  # Mix of movement, attacks, specials
-            action = random.choice(aggressive_actions)
-            reasoning = f"Vision: Dynamic fallback - action {action}"
+            action = 39  # Default Dragon Punch vs M. Bison
+            reasoning = f"🔥 UNKNOWN BISON STATE: Defensive Dragon Punch"
         
         # LOG: Final decision
         action_name = self.action_meanings[action] if action < len(self.action_meanings) else 'UNKNOWN'
