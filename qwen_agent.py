@@ -7,7 +7,8 @@ Works with existing wrapper.py without modifications
 # Import PyTorch for deep learning functionality
 import torch  
 # Import HuggingFace transformers for vision models
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+from qwen_vl_utils import process_vision_info
 # Import NumPy for numerical array operations
 import numpy as np  
 from PIL import Image  # Import PIL for image processing
@@ -21,32 +22,32 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     Uses existing wrapper.py environment without modifications
     """
 
-    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct", force_cpu: bool = False):  # Constructor method for agent initialization
+    def __init__(self, model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main"):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
         
         Args:
             model_path: Path to Qwen model (local or HuggingFace)
-            force_cpu: Force CPU usage even if CUDA is available
         """
         # Initialize Qwen model
         print(f"🤖 Loading Qwen model from: {model_path}")  # Print model loading status
-        self.device = "cpu" if (force_cpu or not torch.cuda.is_available()) else "cuda"  # Set device preference
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"  # Set device to GPU if available, else CPU
         
         # Load processor and model for vision
         print("📁 Step 1/2: Loading processor from cache...")  # Print loading status for processor
         self.processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)  # Load tokenizer and image processor
         
+        # Fix tokenizer configuration for CUDA compatibility
+        if self.processor.tokenizer.pad_token is None:
+            self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
+        
         # Load vision model from cache
         print("📁 Step 2/2: Loading Qwen2.5-VL model from cache...")  # Print loading status for model
-        self.model = AutoModelForVision2Seq.from_pretrained(  # Load the vision-language model
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(  # Load the vision-language model
             model_path,  # Model path
-            dtype=torch.float16,  # Use 16-bit precision for memory efficiency
-            device_map="cpu" if not torch.cuda.is_available() else "auto",  # Use CPU if CUDA unavailable
-            trust_remote_code=True,  # Allow custom code in model
+            torch_dtype=torch.float16,  # Use 16-bit precision for memory efficiency
+            device_map="auto",  # Automatically map model to available devices
             local_files_only=True,  # Only use local cached files
-            max_memory={0: "3GB"} if torch.cuda.is_available() else None,  # Reduce GPU memory usage to 3GB
-            torch_dtype=torch.float16  # Explicitly set torch dtype
         )
         print(f"✅ Qwen model loaded successfully on {self.device}")  # Print successful loading message
         
@@ -245,9 +246,9 @@ Action:"""  # Create formatted prompt string with game state and action options
 
         return prompt  # Return the formatted prompt string
     
-    def query_smolvlm(self, image: Image.Image, prompt: str) -> str:  # Method to query vision-language model
+    def query_qwen_vl(self, image: Image.Image, prompt: str) -> str:  # Method to query Qwen2.5-VL model
         """
-        Query SmolVLM model with image and prompt
+        Query Qwen2.5-VL model with image and prompt
         
         Args:
             image: Game frame as PIL Image
@@ -256,12 +257,12 @@ Action:"""  # Create formatted prompt string with game state and action options
         Returns:
             Model's response containing reasoning and action
         """
-        # Create messages for SmolVLM (Idefics3 format)
+        # Create messages for Qwen2.5-VL format
         messages = [  # Create message list in chat format
             {  # User message containing image and text
                 "role": "user",  # Set role as user
                 "content": [  # Content list with image and text
-                    {"type": "image"},  # Image component
+                    {"type": "image", "image": image},  # Image component
                     {"type": "text", "text": prompt}  # Text prompt component
                 ]
             }
@@ -269,54 +270,30 @@ Action:"""  # Create formatted prompt string with game state and action options
         
         # Create formatted text input
         text_input = self.processor.apply_chat_template(  # Apply chat template formatting
-            messages, images=[image], add_generation_prompt=True  # Include generation prompt
+            messages, tokenize=False, add_generation_prompt=True  # Include generation prompt
         )
         
         # Process the text and image to get tensors
+        image_inputs, video_inputs = process_vision_info(messages)  # Process vision info
         inputs = self.processor(  # Process inputs for model
-            text=text_input,  # Formatted text input
-            images=[image],  # Image input
+            text=[text_input],  # Formatted text input as list
+            images=image_inputs,  # Image input
+            videos=video_inputs,  # Video input (empty)
+            padding=True,  # Enable padding
             return_tensors="pt"  # Return PyTorch tensors
         )
         
-        # Safely move tensors to device with error handling
-        try:
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
-        except RuntimeError as e:
-            print(f"⚠️ Error moving tensors to device: {e}")
-            # Fallback to CPU if CUDA fails
-            self.device = "cpu"
-            self.model = self.model.to("cpu")
-            inputs = {k: v.to("cpu") for k, v in inputs.items()}
+        # Move tensors to device
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
         
         # Generate response with minimal tokens for speed
         with torch.no_grad():  # Disable gradient computation for inference
-            try:
-                outputs = self.model.generate(  # Generate response from model
-                    **inputs,  # Pass all input tensors
-                    max_new_tokens=8,   # Very short response for speed
-                    do_sample=False,    # Use greedy decoding (deterministic)
-                    pad_token_id=self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id,  # Set padding token with fallback
-                    eos_token_id=self.processor.tokenizer.eos_token_id,  # Explicit EOS token
-                )
-            except RuntimeError as cuda_error:
-                print(f"⚠️ CUDA error during generation: {cuda_error}")
-                # Move everything to CPU and retry
-                if self.device != "cpu":
-                    print("🔄 Falling back to CPU inference...")
-                    self.device = "cpu"
-                    self.model = self.model.to("cpu")
-                    inputs = {k: v.to("cpu") for k, v in inputs.items()}
-                    
-                    outputs = self.model.generate(  # Retry on CPU
-                        **inputs,
-                        max_new_tokens=8,
-                        do_sample=False,
-                        pad_token_id=self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id,
-                        eos_token_id=self.processor.tokenizer.eos_token_id,
-                    )
-                else:
-                    raise cuda_error  # Re-raise if already on CPU
+            outputs = self.model.generate(  # Generate response from model
+                **inputs,  # Pass all input tensors
+                max_new_tokens=8,   # Very short response for speed
+                do_sample=False,    # Use greedy decoding (deterministic)
+                pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
+            )
         
         # Decode response  
         response = self.processor.decode(outputs[0], skip_special_tokens=True)  # Decode tokens to text
@@ -410,14 +387,14 @@ Action:"""  # Create formatted prompt string with game state and action options
         
         return context  # Return list of visual context indicators
     
-    def enhanced_decision_making(self, features: Dict, image: Image.Image, prompt: str) -> Tuple[int, str]:  # Enhanced AI decision making with OpenCV + SmolVLM
+    def enhanced_decision_making(self, features: Dict, image: Image.Image, prompt: str) -> Tuple[int, str]:  # Enhanced AI decision making with OpenCV + Qwen2.5-VL
         """
-        Enhanced decision making combining OpenCV analysis with SmolVLM reasoning
+        Enhanced decision making combining OpenCV analysis with Qwen2.5-VL reasoning
         
         Args:
             features: Game state features
             image: Current game frame for visual analysis  
-            prompt: Formatted prompt for SmolVLM
+            prompt: Formatted prompt for Qwen2.5-VL
             
         Returns:
             Tuple of (action_number, reasoning_text)
@@ -428,20 +405,20 @@ Action:"""  # Create formatted prompt string with game state and action options
         # Create enhanced prompt with visual context
         enhanced_prompt = prompt + f"\n\nVisual Context: {', '.join(visual_context)}\n\nBased on the image and context, choose the best action number:"  # Add visual context to prompt
         
-        # Use SmolVLM for actual vision-language reasoning
-        try:  # Try to get SmolVLM decision
-            vlm_response = self.query_smolvlm(image, enhanced_prompt)  # Get SmolVLM decision
+        # Use Qwen2.5-VL for actual vision-language reasoning
+        try:  # Try to get Qwen2.5-VL decision
+            vlm_response = self.query_qwen_vl(image, enhanced_prompt)  # Get Qwen2.5-VL decision
             action = self.parse_action_from_response(vlm_response)  # Parse action from response
-            reasoning = f"SmolVLM: {vlm_response} | Context: {', '.join(visual_context)}"  # Combine reasoning
+            reasoning = f"Qwen2.5-VL: {vlm_response} | Context: {', '.join(visual_context)}"  # Combine reasoning
             
             # Validate action and fall back to rule-based if needed
             if 0 <= action < self.num_actions:  # Check if action is valid
-                return action, reasoning  # Return SmolVLM decision
+                return action, reasoning  # Return Qwen2.5-VL decision
             else:  # If invalid action, fall back to rule-based
                 return self.strategic_decision_making(features, image)  # Fall back to rule-based
                 
-        except Exception as e:  # If SmolVLM fails, fall back to rule-based
-            print(f"⚠️ SmolVLM failed: {e}, falling back to rule-based")  # Print error message
+        except Exception as e:  # If Qwen2.5-VL fails, fall back to rule-based
+            print(f"⚠️ Qwen2.5-VL failed: {e}, falling back to rule-based")  # Print error message
             return self.strategic_decision_making(features, image)  # Fall back to rule-based decision
     
     def strategic_decision_making(self, features: Dict, image: Image.Image) -> Tuple[int, str]:  # Main AI decision making method
@@ -681,7 +658,7 @@ Action:"""  # Create formatted prompt string with game state and action options
         
         if verbose:
             model_status = "NEW" if (self.frame_counter % 3 == 0 or self.frame_counter == 1) else "CACHED"
-            print(f"\n🧠 SmolVLM Decision ({model_status}):")
+            print(f"\n🧠 Qwen2.5-VL Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
             print(f"Reasoning: {response}")

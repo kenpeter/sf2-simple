@@ -79,6 +79,35 @@ __win rate at 63.2%__
 
 
 
+
+
+
+  # Create directory structure
+  mkdir -p ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main/
+  cd ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main/
+
+  # Download all files
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/.gitattributes
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/README.md
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/chat_template.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/config.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/generation_config.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/merges.txt
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model-00001-of-00005.safetensors
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model-00002-of-00005.safetensors
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model-00003-of-00005.safetensors
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model-00004-of-00005.safetensors
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model-00005-of-00005.safetensors
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/model.safetensors.index.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/preprocessor_config.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/tokenizer.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/tokenizer_config.json
+  wget https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/vocab.json
+
+
+
+
+
 python train.py --mode train --resume train/best_model_1420000.zip --total_timesteps 6000000
 
   ta.json 
