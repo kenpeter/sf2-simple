@@ -634,7 +634,7 @@ Choose action number:"""  # Simplified prompt for faster processing
     def get_action(self, observation, info: Dict, verbose: bool = False) -> Tuple[int, str]:
         """
         Get action decision from Qwen2.5-VL based on visual frame analysis
-        Processes every 5th frame for optimal speed/accuracy balance
+        Processes every 3rd frame for optimal speed/accuracy balance
         
         Args:
             observation: Game frame (numpy array or PIL Image)
@@ -646,8 +646,8 @@ Choose action number:"""  # Simplified prompt for faster processing
         """
         self.frame_counter += 1
         
-        # Process every 5th frame for optimal gaming speed/accuracy balance
-        if self.frame_counter % 5 == 0 or self.frame_counter == 1:  # Process every 5th frame
+        # Process every 3rd frame for optimal gaming speed/accuracy balance
+        if self.frame_counter % 3 == 0 or self.frame_counter == 1:  # Process every 3rd frame
             # SmolVLM analysis every 3rd frame
             image = self.capture_game_frame(observation)
             features = self.extract_game_features(info)
@@ -661,7 +661,7 @@ Choose action number:"""  # Simplified prompt for faster processing
             self.last_reasoning = response
             
         else:
-            # Use cached action from last model inference (every 5th frame caching)
+            # Use cached action from last model inference (every 3rd frame caching)
             action = self.last_action
             response = self.last_reasoning + " (cached)"
         
@@ -674,8 +674,8 @@ Choose action number:"""  # Simplified prompt for faster processing
             self.action_history = self.action_history[-20:]
         
         if verbose:
-            model_status = "NEW" if (self.frame_counter % 3 == 0 or self.frame_counter == 1) else "CACHED"
-            print(f"\n🧠 Qwen2.5-VL Decision ({model_status}):")
+            model_status = "NEW" if (self.frame_counter % 5 == 0 or self.frame_counter == 1) else "CACHED"
+            print(f"\n🚀 Qwen2.5-VL INT4 Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
             print(f"Reasoning: {response}")
