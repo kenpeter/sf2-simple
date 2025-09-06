@@ -9,7 +9,7 @@ from wrapper import make_env  # Import environment creation function from wrappe
 from qwen_agent import QwenStreetFighterAgent  # Import the Qwen AI agent class
 
 
-def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main",  # Function to demo Qwen agent gameplay
+def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # Function to demo Qwen agent gameplay
                        episodes: int = 3,  # Default number of episodes to play
                        render: bool = True,  # Default to render game visuals
                        verbose: bool = True):  # Default to verbose output
