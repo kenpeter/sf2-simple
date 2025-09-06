@@ -9,7 +9,7 @@ from wrapper import make_env  # Import environment creation function from wrappe
 from qwen_agent import QwenStreetFighterAgent  # Import the Qwen AI agent class
 
 
-def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct",  # Function to demo Qwen agent gameplay
+def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main",  # Function to demo Qwen agent gameplay
                        episodes: int = 3,  # Default number of episodes to play
                        render: bool = True,  # Default to render game visuals
                        verbose: bool = True):  # Default to verbose output
@@ -103,7 +103,7 @@ def test_qwen_simple():  # Function for simple agent testing
     obs, info = env.reset()  # Reset environment and get initial state
     
     # Create agent  
-    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct")  # Create agent with model path
+    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main")  # Create agent with model path
     
     # Test a few decisions
     for i in range(3):  # Loop through 3 test iterations
@@ -125,7 +125,7 @@ if __name__ == "__main__":  # Check if script is run directly
     import argparse  # Import argument parser module
     
     parser = argparse.ArgumentParser(description="Qwen Street Fighter Demo")  # Create argument parser
-    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/SmolVLM-Instruct",  # Model path argument
+    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main",  # Model path argument
                        help="SmolVLM model local path")  # Help text for model argument
     parser.add_argument("--episodes", type=int, default=3,  # Episodes count argument
                        help="Number of episodes to play")  # Help text for episodes argument

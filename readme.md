@@ -108,6 +108,38 @@ __win rate at 63.2%__
 
 
 
+
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model-00001-of-00002.safetensors \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model-00002-of-00002.safetensors \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model.safetensors.index.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/config.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/generation_config.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/preprocessor_config.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/tokenizer.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/vocab.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/tokenizer_config.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/merges.txt \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/chat_template.json \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/README.md \
+       https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/LICENSE
+
+
+
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model-00001-of-00002.safetensors
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model-00002-of-00002.safetensors
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/model.safetensors.index.json
+
+  
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/config.json
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/generation_config.json
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/preprocessor_config.json
+
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/tokenizer.json
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/vocab.json
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/tokenizer_config.json
+  https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/main/merges.txt
+
+
 python train.py --mode train --resume train/best_model_1420000.zip --total_timesteps 6000000
 
   ta.json 

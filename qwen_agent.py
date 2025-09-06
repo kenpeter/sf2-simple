@@ -6,8 +6,8 @@ Works with existing wrapper.py without modifications
 
 # Import PyTorch for deep learning functionality
 import torch  
-# Import HuggingFace transformers for vision models
-from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+# Import HuggingFace transformers for vision models  
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 from qwen_vl_utils import process_vision_info
 # Import NumPy for numerical array operations
 import numpy as np  
@@ -41,11 +41,20 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         if self.processor.tokenizer.pad_token is None:
             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         
-        # Load vision model from cache
+        # Load vision model from cache with INT8 quantization
         print("📁 Step 2/2: Loading Qwen2.5-VL model from cache...")  # Print loading status for model
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(  # Load the vision-language model
+        
+        # Configure INT4 quantization for maximum gaming speed
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,  # Enable 4-bit quantization for maximum speed
+            bnb_4bit_compute_dtype=torch.float16,  # Compute in float16
+            bnb_4bit_use_double_quant=True,  # Double quantization for better compression
+            bnb_4bit_quant_type="nf4",  # Use NormalFloat4 for better accuracy
+        )
+        
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # Load the vision-language model
             model_path,  # Model path
-            torch_dtype=torch.float16,  # Use 16-bit precision for memory efficiency
+            quantization_config=quantization_config,  # Use proper quantization config
             device_map="auto",  # Automatically map model to available devices
             local_files_only=True,  # Only use local cached files
         )
@@ -221,30 +230,20 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     
     def create_hybrid_prompt(self, features: Dict) -> str:  # Method to create prompt for vision model
         """
-        Create hybrid prompt combining visual frame analysis with game features
+        Create optimized prompt for fast gaming decisions
         
         Args:
             features: Game state features from ta.json
             
         Returns:
-            Formatted prompt for vision + data analysis
+            Optimized prompt for fast gaming response
         """
-        prompt = f"""Ken HP: {features['agent_hp']} Enemy HP: {features['enemy_hp']} Distance: {features['distance']} Facing: {features['facing']}
+        # Simplified prompt for faster inference
+        prompt = f"""HP: Ken {features['agent_hp']} vs Enemy {features['enemy_hp']} | Dist: {features['distance']}
+Actions: 0=WAIT 6=RIGHT 3=LEFT 9=PUNCH 38=FIREBALL 39=UPPERCUT
+Choose action number:"""  # Simplified prompt for faster processing
 
-STRATEGY:
-- Close range: Light attack then special move
-- Medium range: Hadoken fireballs  
-- Anti-air: Dragon Punch when enemy jumps
-- Pressure: Hurricane Kick
-
-ACTIONS:
-Move: 0=NONE 1=UP 2=DOWN 3=LEFT 6=RIGHT
-Attack: 9=L_PUNCH 13=M_PUNCH 17=H_PUNCH 21=L_KICK 26=M_KICK 32=H_KICK
-Special: 38=HADOKEN_R 39=DRAGON_PUNCH_R 40=HURRICANE_KICK_R 41=HADOKEN_L 42=DRAGON_PUNCH_L 43=HURRICANE_KICK_L
-
-Action:"""  # Create formatted prompt string with game state and action options
-
-        return prompt  # Return the formatted prompt string
+        return prompt  # Return the optimized prompt string
     
     def query_qwen_vl(self, image: Image.Image, prompt: str) -> str:  # Method to query Qwen2.5-VL model
         """
@@ -274,7 +273,12 @@ Action:"""  # Create formatted prompt string with game state and action options
         )
         
         # Process the text and image to get tensors
-        image_inputs, video_inputs = process_vision_info(messages)  # Process vision info
+        vision_info = process_vision_info(messages)  # Process vision info
+        if len(vision_info) == 3:
+            image_inputs, video_inputs, _ = vision_info  # Handle 3-tuple return
+        else:
+            image_inputs, video_inputs = vision_info  # Handle 2-tuple return
+            
         inputs = self.processor(  # Process inputs for model
             text=[text_input],  # Formatted text input as list
             images=image_inputs,  # Image input
@@ -283,16 +287,18 @@ Action:"""  # Create formatted prompt string with game state and action options
             return_tensors="pt"  # Return PyTorch tensors
         )
         
-        # Move tensors to device
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}  # Move tensors to correct device
+        # Move tensors to device and filter out unsupported parameters
+        inputs = {k: v.to(self.device) for k, v in inputs.items() if k != 'pixel_attention_mask'}  # Filter out pixel_attention_mask
         
-        # Generate response with minimal tokens for speed
+        # Generate response with maximum speed optimization
         with torch.no_grad():  # Disable gradient computation for inference
             outputs = self.model.generate(  # Generate response from model
                 **inputs,  # Pass all input tensors
-                max_new_tokens=8,   # Very short response for speed
+                max_new_tokens=2,   # Minimal tokens for gaming speed (just need action number)
                 do_sample=False,    # Use greedy decoding (deterministic)
                 pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
+                num_beams=1,  # Single beam for maximum speed
+                use_cache=True,  # Enable KV cache for speed
             )
         
         # Decode response  
@@ -405,21 +411,32 @@ Action:"""  # Create formatted prompt string with game state and action options
         # Create enhanced prompt with visual context
         enhanced_prompt = prompt + f"\n\nVisual Context: {', '.join(visual_context)}\n\nBased on the image and context, choose the best action number:"  # Add visual context to prompt
         
-        # Use Qwen2.5-VL for actual vision-language reasoning
+        # Use Qwen2.5-VL for actual vision-language reasoning - NO FALLBACK TO RULE-BASED
         try:  # Try to get Qwen2.5-VL decision
             vlm_response = self.query_qwen_vl(image, enhanced_prompt)  # Get Qwen2.5-VL decision
             action = self.parse_action_from_response(vlm_response)  # Parse action from response
             reasoning = f"Qwen2.5-VL: {vlm_response} | Context: {', '.join(visual_context)}"  # Combine reasoning
             
-            # Validate action and fall back to rule-based if needed
+            # Validate action - if invalid, use NO_ACTION instead of fallback
             if 0 <= action < self.num_actions:  # Check if action is valid
                 return action, reasoning  # Return Qwen2.5-VL decision
-            else:  # If invalid action, fall back to rule-based
-                return self.strategic_decision_making(features, image)  # Fall back to rule-based
+            else:  # If invalid action, use NO_ACTION
+                return 0, f"Qwen2.5-VL invalid action ({action}), using NO_ACTION | Context: {', '.join(visual_context)}"
                 
-        except Exception as e:  # If Qwen2.5-VL fails, fall back to rule-based
-            print(f"⚠️ Qwen2.5-VL failed: {e}, falling back to rule-based")  # Print error message
-            return self.strategic_decision_making(features, image)  # Fall back to rule-based decision
+        except Exception as e:  # If Qwen2.5-VL fails, retry once then use NO_ACTION
+            print(f"⚠️ Qwen2.5-VL failed: {e}, retrying once...")  # Print error message
+            try:
+                # Retry with simpler prompt
+                simple_prompt = f"Ken HP: {features['agent_hp']} Enemy HP: {features['enemy_hp']} Distance: {features['distance']}\nChoose action number 0-43:"
+                vlm_response = self.query_qwen_vl(image, simple_prompt)  # Retry with simple prompt
+                action = self.parse_action_from_response(vlm_response)
+                if 0 <= action < self.num_actions:
+                    return action, f"Qwen2.5-VL (retry): {vlm_response}"
+            except:
+                pass
+            
+            # If all fails, use NO_ACTION but keep using vision model
+            return 0, f"Qwen2.5-VL error, using NO_ACTION | Context: {', '.join(visual_context)}"
     
     def strategic_decision_making(self, features: Dict, image: Image.Image) -> Tuple[int, str]:  # Main AI decision making method
         """
@@ -617,7 +634,7 @@ Action:"""  # Create formatted prompt string with game state and action options
     def get_action(self, observation, info: Dict, verbose: bool = False) -> Tuple[int, str]:
         """
         Get action decision from Qwen2.5-VL based on visual frame analysis
-        Only processes frames every 3 frames to reduce computational load
+        Processes every 5th frame for optimal speed/accuracy balance
         
         Args:
             observation: Game frame (numpy array or PIL Image)
@@ -629,8 +646,8 @@ Action:"""  # Create formatted prompt string with game state and action options
         """
         self.frame_counter += 1
         
-        # Only process model every 3 frames (or first frame)
-        if self.frame_counter % 3 == 0 or self.frame_counter == 1:
+        # Process every 5th frame for optimal gaming speed/accuracy balance
+        if self.frame_counter % 5 == 0 or self.frame_counter == 1:  # Process every 5th frame
             # SmolVLM analysis every 3rd frame
             image = self.capture_game_frame(observation)
             features = self.extract_game_features(info)
@@ -644,7 +661,7 @@ Action:"""  # Create formatted prompt string with game state and action options
             self.last_reasoning = response
             
         else:
-            # Use cached action from last model inference
+            # Use cached action from last model inference (every 5th frame caching)
             action = self.last_action
             response = self.last_reasoning + " (cached)"
         
