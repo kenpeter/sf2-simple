@@ -180,10 +180,12 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.action_repeat_count = 0  # Count how many times same action repeated
         self.last_distance = 0  # Store previous distance between characters
         
-        # Timing control system
-        self.action_cooldown = 0  # Frames remaining until next action allowed
-        self.last_executed_action = 0  # Store the last action that was executed
-        self.frames_since_last_action = 0  # Track recovery timing
+        # action has cool down period
+        self.action_cooldown = 0
+        # remember last executed action
+        self.last_executed_action = 0
+
+        self.frames_since_last_action = 0
 
     def extract_game_features(
         self, info: Dict
@@ -630,7 +632,7 @@ YOUR RESPONSE MUST BE EXACTLY ONE ATTACK NUMBER: """
         self.frame_counter += 1
         self.frames_since_last_action += 1
         
-        # Update action cooldown
+        # the cool down reduced, so get ready for next action
         if self.action_cooldown > 0:
             self.action_cooldown -= 1
             
