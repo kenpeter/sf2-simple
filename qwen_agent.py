@@ -29,7 +29,6 @@ import math
 from collections import defaultdict
 
 
-
 class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     """
     Qwen-powered agent for Street Fighter 2
@@ -54,7 +53,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.device = (
             "cuda" if torch.cuda.is_available() else "cpu"
         )  # Set device to GPU if available, else CPU
-        
+
         # Multi-frame context for temporal understanding
         self.frame_history = []  # Store recent frames for temporal context
         self.max_history_frames = 3  # Keep last 3 frames for context
@@ -141,30 +140,30 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             self.action_meanings
         )  # Store total number of actions available
 
-        # Action timing - frames each action takes to complete
+        # Action timing - frames each action takes to complete (recovery frames)
         self.action_frames = (
-            {  # Dictionary mapping action IDs to animation frame durations
+            {  # Dictionary mapping action IDs to total recovery frame durations
                 0: 1,  # NO_ACTION - instant response
-                1: 3,  # UP - short jump startup frames
-                2: 3,  # DOWN - crouch animation frames
-                3: 2,  # LEFT - walk animation frames
-                6: 2,  # RIGHT - walk animation frames
-                7: 5,  # UP_RIGHT - jump animation frames
-                4: 5,  # UP_LEFT - jump animation frames
-                5: 4,  # DOWN_LEFT - crouch walk animation frames
-                8: 4,  # DOWN_RIGHT - crouch walk animation frames
-                9: 8,  # LIGHT_PUNCH - fast attack animation frames
-                13: 12,  # MEDIUM_PUNCH - medium attack animation frames
-                17: 18,  # HEAVY_PUNCH - slow heavy attack animation frames
-                21: 10,  # LIGHT_KICK - fast kick animation frames
-                26: 15,  # MEDIUM_KICK - medium kick animation frames
-                32: 20,  # HEAVY_KICK - slow heavy kick animation frames
-                38: 25,  # HADOKEN_RIGHT - fireball animation frames
-                39: 22,  # DRAGON_PUNCH_RIGHT - uppercut animation frames
-                40: 18,  # HURRICANE_KICK_RIGHT - spinning kick animation frames
-                41: 25,  # HADOKEN_LEFT - fireball animation frames
-                42: 22,  # DRAGON_PUNCH_LEFT - uppercut animation frames
-                43: 18,  # HURRICANE_KICK_LEFT - spinning kick animation frames
+                1: 15,  # UP - jump has long recovery frames
+                2: 5,  # DOWN - crouch animation frames  
+                3: 3,  # LEFT - walk animation frames
+                6: 3,  # RIGHT - walk animation frames
+                7: 20,  # UP_RIGHT - jump animation frames
+                4: 20,  # UP_LEFT - jump animation frames
+                5: 8,  # DOWN_LEFT - crouch walk animation frames
+                8: 8,  # DOWN_RIGHT - crouch walk animation frames
+                9: 12,  # LIGHT_PUNCH - fast attack but still has recovery
+                13: 18,  # MEDIUM_PUNCH - medium attack animation frames
+                17: 28,  # HEAVY_PUNCH - slow heavy attack with long recovery
+                21: 15,  # LIGHT_KICK - fast kick animation frames
+                26: 22,  # MEDIUM_KICK - medium kick animation frames
+                32: 30,  # HEAVY_KICK - slow heavy kick with long recovery
+                38: 35,  # HADOKEN_RIGHT - fireball has long startup + recovery
+                39: 32,  # DRAGON_PUNCH_RIGHT - uppercut long recovery if whiffs
+                40: 25,  # HURRICANE_KICK_RIGHT - spinning kick animation frames
+                41: 35,  # HADOKEN_LEFT - fireball animation frames
+                42: 32,  # DRAGON_PUNCH_LEFT - uppercut animation frames
+                43: 25,  # HURRICANE_KICK_LEFT - spinning kick animation frames
             }
         )
 
@@ -175,11 +174,16 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.last_action = 0  # Store the last action taken
         self.last_reasoning = "Initial state"  # Store reasoning for last decision
 
-        # Simple text-based action generation (no VLA complexity)
+        # Action variety system to prevent blocking
+        self.attack_cycle_index = 0  # Cycle through different attacks
+        self.aggressive_attacks = [17, 32, 38, 39, 13, 26, 9, 21]  # Heavy, medium, light attacks + specials
         self.action_repeat_count = 0  # Count how many times same action repeated
         self.last_distance = 0  # Store previous distance between characters
+        
+        # Timing control system
         self.action_cooldown = 0  # Frames remaining until next action allowed
         self.last_executed_action = 0  # Store the last action that was executed
+        self.frames_since_last_action = 0  # Track recovery timing
 
     def extract_game_features(
         self, info: Dict
@@ -208,6 +212,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             ),  # Get enemy health points, default 176
             "enemy_x": info.get("enemy_x", 0),  # Get enemy x-coordinate position
             "enemy_y": info.get("enemy_y", 0),  # Get enemy y-coordinate position
+            "enemy_status": info.get("enemy_status", 0),  # Get enemy animation status
             "enemy_victories": info.get("enemy_victories", 0),  # Get enemy wins count
             # Game status (from ta.json)
             "score": info.get("score", 0),  # Get current score
@@ -274,6 +279,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                     observation = observation[
                         :, :, :3
                     ]  # Remove alpha channel, keep RGB only
+
+                # pass obs to image obj's from array, to get image
                 image = Image.fromarray(observation)  # Convert numpy array to PIL Image
             elif len(observation.shape) == 2:  # Check for grayscale format
                 # Grayscale - convert to RGB
@@ -316,23 +323,23 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         )  # Positive = agent has more health
 
         # Determine positioning and health context
-        distance_text = "close" if features['distance'] < 60 else "far"
+        distance_text = "close" if features["distance"] < 60 else "far"
         position_context = ""
         if abs(x_diff) > 20:  # Significant horizontal difference
             position_context = "left" if x_diff < 0 else "right"
-        
+
         health_context = ""
         if abs(hp_diff) > 30:  # Significant health difference
             health_context = "winning" if hp_diff > 0 else "losing"
-        
+
         # Add temporal context from frame history
         history_context = ""
         if len(self.frame_history) > 1:
             prev_features = self.frame_history[-2]["features"]  # Previous frame
-            hp_change = features['agent_hp'] - prev_features['agent_hp']
-            enemy_hp_change = features['enemy_hp'] - prev_features['enemy_hp'] 
-            distance_change = features['distance'] - prev_features['distance']
-            
+            hp_change = features["agent_hp"] - prev_features["agent_hp"]
+            enemy_hp_change = features["enemy_hp"] - prev_features["enemy_hp"]
+            distance_change = features["distance"] - prev_features["distance"]
+
             history_context = f"""
 Previous Frame Context:
 HP Change: Agent {hp_change:+d}, Enemy {enemy_hp_change:+d}
@@ -340,64 +347,71 @@ Distance Change: {distance_change:+d}px ({'closer' if distance_change < 0 else '
 Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0 else 'Unknown'}"""
 
         # Determine health status clearly
-        agent_status = "CRITICAL" if features['agent_hp'] < 50 else "LOW" if features['agent_hp'] < 100 else "HEALTHY"
-        enemy_status = "CRITICAL" if features['enemy_hp'] < 50 else "LOW" if features['enemy_hp'] < 100 else "HEALTHY"
-        tactical_status = "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
+        agent_status = (
+            "CRITICAL"
+            if features["agent_hp"] < 50
+            else "LOW" if features["agent_hp"] < 100 else "HEALTHY"
+        )
+        enemy_status = (
+            "CRITICAL"
+            if features["enemy_hp"] < 50
+            else "LOW" if features["enemy_hp"] < 100 else "HEALTHY"
+        )
+        tactical_status = (
+            "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
+        )
 
-        # Determine tactical approach based on health
-        my_approach = "AGGRESSIVE" if agent_status == "HEALTHY" else "DEFENSIVE" if agent_status == "LOW" else "DESPERATE"
-        enemy_threat = "DANGEROUS" if enemy_status == "HEALTHY" else "VULNERABLE" if enemy_status == "LOW" else "CRITICAL"
-        
-        # Choose specific attack combinations based on situation
+        # Always prioritize aggressive approach - this is a fighting game!
+        my_approach = "ULTRA_AGGRESSIVE"  # Always be aggressive
+        enemy_threat = (
+            "TARGET"
+            if enemy_status == "HEALTHY"
+            else "WEAK_TARGET" if enemy_status == "LOW" else "FINISH_HIM"
+        )
+
+        # Ultra-aggressive combat strategy based on distance
         distance_strategy = ""
-        if features['distance'] < 40:  # Close range
-            if agent_status == "HEALTHY":
-                distance_strategy = "CLOSE COMBAT: Use heavy punches/kicks (17,32), throw combos!"
-            else:
-                distance_strategy = "CLOSE DANGER: Quick jabs (9,21) or retreat (3,6)"
-        elif features['distance'] < 80:  # Medium range  
-            if agent_status == "HEALTHY":
-                distance_strategy = "MEDIUM RANGE: Fireball pressure (38,41) or advance with attacks!"
-            else:
-                distance_strategy = "MEDIUM RANGE: Defensive fireballs or careful movement"
+        if features["distance"] < 40:  # Close range
+            distance_strategy = "CLOSE RANGE CARNAGE: HEAVY PUNCHES (17), HEAVY KICKS (32), COMBOS!"
+        elif features["distance"] < 80:  # Medium range  
+            distance_strategy = "MEDIUM RANGE ASSAULT: HADOKEN (38) + RUSH WITH ATTACKS!"
         else:  # Long range
-            distance_strategy = "LONG RANGE: Close distance with movement (3,6) or projectiles (38,41)"
+            distance_strategy = "LONG RANGE ATTACK: HADOKEN SPAM (38) OR RUSH FORWARD WITH RIGHT (6)!"
 
-        # Specific action recommendations based on health matchup
-        action_recommendations = ""
-        if agent_status == "HEALTHY" and enemy_status in ["VULNERABLE", "LOW"]:
-            action_recommendations = """
-🔥 ATTACK AGGRESSIVELY! Enemy is weak - finish them!
-PRIORITY ACTIONS: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 38=HADOKEN, 39=UPPERCUT
-COMBOS: Light→Medium→Heavy or Special moves!"""
-        elif agent_status == "HEALTHY" and enemy_status == "HEALTHY":
-            action_recommendations = """
-⚔️ BALANCED OFFENSE: Trade hits, pressure with variety
-MIX: 13=MED_PUNCH, 26=MED_KICK, 38=HADOKEN, movement"""
-        elif agent_status == "LOW" and enemy_status == "VULNERABLE":
-            action_recommendations = """
-🎯 CAREFUL STRIKES: Quick attacks, don't get hit!
-SAFE ATTACKS: 9=LIGHT_PUNCH, 21=LIGHT_KICK, 38=HADOKEN from distance"""
-        elif agent_status == "LOW":
-            action_recommendations = """
-🛡️ DEFENSIVE: Block and counter when safe
-DEFENSE: 0=NO_ACTION, 3=LEFT, 6=RIGHT, safe pokes only"""
+        # ULTRA AGGRESSIVE - let AI learn status patterns through observation
+        action_recommendations = """
+💀 ULTRA AGGRESSIVE MODE ACTIVATED! 💀
+🔥 PRIORITY ATTACKS: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 38=HADOKEN, 39=UPPERCUT!
+⚡ NO MERCY: Attack constantly! Mix heavy strikes with specials!
+🎯 COMBO TIME: Chain attacks together for maximum damage!
+🚀 MOVEMENT ONLY TO GET CLOSER TO ATTACK MORE!"""
+        
+        # Add raw status observations for learning
+        enemy_status = features.get("enemy_status", 0)
+        agent_status_val = features.get("agent_status", 0)
+        
+        action_recommendations += f"""
+
+📊 STATUS OBSERVATIONS:
+- MY Status: {agent_status_val} (learn what this means through play)
+- ENEMY Status: {enemy_status} (observe patterns - when vulnerable?)
+- Distance: {features['distance']}px (close<40, medium<80, far>80)
+- HP Difference: {hp_diff:+d} (positive=winning, negative=losing)
+
+🧠 LEARN PATTERNS: Different enemy status values may mean vulnerable states!"""
 
         prompt = f"""SF2 TACTICAL ANALYSIS:
 Distance: {features['distance']}px ({distance_text})
 Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
 MY Health: {features['agent_hp']} ({agent_status}) → {my_approach}
-ENEMY Health: {features['enemy_hp']} ({enemy_status}) → {enemy_threat}
+MY Status: {features['agent_status']} (animation state - observe patterns)
+ENEMY Health: {features['enemy_hp']} ({enemy_status}) → {enemy_threat}  
+ENEMY Status: {features['enemy_status']} (animation state - observe patterns)
 Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_context}
 
 {distance_strategy}
 
 BATTLE PLAN:{action_recommendations}
-
-EXECUTE STRATEGY:
-My Status: [{agent_status} - {my_approach.lower()}]
-Enemy Status: [{enemy_status} - {enemy_threat.lower()}]
-Action: [number]
 
 QUICK REFERENCE:
 MOVEMENT: 3=LEFT 6=RIGHT 1=JUMP 2=CROUCH
@@ -406,7 +420,24 @@ MEDIUM ATTACKS: 13=M_PUNCH 26=M_KICK (good damage)
 HEAVY ATTACKS: 17=H_PUNCH 32=H_KICK (high damage, risky)
 SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
 
-🥊 FIGHT SMART: HEALTHY=ATTACK, LOW=DEFEND, VULNERABLE ENEMY=PUNISH!"""
+🥊 FIGHT SMART: HEALTHY=ATTACK, LOW=DEFEND, VULNERABLE ENEMY=PUNISH!
+
+CRITICAL INSTRUCTION: YOU MUST RESPOND WITH ONLY A SINGLE NUMBER (0-43) FOR THE ACTION.
+DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE ACTION NUMBER.
+MIX UP YOUR ATTACKS - DON'T REPEAT THE SAME MOVE! VARIETY PREVENTS BLOCKING!
+
+ATTACK VARIETY EXAMPLES:
+- Close range: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 13=MEDIUM_PUNCH, 26=MEDIUM_KICK
+- Special moves: 38=HADOKEN, 39=UPPERCUT, 40=HURRICANE
+- Quick hits: 9=LIGHT_PUNCH, 21=LIGHT_KICK
+
+STATUS LEARNING:
+- Observe enemy status values and when they seem vulnerable
+- Try different attacks based on status patterns you notice
+- Learn through experience what each status number means
+- Focus on aggressive attacks while observing patterns
+
+YOUR RESPONSE MUST BE EXACTLY ONE ATTACK NUMBER: """
 
         return prompt
 
@@ -476,13 +507,13 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
         full_response = self.processor.decode(
             outputs[0], skip_special_tokens=True
         )  # Decode tokens to text
-        
+
         # Extract only the assistant's response (after the last "assistant" marker)
         if "assistant" in full_response:
             response = full_response.split("assistant")[-1].strip()
         else:
             response = full_response.strip()
-            
+
         print(f"\n🤖 FULL MODEL RESPONSE:\n{full_response}")
         print(f"\n📝 EXTRACTED RESPONSE: '{response}'")
         return response
@@ -495,12 +526,12 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
             response: Raw response from Qwen
 
         Returns:
-            Action number (0-43), defaults to 0 if parsing fails
+            Action number (0-43), defaults to intelligent fallback if parsing fails
         """
         try:
             # Clean the response - remove extra whitespace and newlines
             response = response.strip()
-            
+
             # Look for standalone numbers first (most direct answer)
             standalone_number = re.search(r"^\s*(\d+)\s*$", response, re.MULTILINE)
             if standalone_number:
@@ -508,9 +539,11 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
                 if 0 <= action < self.num_actions:
                     print(f"✅ FOUND STANDALONE ACTION: {action}")
                     return action
-            
+
             # Look for "Action: X" or "Action X" pattern
-            action_match = re.search(r"(?:Action:?\s*|^)(\d+)", response, re.IGNORECASE | re.MULTILINE)
+            action_match = re.search(
+                r"(?:Action:?\s*|^)(\d+)", response, re.IGNORECASE | re.MULTILINE
+            )
             if action_match:
                 action = int(action_match.group(1))
                 if 0 <= action < self.num_actions:
@@ -528,8 +561,52 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
                     print(f"✅ FOUND FIRST VALID NUMBER: {num}")
                     return num
 
-            print(f"⚠️ NO VALID ACTION FOUND, defaulting to 0")
-            return 0  # Default to no action
+            # If no numbers found, try to infer action from keywords
+            response_lower = response.lower()
+            
+            # Map keywords to actions - PRIORITIZE ATTACKS for aggressive play!
+            if "heavy attack" in response_lower or "heavy punch" in response_lower:
+                print(f"🔍 INFERRED FROM 'heavy attack': 17 (HEAVY_PUNCH)")
+                return 17  # HEAVY_PUNCH
+            elif "heavy kick" in response_lower:
+                print(f"🔍 INFERRED FROM 'heavy kick': 32 (HEAVY_KICK)")
+                return 32  # HEAVY_KICK
+            elif "hadoken" in response_lower or "fireball" in response_lower:
+                print(f"🔍 INFERRED FROM 'hadoken/fireball': 38 (HADOKEN_RIGHT)")
+                return 38  # HADOKEN_RIGHT
+            elif "uppercut" in response_lower or "dragon punch" in response_lower:
+                print(f"🔍 INFERRED FROM 'uppercut': 39 (DRAGON_PUNCH_RIGHT)")
+                return 39  # DRAGON_PUNCH_RIGHT
+            elif "medium punch" in response_lower or "med punch" in response_lower:
+                print(f"🔍 INFERRED FROM 'medium punch': 13 (MEDIUM_PUNCH)")
+                return 13  # MEDIUM_PUNCH
+            elif "medium kick" in response_lower or "med kick" in response_lower:
+                print(f"🔍 INFERRED FROM 'medium kick': 26 (MEDIUM_KICK)")
+                return 26  # MEDIUM_KICK
+            elif "light punch" in response_lower:
+                print(f"🔍 INFERRED FROM 'light punch': 9 (LIGHT_PUNCH)")
+                return 9  # LIGHT_PUNCH
+            elif "light kick" in response_lower:
+                print(f"🔍 INFERRED FROM 'light kick': 21 (LIGHT_KICK)")
+                return 21  # LIGHT_KICK
+            elif "jump" in response_lower:
+                print(f"🔍 INFERRED FROM 'jump': 1 (UP)")
+                return 1  # UP
+            elif "move right" in response_lower or "go right" in response_lower or "right" in response_lower:
+                print(f"🔍 INFERRED FROM 'move right': 6 (RIGHT)")
+                return 6  # RIGHT
+            elif "move left" in response_lower or "go left" in response_lower or "left" in response_lower:
+                print(f"🔍 INFERRED FROM 'move left': 3 (LEFT)")
+                return 3  # LEFT
+            elif "crouch" in response_lower or "duck" in response_lower:
+                print(f"🔍 INFERRED FROM 'crouch': 2 (DOWN)")
+                return 2  # DOWN
+            
+            # AGGRESSIVE FALLBACK - cycle through different attacks to prevent blocking!
+            fallback_action = self.aggressive_attacks[self.attack_cycle_index]
+            self.attack_cycle_index = (self.attack_cycle_index + 1) % len(self.aggressive_attacks)
+            print(f"⚠️ NO KEYWORDS FOUND - CYCLING ATTACK FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})")
+            return fallback_action
 
         except Exception as e:
             print(f"❌ Action parsing failed: {e}")
@@ -539,8 +616,8 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
         self, observation, info: Dict, verbose: bool = False
     ) -> Tuple[int, str]:
         """
-        Get action decision from Qwen2.5-VL using unified prompt system
-        Processes every 30th frame to avoid black frames and ensure game stability
+        Get action decision from Qwen2.5-VL with proper timing control
+        Respects attack recovery frames and cooldowns
 
         Args:
             observation: Game frame (numpy array or PIL Image)
@@ -551,15 +628,22 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
             Tuple of (action_number, reasoning_text)
         """
         self.frame_counter += 1
-
-        # Process every 30th frame to give game plenty of time to initialize and render
-        if (
-            self.frame_counter % 30 == 0 or self.frame_counter == 60
-        ):  # Process every 30th frame, starting after initialization
-            # Get game frame and features
-            image = self.capture_game_frame(observation)
-            features = self.extract_game_features(info)
+        self.frames_since_last_action += 1
+        
+        # Update action cooldown
+        if self.action_cooldown > 0:
+            self.action_cooldown -= 1
             
+        # Only allow new decisions when not in cooldown
+        action_allowed = (self.action_cooldown <= 0)
+        
+        # every 30 frames do the thinking, BUT only if action is allowed
+        if (self.frame_counter % 30 == 0 or self.frame_counter == 60) and action_allowed:
+            # from obs to img
+            image = self.capture_game_frame(observation)
+            # so we have all the hp feature
+            features = self.extract_game_features(info)
+
             # Update frame history for temporal context
             self.frame_history.append({"image": image, "features": features})
             if len(self.frame_history) > self.max_history_frames:
@@ -570,18 +654,41 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
 
             # Use simple text generation for action selection
             response = self.query_qwen_vl(image, prompt)
-            
+
             # Parse action number from model response
             action = self.parse_action_from_response(response)
+            
+            # Prevent repeating the same attack too many times (causes blocking)
+            if action == self.last_action:
+                self.action_repeat_count += 1
+                if self.action_repeat_count > 2:  # If repeating more than 2 times
+                    # Force a different attack from our aggressive cycle
+                    old_action = action
+                    action = self.aggressive_attacks[self.attack_cycle_index]
+                    self.attack_cycle_index = (self.attack_cycle_index + 1) % len(self.aggressive_attacks)
+                    print(f"🔄 BREAKING REPEAT: {old_action} → {action} ({self.action_meanings[action]})")
+                    self.action_repeat_count = 0
+            else:
+                self.action_repeat_count = 0
 
+            # Set cooldown based on action recovery frames
+            recovery_frames = self.action_frames.get(action, 10)
+            self.action_cooldown = recovery_frames
+            self.frames_since_last_action = 0
+            self.last_executed_action = action
+            
             # Cache the new decision
             self.last_action = action
             self.last_reasoning = response
 
-        else:
-            # Use cached action from last model inference (every 30th frame caching)
+        elif action_allowed:
+            # If we're allowed to act but not on a thinking frame, use cached action
             action = self.last_action
             response = self.last_reasoning
+        else:
+            # We're in cooldown - must wait, use NO_ACTION
+            action = 0  # NO_ACTION during recovery
+            response = f"RECOVERY FRAMES: {self.action_cooldown} remaining from {self.action_meanings[self.last_executed_action]}"
 
         # Update action history
         action_name = self.action_meanings[action]
@@ -594,13 +701,17 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
         if verbose:
             model_status = (
                 "NEW"
-                if (self.frame_counter % 30 == 0 or self.frame_counter == 60)
+                if (self.frame_counter % 30 == 0 or self.frame_counter == 60) and action_allowed
+                else "RECOVERY" if not action_allowed
                 else "CACHED"
             )
-            print(f"\n🚀 Qwen2.5-VL Unified Decision ({model_status}):")
+            print(f"\n🚀 Qwen2.5-VL Timing Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
-            print(f"Model Response: {response} {'(cached)' if model_status == 'CACHED' else ''}")
+            if not action_allowed:
+                print(f"⏳ Cooldown: {self.action_cooldown} frames from {self.action_meanings[self.last_executed_action]}")
+            else:
+                print(f"Model Response: {response} {'(cached)' if model_status == 'CACHED' else ''}")
 
         return action, response
 
@@ -610,11 +721,15 @@ SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
         self.last_features = {}  # Clear previous game features
         self.frame_counter = 0  # Reset frame counter to zero
         self.last_action = 0  # Reset last action to NO_ACTION
-        self.last_reasoning = "Initial state - match starting"  # Reset reasoning to initial state
+        self.last_reasoning = (
+            "Initial state - match starting"  # Reset reasoning to initial state
+        )
+        self.attack_cycle_index = 0  # Reset attack cycle
         self.action_repeat_count = 0  # Reset action repeat counter
         self.last_distance = 0  # Reset last distance measurement
         self.action_cooldown = 0  # Reset action cooldown timer
         self.last_executed_action = 0  # Reset last executed action
+        self.frames_since_last_action = 0  # Reset frame timing
 
 
 # Demo functions from demo_qwen.py
