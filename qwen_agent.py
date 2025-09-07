@@ -344,31 +344,69 @@ Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0
         enemy_status = "CRITICAL" if features['enemy_hp'] < 50 else "LOW" if features['enemy_hp'] < 100 else "HEALTHY"
         tactical_status = "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
 
-        prompt = f"""SF2 Frame Analysis:
+        # Determine tactical approach based on health
+        my_approach = "AGGRESSIVE" if agent_status == "HEALTHY" else "DEFENSIVE" if agent_status == "LOW" else "DESPERATE"
+        enemy_threat = "DANGEROUS" if enemy_status == "HEALTHY" else "VULNERABLE" if enemy_status == "LOW" else "CRITICAL"
+        
+        # Choose specific attack combinations based on situation
+        distance_strategy = ""
+        if features['distance'] < 40:  # Close range
+            if agent_status == "HEALTHY":
+                distance_strategy = "CLOSE COMBAT: Use heavy punches/kicks (17,32), throw combos!"
+            else:
+                distance_strategy = "CLOSE DANGER: Quick jabs (9,21) or retreat (3,6)"
+        elif features['distance'] < 80:  # Medium range  
+            if agent_status == "HEALTHY":
+                distance_strategy = "MEDIUM RANGE: Fireball pressure (38,41) or advance with attacks!"
+            else:
+                distance_strategy = "MEDIUM RANGE: Defensive fireballs or careful movement"
+        else:  # Long range
+            distance_strategy = "LONG RANGE: Close distance with movement (3,6) or projectiles (38,41)"
+
+        # Specific action recommendations based on health matchup
+        action_recommendations = ""
+        if agent_status == "HEALTHY" and enemy_status in ["VULNERABLE", "LOW"]:
+            action_recommendations = """
+🔥 ATTACK AGGRESSIVELY! Enemy is weak - finish them!
+PRIORITY ACTIONS: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 38=HADOKEN, 39=UPPERCUT
+COMBOS: Light→Medium→Heavy or Special moves!"""
+        elif agent_status == "HEALTHY" and enemy_status == "HEALTHY":
+            action_recommendations = """
+⚔️ BALANCED OFFENSE: Trade hits, pressure with variety
+MIX: 13=MED_PUNCH, 26=MED_KICK, 38=HADOKEN, movement"""
+        elif agent_status == "LOW" and enemy_status == "VULNERABLE":
+            action_recommendations = """
+🎯 CAREFUL STRIKES: Quick attacks, don't get hit!
+SAFE ATTACKS: 9=LIGHT_PUNCH, 21=LIGHT_KICK, 38=HADOKEN from distance"""
+        elif agent_status == "LOW":
+            action_recommendations = """
+🛡️ DEFENSIVE: Block and counter when safe
+DEFENSE: 0=NO_ACTION, 3=LEFT, 6=RIGHT, safe pokes only"""
+
+        prompt = f"""SF2 TACTICAL ANALYSIS:
 Distance: {features['distance']}px ({distance_text})
 Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
-MY Health: {features['agent_hp']} ({agent_status})
-ENEMY Health: {features['enemy_hp']} ({enemy_status})
-Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d})
-Facing: {"L" if features.get('agent_facing', 1) == -1 else "R"}{history_context}
+MY Health: {features['agent_hp']} ({agent_status}) → {my_approach}
+ENEMY Health: {features['enemy_hp']} ({enemy_status}) → {enemy_threat}
+Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_context}
 
-Think step-by-step:
-1. MY Status: Am I healthy/low/critical? Should I be aggressive or defensive?
-2. ENEMY Status: Is Bison healthy/low/critical? Is he vulnerable?
-3. Tactical Decision: Based on MY health, should I attack, defend, or retreat?
-4. Best Action: What specific move fits my current health situation?
+{distance_strategy}
 
-Respond format:
-My Status: [HEALTHY/LOW/CRITICAL - aggressive/defensive/retreat]
-Enemy Status: [HEALTHY/LOW/CRITICAL - threatening/vulnerable] 
-Tactic: [health-based strategy with reasoning]
+BATTLE PLAN:{action_recommendations}
+
+EXECUTE STRATEGY:
+My Status: [{agent_status} - {my_approach.lower()}]
+Enemy Status: [{enemy_status} - {enemy_threat.lower()}]
 Action: [number]
 
-DEFENSIVE: 0=BLOCK_L 1=BLOCK_R 4=LEFT(retreat) 5=RIGHT(retreat) 2=CROUCH
-AGGRESSIVE: 9=PUNCH_L 10=PUNCH_R 21=KICK_L 22=KICK_R 
-SPECIAL: 38=HADOKEN_L 41=HADOKEN_R 39=UPPERCUT_L 42=UPPERCUT_R 40=HURRICANE_L 43=HURRICANE_R
+QUICK REFERENCE:
+MOVEMENT: 3=LEFT 6=RIGHT 1=JUMP 2=CROUCH
+LIGHT ATTACKS: 9=L_PUNCH 21=L_KICK (fast, safe)  
+MEDIUM ATTACKS: 13=M_PUNCH 26=M_KICK (good damage)
+HEAVY ATTACKS: 17=H_PUNCH 32=H_KICK (high damage, risky)
+SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
 
-Choose based on MY health status!"""
+🥊 FIGHT SMART: HEALTHY=ATTACK, LOW=DEFEND, VULNERABLE ENEMY=PUNISH!"""
 
         return prompt
 
