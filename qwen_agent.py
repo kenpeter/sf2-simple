@@ -140,30 +140,30 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             self.action_meanings
         )  # Store total number of actions available
 
-        # Action timing - frames each action takes to complete (recovery frames)
+        # Action recovery frames based on actual SF2 Turbo frame data
         self.action_frames = (
-            {  # Dictionary mapping action IDs to total recovery frame durations
+            {  # Dictionary mapping action IDs to total animation durations (startup+active+recovery)
                 0: 1,  # NO_ACTION - instant response
-                1: 15,  # UP - jump has long recovery frames
-                2: 5,  # DOWN - crouch animation frames  
-                3: 3,  # LEFT - walk animation frames
-                6: 3,  # RIGHT - walk animation frames
-                7: 20,  # UP_RIGHT - jump animation frames
-                4: 20,  # UP_LEFT - jump animation frames
-                5: 8,  # DOWN_LEFT - crouch walk animation frames
-                8: 8,  # DOWN_RIGHT - crouch walk animation frames
-                9: 12,  # LIGHT_PUNCH - fast attack but still has recovery
-                13: 18,  # MEDIUM_PUNCH - medium attack animation frames
-                17: 28,  # HEAVY_PUNCH - slow heavy attack with long recovery
-                21: 15,  # LIGHT_KICK - fast kick animation frames
-                26: 22,  # MEDIUM_KICK - medium kick animation frames
-                32: 30,  # HEAVY_KICK - slow heavy kick with long recovery
-                38: 35,  # HADOKEN_RIGHT - fireball has long startup + recovery
-                39: 32,  # DRAGON_PUNCH_RIGHT - uppercut long recovery if whiffs
-                40: 25,  # HURRICANE_KICK_RIGHT - spinning kick animation frames
-                41: 35,  # HADOKEN_LEFT - fireball animation frames
-                42: 32,  # DRAGON_PUNCH_LEFT - uppercut animation frames
-                43: 25,  # HURRICANE_KICK_LEFT - spinning kick animation frames
+                1: 15,  # UP - jump has long recovery frames (estimated)
+                2: 5,  # DOWN - crouch animation frames (estimated)
+                3: 3,  # LEFT - walk animation frames (estimated)
+                6: 3,  # RIGHT - walk animation frames (estimated)
+                7: 20,  # UP_RIGHT - jump animation frames (estimated)
+                4: 20,  # UP_LEFT - jump animation frames (estimated)
+                5: 8,  # DOWN_LEFT - crouch walk animation frames (estimated)
+                8: 8,  # DOWN_RIGHT - crouch walk animation frames (estimated)
+                9: 11,  # LIGHT_PUNCH - Jab: 2+4+5=11 frames (SF2T data)
+                13: 9,  # MEDIUM_PUNCH - Strong: 1+2+6=9 frames (SF2T data)
+                17: 20,  # HEAVY_PUNCH - Fierce: estimated ~20 frames (conservative)
+                21: 12,  # LIGHT_KICK - Short kick: estimated similar to jab
+                26: 15,  # MEDIUM_KICK - Forward kick: estimated medium timing
+                32: 25,  # HEAVY_KICK - Roundhouse: estimated heavy timing
+                38: 51,  # HADOKEN_RIGHT - Jab Hadouken: 10+40+1=51 frames (SF2T data)
+                39: 34,  # DRAGON_PUNCH_RIGHT - Fierce Shoryuken: 4+4+26=34 frames (SF2T data)
+                40: 30,  # HURRICANE_KICK_RIGHT - Roundhouse Tatsumaki: 11+3+16=30 frames (SF2T data)
+                41: 51,  # HADOKEN_LEFT - Same as right hadouken
+                42: 34,  # DRAGON_PUNCH_LEFT - Same as right shoryuken
+                43: 30,  # HURRICANE_KICK_LEFT - Same as right tatsumaki
             }
         )
 
@@ -636,10 +636,10 @@ YOUR RESPONSE MUST BE EXACTLY ONE ATTACK NUMBER: """
         if self.action_cooldown > 0:
             self.action_cooldown -= 1
             
-        # Only allow new decisions when not in cooldown
+        # not in cool down, we can execute
         action_allowed = (self.action_cooldown <= 0)
         
-        # every 30 frames do the thinking, BUT only if action is allowed
+        # 30 frames or 1 sec, we can do
         if (self.frame_counter % 30 == 0 or self.frame_counter == 60) and action_allowed:
             # from obs to img
             image = self.capture_game_frame(observation)
