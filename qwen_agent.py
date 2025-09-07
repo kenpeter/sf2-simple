@@ -283,24 +283,46 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             # If already PIL Image, return as-is
             return observation  # Return observation unchanged
 
-    def create_hybrid_prompt(
+    def create_unified_prompt(
         self, features: Dict
-    ) -> str:  # Method to create prompt for vision model
+    ) -> str:  # Method to create single comprehensive prompt
         """
-        Create optimized prompt for fast gaming decisions
+        Create single unified prompt for both game analysis and action selection
 
         Args:
             features: Game state features from ta.json
 
         Returns:
-            Optimized prompt for fast gaming response
+            Comprehensive prompt for game state analysis and action decision
         """
-        # Simplified prompt for faster inference
-        prompt = f"""HP: Ken {features['agent_hp']} vs Enemy {features['enemy_hp']} | Dist: {features['distance']}
-Actions: 0=WAIT 6=RIGHT 3=LEFT 9=PUNCH 38=FIREBALL 39=UPPERCUT
-Choose action number:"""  # Simplified prompt for faster processing
+        # Calculate position and health differences
+        x_diff = (
+            features["agent_x"] - features["enemy_x"]
+        )  # Positive = agent is right of enemy
+        y_diff = (
+            features["agent_y"] - features["enemy_y"]
+        )  # Positive = agent is above enemy
+        hp_diff = (
+            features["agent_hp"] - features["enemy_hp"]
+        )  # Positive = agent has more health
 
-        return prompt  # Return the optimized prompt string
+        # Single comprehensive prompt - simplified and direct
+        prompt = f"""Street Fighter 2: Ken vs M. BISON
+
+STATE: HP Ken {features['agent_hp']}, Bison {features['enemy_hp']} (diff {hp_diff:+d})
+POSITION: X={x_diff:+d}, Y={y_diff:+d}, Dist={features['distance']}
+
+Look at the image and identify Bison's current move:
+- Psycho Crusher: blue energy sliding horizontally 
+- Scissor Kicks: jumping with spinning legs
+- Head Stomp: jumping up/down
+- Normal: standing/walking
+
+ACTIONS: 0=WAIT 1=UP 2=DOWN 3=LEFT 6=RIGHT 9=LIGHT_PUNCH 11=LEFT_PUNCH 12=RIGHT_PUNCH 21=LIGHT_KICK 23=LEFT_KICK 25=RIGHT_KICK 38=HADOKEN_RIGHT 41=HADOKEN_LEFT 39=DRAGON_PUNCH_RIGHT 42=DRAGON_PUNCH_LEFT 40=HURRICANE_KICK_RIGHT 43=HURRICANE_KICK_LEFT
+
+Choose best action number (0-43):"""
+
+        return prompt
 
     def query_qwen_vl(
         self, image: Image.Image, prompt: str
@@ -326,27 +348,21 @@ Choose action number:"""  # Simplified prompt for faster processing
             }
         ]
 
-        # Simplified approach - directly process text and image like the working example
+        # merge image and prompt and pass to vl model
         text_input = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
 
         # Debug the inputs being generated
-        inputs = self.processor(
-            text=text_input,
-            images=image,
-            return_tensors="pt"
-        )
-        
+        inputs = self.processor(text=text_input, images=image, return_tensors="pt")
+
         # DEBUG: Print what we're actually sending to the model
         print(f"\n🔧 DEBUG INPUT PROCESSING:")
         print(f"Text input length: {len(text_input)}")
         print(f"Image type: {type(image)}")
         print(f"Image size: {image.size}")
         print(f"Input keys: {list(inputs.keys())}")
-        if 'pixel_values' in inputs:
+        if "pixel_values" in inputs:
             print(f"✅ pixel_values shape: {inputs['pixel_values'].shape}")
         else:
             print(f"❌ NO pixel_values in inputs!")
@@ -371,280 +387,19 @@ Choose action number:"""  # Simplified prompt for faster processing
             )
 
         # Decode response
-        response = self.processor.decode(
+        full_response = self.processor.decode(
             outputs[0], skip_special_tokens=True
         )  # Decode tokens to text
-        # Extract just the action part after the prompt
-        if "Action:" in response:  # Check if Action: marker exists
-            response = response.split("Action:")[
-                -1
-            ].strip()  # Extract text after Action: marker
-        return response.strip()  # Return cleaned response
-
-    def extract_game_state_from_vision(self, image: Image.Image) -> Dict:
-        """
-        Extract detailed game state information using pure Qwen2.5-VL vision analysis
         
-        Args:
-            image: Game frame as PIL Image
-            
-        Returns:
-            Dictionary containing extracted game state information
-        """
-        # Enhanced prompt for M. Bison counter-tactics  
-        analysis_prompt = '''You are analyzing a Street Fighter 2 game frame vs M. BISON. Please provide ONLY the following information:
-
-HEALTH BARS: Look at the top of the screen. What percentage health does each player have? (0-100%)
-POSITIONS: Where is the left character and right character? (left-side, center, right-side)  
-DISTANCE: How far apart are the fighters? (close/medium/far)
-PROJECTILES: Are there any fireballs or projectiles visible? (yes/no)
-BISON MOVES: Is M. Bison doing any of these moves?
-- Psycho Crusher (blue energy, sliding across screen horizontally)
-- Scissor Kicks (jumping with spinning legs)
-- Head Stomp (jumping straight up/down)
-- Standing/walking normally
-
-Answer format:
-Player1 Health: X%
-Player2 Health: Y% 
-Player1 Position: [position]
-Player2 Position: [position]
-Distance: [close/medium/far]
-Projectiles: [yes/no]
-Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
-        
-        try:
-            # Get structured analysis from Qwen2.5-VL
-            response = self.query_qwen_vl(image, analysis_prompt)
-            
-            # LOG: Print what the model actually sees and understands
-            import time
-            timestamp = time.strftime("%H:%M:%S")
-            print(f"\n🔍 VISION MODEL ANALYSIS (Frame {self.frame_counter} at {timestamp}):")
-            print(f"PROMPT: {analysis_prompt}")
-            print(f"\n🤖 MODEL RESPONSE:")
-            print(f"{response}")
-            print("-" * 80)
-            
-            # Parse structured response into game state
-            game_state = self._parse_structured_response(response)
-            print(f"✅ PARSED STATE: {game_state}")
-            return game_state
-            
-        except Exception as e:
-            print(f"❌ VISION ANALYSIS ERROR: {e}")
-            default_state = self._default_game_state()
-            print(f"⚠️ DEFAULT STATE: {default_state}")
-            return default_state
-    
-    def _parse_structured_response(self, response: str) -> Dict:
-        """Parse structured response into game state"""
-        import re
-        state = self._default_game_state()
-        
-        try:
-            # Extract health percentages
-            health_matches = re.findall(r'Player[12] Health:\s*(\d+)%', response, re.IGNORECASE)
-            if len(health_matches) >= 2:
-                state["characters"]["player1"]["health_percentage"] = int(health_matches[0])
-                state["characters"]["player2"]["health_percentage"] = int(health_matches[1])
-            
-            # Extract distance
-            distance_match = re.search(r'Distance:\s*(close|medium|far)', response, re.IGNORECASE)
-            if distance_match:
-                state["game_elements"]["distance_between_fighters"] = distance_match.group(1).lower()
-            
-            # Extract projectiles
-            projectile_match = re.search(r'Projectiles:\s*(yes|no)', response, re.IGNORECASE)
-            if projectile_match:
-                state["game_elements"]["projectiles_present"] = projectile_match.group(1).lower() == 'yes'
-            
-            # Extract Bison move (NEW!)
-            bison_move_match = re.search(r'Bison Move:\s*(psycho_crusher|scissor_kicks|head_stomp|normal)', response, re.IGNORECASE)
-            if bison_move_match:
-                state["enemy_action"] = bison_move_match.group(1).lower()
-            else:
-                state["enemy_action"] = "normal"
-                
-        except Exception as e:
-            print(f"⚠️ Parsing error: {e}")
-            
-        return state
-    
-    def _fallback_state_analysis(self, response: str) -> Dict:
-        """Fallback method to extract basic game state from text response"""
-        # Basic text parsing for key information
-        state = self._default_game_state()
-        
-        response_lower = response.lower()
-        
-        # Detect health mentions
-        if "low health" in response_lower or "critical" in response_lower:
-            state["action_context"]["recent_hit"] = True
-            
-        # Detect projectiles
-        if "fireball" in response_lower or "projectile" in response_lower:
-            state["game_elements"]["projectiles_present"] = True
-            
-        # Detect action intensity
-        if any(word in response_lower for word in ["intense", "combo", "attacking", "fighting"]):
-            state["action_context"]["intensity_level"] = "intense"
-        elif any(word in response_lower for word in ["calm", "neutral", "waiting"]):
-            state["action_context"]["intensity_level"] = "calm"
+        # Extract only the assistant's response (after the last "assistant" marker)
+        if "assistant" in full_response:
+            response = full_response.split("assistant")[-1].strip()
         else:
-            state["action_context"]["intensity_level"] = "moderate"
+            response = full_response.strip()
             
-        return state
-    
-    def _default_game_state(self) -> Dict:
-        """Default game state structure"""
-        return {
-            "characters": {
-                "player1": {
-                    "name": "unknown",
-                    "position": "left",
-                    "health_percentage": 50,
-                    "stance": "standing",
-                    "special_state": "normal"
-                },
-                "player2": {
-                    "name": "unknown",
-                    "position": "right", 
-                    "health_percentage": 50,
-                    "stance": "standing",
-                    "special_state": "normal"
-                }
-            },
-            "game_elements": {
-                "projectiles_present": False,
-                "projectile_locations": [],
-                "special_effects": [],
-                "round_timer": "unknown",
-                "distance_between_fighters": "medium"
-            },
-            "action_context": {
-                "intensity_level": "moderate",
-                "primary_action_area": "center",
-                "recent_hit": False,
-                "combo_in_progress": False
-            }
-        }
-
-    def vision_based_decision_making(
-        self, features: Dict, image: Image.Image, prompt: str
-    ) -> Tuple[int, str]:  # Pure vision-based AI decision making with Qwen2.5-VL
-        """
-        Enhanced decision making using pure Qwen2.5-VL vision analysis
-
-        Args:
-            features: Game state features (legacy, for compatibility)
-            image: Current game frame for visual analysis
-            prompt: Base prompt for Qwen2.5-VL
-
-        Returns:
-            Tuple of (action_number, reasoning_text)
-        """
-        # Extract detailed game state using pure vision
-        game_state = self.extract_game_state_from_vision(image)
-        
-        # Extract game state for anti-Bison strategy
-        distance = game_state.get('game_elements', {}).get('distance_between_fighters', 'medium')
-        projectiles = game_state.get('game_elements', {}).get('projectiles_present', False)
-        my_health = game_state.get('characters', {}).get('player1', {}).get('health_percentage', 50)
-        enemy_health = game_state.get('characters', {}).get('player2', {}).get('health_percentage', 50)
-        bison_move = game_state.get('enemy_action', 'normal')  # NEW: M. Bison's current move
-        
-        # Add frame-based variation to prevent loops
-        action_cycle = (self.frame_counter // 6) % 4  # Change strategy every 6 frames, 4 different patterns
-        
-        # LOG: Show what the vision system extracted including Bison moves
-        print(f"\n🎯 ANTI-BISON DECISION MAKING (Frame {self.frame_counter}):")
-        print(f"Distance: {distance}")
-        print(f"Projectiles: {projectiles}")
-        print(f"My Health: {my_health}%")
-        print(f"Enemy Health: {enemy_health}%")
-        print(f"🔴 BISON MOVE: {bison_move}")
-        print(f"Action Cycle: {action_cycle}")
-        
-        # PRIORITY 1: Counter Psycho Crusher spam!
-        if bison_move == 'psycho_crusher':
-            # M. Bison is doing Psycho Crusher - COUNTER IT!
-            if distance == 'close' or distance == 'medium':
-                action = 39  # DRAGON_PUNCH_RIGHT - beats Psycho Crusher on startup
-                reasoning = "🔥 COUNTERING PSYCHO CRUSHER with Dragon Punch!"
-            else:
-                action = 1   # JUMP - avoid Psycho Crusher
-                reasoning = "🔥 DODGING PSYCHO CRUSHER with jump!"
-                
-        elif bison_move == 'scissor_kicks':
-            # Counter Scissor Kicks
-            if distance == 'close':
-                action = 2   # DUCK - avoid high attack
-                reasoning = "🔥 DUCKING under Scissor Kicks!"
-            else:
-                action = 39  # Dragon punch as anti-air
-                reasoning = "🔥 Dragon Punch vs Scissor Kicks!"
-                
-        elif bison_move == 'head_stomp':
-            # Counter Head Stomp
-            action = 6   # Move away from stomp
-            reasoning = "🔥 MOVING away from Head Stomp!"
-            
-        # PRIORITY 2: Aggressive pressure when Bison is normal
-        elif bison_move == 'normal':
-            # M. Bison is in neutral - be aggressive!
-            if my_health < 30 and enemy_health > 50:
-                # Desperate situation - ultra aggressive
-                action = 39  # Dragon Punch
-                reasoning = "🔥 DESPERATE: Dragon Punch pressure (low HP vs healthy Bison)"
-            elif enemy_health < 30:
-                # Bison is low - finish him!
-                if distance == 'close':
-                    action = 17  # Heavy punch
-                    reasoning = "🔥 FINISHING MOVE: Heavy punch vs low HP Bison"
-                else:
-                    action = 38  # Hadoken for chip damage
-                    reasoning = "🔥 FINISHING MOVE: Hadoken for chip damage"
-            elif distance == 'far':
-                # Long range vs normal Bison - control space
-                action = 38  # Hadoken
-                reasoning = "🔥 SPACE CONTROL: Hadoken vs neutral Bison"
-            elif distance == 'close':
-                # Close range vs normal Bison - pressure
-                if action_cycle == 0:
-                    action = 17  # Heavy punch
-                    reasoning = "🔥 CLOSE PRESSURE: Heavy punch vs neutral Bison"
-                elif action_cycle == 1:
-                    action = 21  # Throw attempt  
-                    reasoning = "🔥 CLOSE PRESSURE: Throw vs neutral Bison"
-                else:
-                    action = 39  # Dragon punch
-                    reasoning = "🔥 CLOSE PRESSURE: Dragon punch vs neutral Bison"
-            else:  # medium range
-                # Medium range vs normal Bison
-                if action_cycle == 0:
-                    action = 6   # Advance
-                    reasoning = "🔥 ADVANCE: Moving in vs neutral Bison"
-                elif action_cycle == 1:
-                    action = 38  # Hadoken
-                    reasoning = "🔥 PRESSURE: Hadoken vs neutral Bison"
-                else:
-                    action = 1   # Jump attack
-                    reasoning = "🔥 JUMP ATTACK: vs neutral Bison"
-        
-        # Fallback for unknown states
-        else:
-            action = 39  # Default Dragon Punch vs M. Bison
-            reasoning = f"🔥 UNKNOWN BISON STATE: Defensive Dragon Punch"
-        
-        # LOG: Final decision
-        action_name = self.action_meanings[action] if action < len(self.action_meanings) else 'UNKNOWN'
-        print(f"✅ FINAL DECISION: Action {action} ({action_name})")
-        print(f"Reasoning: {reasoning}")
-        print("=" * 60)
-        
-        return action, reasoning
-
+        print(f"\n🤖 FULL MODEL RESPONSE:\n{full_response}")
+        print(f"\n📝 EXTRACTED RESPONSE: '{response}'")
+        return response
 
     def parse_action_from_response(self, response: str) -> int:
         """
@@ -657,34 +412,45 @@ Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
             Action number (0-43), defaults to 0 if parsing fails
         """
         try:
-            # Look for "Action: X" pattern
-            action_match = re.search(r"Action:\s*(\d+)", response, re.IGNORECASE)
+            # Clean the response - remove extra whitespace and newlines
+            response = response.strip()
+            
+            # Look for standalone numbers first (most direct answer)
+            standalone_number = re.search(r"^\s*(\d+)\s*$", response, re.MULTILINE)
+            if standalone_number:
+                action = int(standalone_number.group(1))
+                if 0 <= action < self.num_actions:
+                    print(f"✅ FOUND STANDALONE ACTION: {action}")
+                    return action
+            
+            # Look for "Action: X" or "Action X" pattern
+            action_match = re.search(r"(?:Action:?\s*|^)(\d+)", response, re.IGNORECASE | re.MULTILINE)
             if action_match:
                 action = int(action_match.group(1))
                 if 0 <= action < self.num_actions:
+                    print(f"✅ FOUND ACTION PATTERN: {action}")
                     return action
 
-            # Fallback: look for any number in valid range at start of line
-            lines = response.split("\n")
-            for line in lines:
-                numbers = re.findall(r"\b(\d+)\b", line)
-                for num_str in numbers:
-                    num = int(num_str)
-                    if 0 <= num < self.num_actions:
-                        return num
+            # Look for first valid number in response
+            numbers = re.findall(r"\b(\d+)\b", response)
+            for num_str in numbers:
+                num = int(num_str)
+                if 0 <= num < self.num_actions:
+                    print(f"✅ FOUND FIRST VALID NUMBER: {num}")
+                    return num
 
-            # Default fallback
-            return 0
+            print(f"⚠️ NO VALID ACTION FOUND, defaulting to 0")
+            return 0  # Default to no action
 
         except Exception as e:
-            print(f"⚠️  Action parsing failed: {e}")
+            print(f"❌ Action parsing failed: {e}")
             return 0  # Default to no action
 
     def get_action(
         self, observation, info: Dict, verbose: bool = False
     ) -> Tuple[int, str]:
         """
-        Get action decision from Qwen2.5-VL based on visual frame analysis
+        Get action decision from Qwen2.5-VL using unified prompt system
         Processes every 30th frame to avoid black frames and ensure game stability
 
         Args:
@@ -701,13 +467,18 @@ Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
         if (
             self.frame_counter % 30 == 0 or self.frame_counter == 60
         ):  # Process every 30th frame, starting after initialization
-            # Vision analysis every 30th frame for better frame quality
+            # Get game frame and features
             image = self.capture_game_frame(observation)
             features = self.extract_game_features(info)
-            prompt = self.create_hybrid_prompt(features)
 
-            # Enhanced decision making: OpenCV analysis + SmolVLM reasoning
-            action, response = self.vision_based_decision_making(features, image, prompt)
+            # Create unified prompt with all game state info and actions
+            prompt = self.create_unified_prompt(features)
+
+            # Get response from model
+            response = self.query_qwen_vl(image, prompt)
+
+            # Parse action number from model response
+            action = self.parse_action_from_response(response)
 
             # Cache the new decision
             self.last_action = action
@@ -729,13 +500,13 @@ Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
         if verbose:
             model_status = (
                 "NEW"
-                if (self.frame_counter % 5 == 0 or self.frame_counter == 1)
+                if (self.frame_counter % 30 == 0 or self.frame_counter == 60)
                 else "CACHED"
             )
-            print(f"\n🚀 Qwen2.5-VL INT4 Decision ({model_status}):")
+            print(f"\n🚀 Qwen2.5-VL Unified Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
-            print(f"Reasoning: {response}")
+            print(f"Model Response: {response}")
 
         return action, response
 
@@ -753,13 +524,15 @@ Bison Move: [psycho_crusher/scissor_kicks/head_stomp/normal]'''
 
 
 # Demo functions from demo_qwen.py
-def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # Function to demo Qwen agent gameplay
-                       episodes: int = 3,  # Default number of episodes to play
-                       render: bool = True,  # Default to render game visuals
-                       verbose: bool = True):  # Default to verbose output
+def demo_qwen_gameplay(
+    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # Function to demo Qwen agent gameplay
+    episodes: int = 3,  # Default number of episodes to play
+    render: bool = True,  # Default to render game visuals
+    verbose: bool = True,
+):  # Default to verbose output
     """
     Demo Qwen agent playing Street Fighter 2
-    
+
     Args:
         model_path: Path to Qwen model
         episodes: Number of episodes to play
@@ -767,124 +540,165 @@ def demo_qwen_gameplay(model_path: str = "/home/kenpeter/.cache/huggingface/hub/
         verbose: Whether to print detailed reasoning
     """
     from wrapper import make_env  # Import environment creation function from wrapper
-    
+
     print("🥊 Starting Qwen Street Fighter Demo")  # Print demo start message
     print(f"Model: {model_path}")  # Print model path being used
     print(f"Episodes: {episodes}")  # Print number of episodes to play
     print("-" * 50)  # Print separator line
-    
+
     # Create environment and agent
     env = make_env()  # Create Street Fighter 2 environment
     agent = QwenStreetFighterAgent(model_path)  # Create Qwen agent with specified model
-    
+
     wins = 0  # Initialize win counter
     total_rewards = []  # Initialize list to store episode rewards
-    
+
     try:  # Try to run episodes with error handling
         for episode in range(episodes):  # Loop through each episode
             print(f"\n🎮 Episode {episode + 1}/{episodes}")  # Print episode header
             print("=" * 30)  # Print episode separator
-            
+
             # Reset environment and agent
             obs, info = env.reset()  # Reset environment and get initial observation
             agent.reset()  # Reset agent internal state
-            
+
             episode_reward = 0  # Initialize episode reward accumulator
             steps = 0  # Initialize step counter
             max_steps = 5000  # Allow full match completion with step limit
-            
+
             while steps < max_steps:  # Main episode loop
                 if render:  # Check if should render visuals
                     env.render()  # Render game screen
                     time.sleep(0.05)  # Slow down for visibility (50ms delay)
-                
+
                 # Get action from Qwen vision agent
-                action, reasoning = agent.get_action(obs, info, verbose=verbose)  # Get AI action decision
-                
+                action, reasoning = agent.get_action(
+                    obs, info, verbose=verbose
+                )  # Get AI action decision
+
                 # Take step in environment
-                obs, reward, done, truncated, info = env.step(action)  # Execute action and get results
+                obs, reward, done, truncated, info = env.step(
+                    action
+                )  # Execute action and get results
                 episode_reward += reward  # Add reward to episode total
                 steps += 1  # Increment step counter
-                
+
                 # Check if episode ended
                 if done or truncated:  # Check if episode is finished
-                    agent_won = info.get("agent_won", False)  # Check if agent won the match
+                    agent_won = info.get(
+                        "agent_won", False
+                    )  # Check if agent won the match
                     if agent_won:  # If agent won
                         wins += 1  # Increment win counter
                         print(f"🏆 Won episode {episode + 1}!")  # Print victory message
                     else:  # If agent lost
                         print(f"💀 Lost episode {episode + 1}")  # Print loss message
-                    
-                    print(f"Steps: {steps}, Reward: {episode_reward:.2f}")  # Print episode statistics
+
+                    print(
+                        f"Steps: {steps}, Reward: {episode_reward:.2f}"
+                    )  # Print episode statistics
                     break  # Exit episode loop
-            
+
             total_rewards.append(episode_reward)  # Add episode reward to total list
-            
+
             if not render:  # If not rendering visuals
-                print(f"Episode {episode + 1} completed - Reward: {episode_reward:.2f}")  # Print completion message
-    
+                print(
+                    f"Episode {episode + 1} completed - Reward: {episode_reward:.2f}"
+                )  # Print completion message
+
     except KeyboardInterrupt:  # Handle user interruption
         print("\n⚠️  Demo interrupted by user")  # Print interruption message
-    
+
     finally:  # Always execute cleanup
         env.close()  # Close environment properly
-    
+
     # Summary
-    print("\n" + "="*50)  # Print summary header separator
+    print("\n" + "=" * 50)  # Print summary header separator
     print("🏁 DEMO SUMMARY")  # Print summary title
-    print("="*50)  # Print summary separator
+    print("=" * 50)  # Print summary separator
     print(f"Episodes Played: {len(total_rewards)}")  # Print total episodes played
     print(f"Wins: {wins}")  # Print total wins
-    print(f"Win Rate: {wins/len(total_rewards)*100:.1f}%" if total_rewards else "N/A")  # Calculate and print win rate
-    print(f"Average Reward: {sum(total_rewards)/len(total_rewards):.2f}" if total_rewards else "N/A")  # Calculate and print average reward
+    print(
+        f"Win Rate: {wins/len(total_rewards)*100:.1f}%" if total_rewards else "N/A"
+    )  # Calculate and print win rate
+    print(
+        f"Average Reward: {sum(total_rewards)/len(total_rewards):.2f}"
+        if total_rewards
+        else "N/A"
+    )  # Calculate and print average reward
 
 
 def test_qwen_simple():  # Function for simple agent testing
     """Simple test of Qwen agent without full gameplay"""
     from wrapper import make_env  # Import environment creation function from wrapper
-    
+
     print("🧪 Simple Qwen Agent Test")  # Print test header
     print("-" * 30)  # Print separator line
-    
+
     # Create environment
     env = make_env()  # Create Street Fighter 2 environment
     obs, info = env.reset()  # Reset environment and get initial state
-    
-    # Create agent  
-    agent = QwenStreetFighterAgent("/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct")  # Create agent with 3B model
-    
+
+    # Create agent
+    agent = QwenStreetFighterAgent(
+        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct"
+    )  # Create agent with 3B model
+
     # Test a few decisions
     for i in range(3):  # Loop through 3 test iterations
         print(f"\nTest {i+1}:")  # Print test iteration number
-        action, reasoning = agent.get_action(obs, info, verbose=True)  # Get action from agent
-        
-        # Take action
-        obs, reward, done, truncated, info = env.step(action)  # Execute action in environment
+        action, reasoning = agent.get_action(
+            obs, info, verbose=True
+        )  # Get action from agent
+
+        # so the env -> obs -> frame
+        obs, reward, done, truncated, info = env.step(
+            action
+        )  # Execute action in environment
         print(f"Reward: {reward:.3f}")  # Print reward received
-        
+
         if done:  # Check if episode ended
             break  # Exit test loop if done
-    
+
     env.close()  # Close environment
     print("\n✅ Simple test completed")  # Print test completion message
 
 
 # Test script
 if __name__ == "__main__":  # Check if script is run directly
-    parser = argparse.ArgumentParser(description="Qwen Street Fighter Demo")  # Create argument parser
-    parser.add_argument("--model", type=str, default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # 3B model path argument
-                       help="SmolVLM model local path")  # Help text for model argument
-    parser.add_argument("--episodes", type=int, default=3,  # Episodes count argument
-                       help="Number of episodes to play")  # Help text for episodes argument
-    parser.add_argument("--no-render", action="store_true",  # No render flag argument
-                       help="Disable rendering for faster execution")  # Help text for no-render argument
-    parser.add_argument("--quiet", action="store_true",  # Quiet mode flag argument
-                       help="Disable verbose reasoning output")  # Help text for quiet argument
-    parser.add_argument("--test-only", action="store_true",  # Test only flag argument
-                       help="Run simple test instead of full demo")  # Help text for test-only argument
-    
+    parser = argparse.ArgumentParser(
+        description="Qwen Street Fighter Demo"
+    )  # Create argument parser
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # 3B model path argument
+        help="SmolVLM model local path",
+    )  # Help text for model argument
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=3,  # Episodes count argument
+        help="Number of episodes to play",
+    )  # Help text for episodes argument
+    parser.add_argument(
+        "--no-render",
+        action="store_true",  # No render flag argument
+        help="Disable rendering for faster execution",
+    )  # Help text for no-render argument
+    parser.add_argument(
+        "--quiet",
+        action="store_true",  # Quiet mode flag argument
+        help="Disable verbose reasoning output",
+    )  # Help text for quiet argument
+    parser.add_argument(
+        "--test-only",
+        action="store_true",  # Test only flag argument
+        help="Run simple test instead of full demo",
+    )  # Help text for test-only argument
+
     args = parser.parse_args()  # Parse command line arguments
-    
+
     if args.test_only:  # Check if test-only mode requested
         test_qwen_simple()  # Run simple test function
     else:  # Otherwise run full demo
@@ -892,5 +706,5 @@ if __name__ == "__main__":  # Check if script is run directly
             model_path=args.model,  # Pass model path from arguments
             episodes=args.episodes,  # Pass episode count from arguments
             render=not args.no_render,  # Invert no-render flag for render parameter
-            verbose=not args.quiet  # Invert quiet flag for verbose parameter
+            verbose=not args.quiet,  # Invert quiet flag for verbose parameter
         )
