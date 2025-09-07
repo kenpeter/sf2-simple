@@ -306,21 +306,22 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             features["agent_hp"] - features["enemy_hp"]
         )  # Positive = agent has more health
 
-        # Single comprehensive prompt - simplified and direct
-        prompt = f"""Street Fighter 2: Ken vs M. BISON
+        # Vision-based prompt with variety
+        distance_text = "close" if features['distance'] < 60 else "far"
+        hp_text = "losing" if features['agent_hp'] < features['enemy_hp'] else "winning" if features['agent_hp'] > features['enemy_hp'] else "even"
+        
+        prompt = f"""STREET FIGHTER: Ken vs Bison
+HP: Ken {features['agent_hp']}, Bison {features['enemy_hp']} ({hp_text})
+Bison is {distance_text} ({features['distance']}px)
 
-STATE: HP Ken {features['agent_hp']}, Bison {features['enemy_hp']} (diff {hp_diff:+d})
-POSITION: X={x_diff:+d}, Y={y_diff:+d}, Dist={features['distance']}
+What should Ken do? Look at the image and pick ONE action:
 
-Look at the image and identify Bison's current move:
-- Psycho Crusher: blue energy sliding horizontally 
-- Scissor Kicks: jumping with spinning legs
-- Head Stomp: jumping up/down
-- Normal: standing/walking
+6=MOVE_RIGHT (approach enemy)
+9=PUNCH (close attack) 
+21=KICK (medium attack)
+38=HADOKEN (fireball projectile)
 
-ACTIONS: 0=WAIT 1=UP 2=DOWN 3=LEFT 6=RIGHT 9=LIGHT_PUNCH 11=LEFT_PUNCH 12=RIGHT_PUNCH 21=LIGHT_KICK 23=LEFT_KICK 25=RIGHT_KICK 38=HADOKEN_RIGHT 41=HADOKEN_LEFT 39=DRAGON_PUNCH_RIGHT 42=DRAGON_PUNCH_LEFT 40=HURRICANE_KICK_RIGHT 43=HURRICANE_KICK_LEFT
-
-Choose best action number (0-43):"""
+Action number:"""
 
         return prompt
 
@@ -379,7 +380,7 @@ Choose best action number (0-43):"""
         with torch.no_grad():  # Disable gradient computation for inference
             outputs = self.model.generate(  # Generate response from model
                 **inputs,  # Pass all input tensors
-                max_new_tokens=100,  # More tokens for detailed debugging analysis
+                max_new_tokens=10,  # Short response for action number
                 do_sample=False,  # Use greedy decoding (deterministic)
                 pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
                 num_beams=1,  # Single beam for maximum speed
@@ -431,10 +432,13 @@ Choose best action number (0-43):"""
                     print(f"✅ FOUND ACTION PATTERN: {action}")
                     return action
 
-            # Look for first valid number in response
+            # Look for numbers that could be actions (exclude common false positives)
             numbers = re.findall(r"\b(\d+)\b", response)
             for num_str in numbers:
                 num = int(num_str)
+                # Skip numbers likely from "Street Fighter 2" or other context
+                if num == 2 and "Fighter 2" in response:
+                    continue
                 if 0 <= num < self.num_actions:
                     print(f"✅ FOUND FIRST VALID NUMBER: {num}")
                     return num
@@ -516,7 +520,7 @@ Choose best action number (0-43):"""
         self.last_features = {}  # Clear previous game features
         self.frame_counter = 0  # Reset frame counter to zero
         self.last_action = 0  # Reset last action to NO_ACTION
-        self.last_reasoning = "Reset state"  # Reset reasoning to initial state
+        self.last_reasoning = "Initial state - match starting"  # Reset reasoning to initial state
         self.action_repeat_count = 0  # Reset action repeat counter
         self.last_distance = 0  # Reset last distance measurement
         self.action_cooldown = 0  # Reset action cooldown timer
