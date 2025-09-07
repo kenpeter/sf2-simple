@@ -25,6 +25,9 @@ import re  # Import regular expressions for text pattern matching
 from typing import Dict, Tuple  # Import typing hints for better code documentation
 import time  # Import time module for sleep delays
 import argparse  # Import argument parser module
+import math
+from collections import defaultdict
+
 
 
 class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
@@ -51,6 +54,10 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.device = (
             "cuda" if torch.cuda.is_available() else "cpu"
         )  # Set device to GPU if available, else CPU
+        
+        # Multi-frame context for temporal understanding
+        self.frame_history = []  # Store recent frames for temporal context
+        self.max_history_frames = 3  # Keep last 3 frames for context
 
         # Load processor and model for vision
         print(
@@ -167,6 +174,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.frame_counter = 0  # Counter to track current frame number
         self.last_action = 0  # Store the last action taken
         self.last_reasoning = "Initial state"  # Store reasoning for last decision
+
+        # Simple text-based action generation (no VLA complexity)
         self.action_repeat_count = 0  # Count how many times same action repeated
         self.last_distance = 0  # Store previous distance between characters
         self.action_cooldown = 0  # Frames remaining until next action allowed
@@ -306,22 +315,60 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             features["agent_hp"] - features["enemy_hp"]
         )  # Positive = agent has more health
 
-        # Vision-based prompt with variety
+        # Determine positioning and health context
         distance_text = "close" if features['distance'] < 60 else "far"
-        hp_text = "losing" if features['agent_hp'] < features['enemy_hp'] else "winning" if features['agent_hp'] > features['enemy_hp'] else "even"
+        position_context = ""
+        if abs(x_diff) > 20:  # Significant horizontal difference
+            position_context = "left" if x_diff < 0 else "right"
         
-        prompt = f"""STREET FIGHTER: Ken vs Bison
-HP: Ken {features['agent_hp']}, Bison {features['enemy_hp']} ({hp_text})
-Bison is {distance_text} ({features['distance']}px)
+        health_context = ""
+        if abs(hp_diff) > 30:  # Significant health difference
+            health_context = "winning" if hp_diff > 0 else "losing"
+        
+        # Add temporal context from frame history
+        history_context = ""
+        if len(self.frame_history) > 1:
+            prev_features = self.frame_history[-2]["features"]  # Previous frame
+            hp_change = features['agent_hp'] - prev_features['agent_hp']
+            enemy_hp_change = features['enemy_hp'] - prev_features['enemy_hp'] 
+            distance_change = features['distance'] - prev_features['distance']
+            
+            history_context = f"""
+Previous Frame Context:
+HP Change: Agent {hp_change:+d}, Enemy {enemy_hp_change:+d}
+Distance Change: {distance_change:+d}px ({'closer' if distance_change < 0 else 'farther'})
+Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0 else 'Unknown'}"""
 
-What should Ken do? Look at the image and pick ONE action:
+        # Determine health status clearly
+        agent_status = "CRITICAL" if features['agent_hp'] < 50 else "LOW" if features['agent_hp'] < 100 else "HEALTHY"
+        enemy_status = "CRITICAL" if features['enemy_hp'] < 50 else "LOW" if features['enemy_hp'] < 100 else "HEALTHY"
+        tactical_status = "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
 
-6=MOVE_RIGHT (approach enemy)
-9=PUNCH (close attack) 
-21=KICK (medium attack)
-38=HADOKEN (fireball projectile)
+        prompt = f"""SF2 Frame Analysis:
+Distance: {features['distance']}px ({distance_text})
+Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
+MY Health: {features['agent_hp']} ({agent_status})
+ENEMY Health: {features['enemy_hp']} ({enemy_status})
+Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d})
+Facing: {"L" if features.get('agent_facing', 1) == -1 else "R"}{history_context}
 
-Action number:"""
+Think step-by-step:
+1. MY Status: Am I healthy/low/critical? Should I be aggressive or defensive?
+2. ENEMY Status: Is Bison healthy/low/critical? Is he vulnerable?
+3. Tactical Decision: Based on MY health, should I attack, defend, or retreat?
+4. Best Action: What specific move fits my current health situation?
+
+Respond format:
+My Status: [HEALTHY/LOW/CRITICAL - aggressive/defensive/retreat]
+Enemy Status: [HEALTHY/LOW/CRITICAL - threatening/vulnerable] 
+Tactic: [health-based strategy with reasoning]
+Action: [number]
+
+DEFENSIVE: 0=BLOCK_L 1=BLOCK_R 4=LEFT(retreat) 5=RIGHT(retreat) 2=CROUCH
+AGGRESSIVE: 9=PUNCH_L 10=PUNCH_R 21=KICK_L 22=KICK_R 
+SPECIAL: 38=HADOKEN_L 41=HADOKEN_R 39=UPPERCUT_L 42=UPPERCUT_R 40=HURRICANE_L 43=HURRICANE_R
+
+Choose based on MY health status!"""
 
         return prompt
 
@@ -380,7 +427,7 @@ Action number:"""
         with torch.no_grad():  # Disable gradient computation for inference
             outputs = self.model.generate(  # Generate response from model
                 **inputs,  # Pass all input tensors
-                max_new_tokens=10,  # Short response for action number
+                max_new_tokens=50,  # Moderate response length for action selection
                 do_sample=False,  # Use greedy decoding (deterministic)
                 pad_token_id=self.processor.tokenizer.pad_token_id,  # Set padding token
                 num_beams=1,  # Single beam for maximum speed
@@ -474,13 +521,18 @@ Action number:"""
             # Get game frame and features
             image = self.capture_game_frame(observation)
             features = self.extract_game_features(info)
+            
+            # Update frame history for temporal context
+            self.frame_history.append({"image": image, "features": features})
+            if len(self.frame_history) > self.max_history_frames:
+                self.frame_history.pop(0)  # Remove oldest frame
 
             # Create unified prompt with all game state info and actions
             prompt = self.create_unified_prompt(features)
 
-            # Get response from model
+            # Use simple text generation for action selection
             response = self.query_qwen_vl(image, prompt)
-
+            
             # Parse action number from model response
             action = self.parse_action_from_response(response)
 
@@ -491,7 +543,7 @@ Action number:"""
         else:
             # Use cached action from last model inference (every 30th frame caching)
             action = self.last_action
-            response = self.last_reasoning + " (cached)"
+            response = self.last_reasoning
 
         # Update action history
         action_name = self.action_meanings[action]
@@ -510,7 +562,7 @@ Action number:"""
             print(f"\n🚀 Qwen2.5-VL Unified Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
-            print(f"Model Response: {response}")
+            print(f"Model Response: {response} {'(cached)' if model_status == 'CACHED' else ''}")
 
         return action, response
 
