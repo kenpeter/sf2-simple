@@ -300,151 +300,61 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self, features: Dict
     ) -> str:  # Method to create single comprehensive prompt
         """
-        Create single unified prompt for both game analysis and action selection
+        Create concise unified prompt for fighting game analysis and action selection
 
         Args:
             features: Game state features from ta.json
 
         Returns:
-            Comprehensive prompt for game state analysis and action decision
+            Concise prompt for game state analysis and action decision
         """
-        # Calculate position and health differences
-        x_diff = (
-            features["agent_x"] - features["enemy_x"]
-        )  # Positive = agent is right of enemy
-        y_diff = (
-            features["agent_y"] - features["enemy_y"]
-        )  # Positive = agent is above enemy
-        hp_diff = (
-            features["agent_hp"] - features["enemy_hp"]
-        )  # Positive = agent has more health
-
-        # Determine positioning and health context
-        distance_text = "close" if features["distance"] < 60 else "far"
-        position_context = ""
-        if abs(x_diff) > 20:  # Significant horizontal difference
-            position_context = "left" if x_diff < 0 else "right"
-
-        health_context = ""
-        if abs(hp_diff) > 30:  # Significant health difference
-            health_context = "winning" if hp_diff > 0 else "losing"
-
-        # Get enemy status early for pattern detection
-        enemy_status = features.get("enemy_status", 0)
-        agent_status_val = features.get("agent_status", 0)
-
-        # Add temporal context from 4-frame history stack
-        history_context = ""
+        # Calculate key metrics
+        distance = features["distance"]
+        hp_diff = features["agent_hp"] - features["enemy_hp"]
+        
+        # Determine tactical situation
+        range_context = "CLOSE" if distance < 60 else "MID" if distance < 120 else "FAR"
+        hp_status = "WINNING" if hp_diff > 20 else "LOSING" if hp_diff < -20 else "EVEN"
+        
+        # Movement context from frame history
+        movement_context = ""
         if len(self.frame_history) >= 2:
-            # Compare with previous frame
-            prev_features = self.frame_history[-2]["features"]
-            hp_change = features["agent_hp"] - prev_features["agent_hp"]
-            enemy_hp_change = features["enemy_hp"] - prev_features["enemy_hp"]
-            distance_change = features["distance"] - prev_features["distance"]
-
-            # has 8 frames vs has less than 8 frames
-            if len(self.frame_history) >= 8:
-                oldest_features = self.frame_history[0]["features"]
-                total_hp_change = features["agent_hp"] - oldest_features["agent_hp"]
-                total_enemy_hp_change = (
-                    features["enemy_hp"] - oldest_features["enemy_hp"]
-                )
-
-                history_context = f"""
-🎬 8-FRAME SEQUENCE ANALYSIS:
-Recent Change: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
-Movement: {distance_change:+d}px ({'🚨 ENEMY APPROACHING!' if distance_change < -10 else '🏃 Enemy retreating' if distance_change > 10 else '⚖️ Neutral movement'})
-8-Frame Trend: My HP {total_hp_change:+d}, Enemy HP {total_enemy_hp_change:+d}
-Battle Momentum: {'⚠️ TAKING DAMAGE' if total_hp_change < -5 else '💪 DEALING DAMAGE' if total_enemy_hp_change < -5 else '⚖️ NEUTRAL FIGHT'}
-
-🔮 PATTERN DETECTION:
-• Distance trend: {'🚨 INCOMING ATTACK!' if distance_change < -15 else '📉 ENEMY RETREATING' if distance_change > 15 else '🎯 POSITIONING'}
-• Status pattern: {'⚡ ANIMATION CHANGE' if enemy_status != oldest_features.get('enemy_status', 0) else '👤 STABLE STATE'}"""
+            prev_distance = self.frame_history[-2]["features"]["distance"]
+            distance_change = distance - prev_distance
+            if distance_change < -10:
+                movement_context = "ENEMY RUSHING"
+            elif distance_change > 10:
+                movement_context = "ENEMY RETREATING"
             else:
-                history_context = f"""
-🎬 BUILDING 8-FRAME STACK ({len(self.frame_history)}/8 frames):
-Recent Change: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
-Movement: {distance_change:+d}px ({'🚨 APPROACHING' if distance_change < -5 else '🏃 RETREATING' if distance_change > 5 else '⚖️ NEUTRAL'})
-Early Pattern: {'💥 TAKING HITS' if hp_change < 0 else '🎯 LANDING HITS' if enemy_hp_change < 0 else '⚔️ NEUTRAL EXCHANGE'}"""
+                movement_context = "NEUTRAL"
 
-        # Determine health status clearly
-        agent_status = (
-            "CRITICAL"
-            if features["agent_hp"] < 50
-            else "LOW" if features["agent_hp"] < 100 else "HEALTHY"
-        )
-        enemy_status = (
-            "CRITICAL"
-            if features["enemy_hp"] < 50
-            else "LOW" if features["enemy_hp"] < 100 else "HEALTHY"
-        )
-        tactical_status = (
-            "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
-        )
+        # Determine facing direction based on enemy position
+        facing_right = features["agent_x"] < features["enemy_x"]
+        facing_dir = "RIGHT" if facing_right else "LEFT"
+        
+        # Special moves based on facing direction
+        hadoken = "38=HADOKEN_RIGHT" if facing_right else "41=HADOKEN_LEFT"
+        dragon_punch = "39=DRAGON_PUNCH_RIGHT" if facing_right else "42=DRAGON_PUNCH_LEFT"  
+        hurricane_kick = "40=HURRICANE_KICK_RIGHT" if facing_right else "43=HURRICANE_KICK_LEFT"
 
-        # Neutral approach based on game state
-        my_approach = "BALANCED"  # Balanced fighting approach
+        prompt = f"""Street Fighter 2 - Frame {self.frame_counter}
 
-        # Distance-based strategy options
-        distance_strategy = ""
-        if features["distance"] < 40:  # Close range
-            distance_strategy = "CLOSE RANGE: Various attack, block, or movement options available"
-        elif features["distance"] < 80:  # Medium range
-            distance_strategy = "MEDIUM RANGE: Multiple approach and attack options"
-        else:  # Long range
-            distance_strategy = "LONG RANGE: Movement and ranged attack options"
+SITUATION:
+My HP: {features['agent_hp']} | Enemy HP: {features['enemy_hp']} | Status: {hp_status}
+Range: {distance}px ({range_context}) | Movement: {movement_context} | Facing: {facing_dir}
 
-        # 4-FRAME PATTERN ANALYSIS - Predict enemy moves and counter!
+FIGHTING PRINCIPLES:
+- If enemy rushing → block/counter (actions 2,3 or defensive moves)
+- If enemy vulnerable → attack (punches 9-20, kicks 21-37)
+- At distance → fireball ({hadoken.split('=')[0]})
+- Anti-air/wakeup → uppercut ({dragon_punch.split('=')[0]})  
+- Close pressure → spinning kick ({hurricane_kick.split('=')[0]})
+- Mix up attacks to avoid being predictable
 
-        action_recommendations = f"""
-🎬 FRAME SEQUENCE ANALYSIS - FIGHTING GAME INTELLIGENCE 🎬
+ACTIONS: 0=none, 1=up, 2=down, 3=left, 6=right, 9-20=punches, 21-37=kicks
+SPECIALS: {hadoken}, {dragon_punch}, {hurricane_kick}
 
-📊 CURRENT SITUATION:
-- MY HP: {features['agent_hp']} | ENEMY HP: {features['enemy_hp']}
-- Distance: {features['distance']}px | Position: {'🔥 Close' if features['distance'] < 60 else '⚖️ Medium' if features['distance'] < 120 else '🏃 Far'}
-- MY Status: {agent_status_val} | ENEMY Status: {enemy_status}
-- HP Advantage: {hp_diff:+d}
-
-🔍 VISUAL ANALYSIS:
-Analyze the frame sequence for:
-• Movement patterns and positioning changes
-• Attack animations and defensive postures  
-• Distance changes and timing opportunities
-• Character state transitions
-
-🎯 AVAILABLE ACTIONS (choose any 0-43):
-MOVEMENT: 0=NONE, 1=UP, 2=DOWN, 3=LEFT, 4=UP_LEFT, 5=DOWN_LEFT, 6=RIGHT, 7=UP_RIGHT, 8=DOWN_RIGHT
-LIGHT ATTACKS: 9-12=LIGHT_PUNCH variants, 21-25=LIGHT_KICK variants
-MEDIUM ATTACKS: 13-16=MEDIUM_PUNCH variants, 26-31=MEDIUM_KICK variants  
-HEAVY ATTACKS: 17-20=HEAVY_PUNCH variants, 32-37=HEAVY_KICK variants
-SPECIALS: 38=HADOKEN_RIGHT, 39=DRAGON_PUNCH_RIGHT, 40=HURRICANE_KICK_RIGHT, 41-43=LEFT variants
-
-⚖️ STRATEGIC OPTIONS:
-• Choose based on situation analysis
-• Consider timing, distance, and enemy state
-• All actions are available - pick what fits best
-"""
-
-        prompt = f"""🎬 8-FRAME SEQUENCE ANALYSIS - STREET FIGHTER 2:
-
-🔍 ANALYZE ALL 8 FRAMES TOGETHER:
-Distance: {features['distance']}px ({distance_text})
-Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
-MY Health: {features['agent_hp']} ({agent_status})
-MY Status: {features['agent_status']} 
-ENEMY Health: {features['enemy_hp']} ({enemy_status})  
-ENEMY Status: {features['enemy_status']} 
-Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_context}
-
-{distance_strategy}
-
-🎯 FIGHTING ANALYSIS:{action_recommendations}
-
-CRITICAL INSTRUCTION: ANALYZE THE 8-FRAME SEQUENCE, THEN RESPOND WITH ONE ACTION NUMBER!
-CHOOSE ANY ACTION (0-43): All moves available
-DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE ACTION NUMBER.
-
-YOUR ACTION CHOICE (0-43): """
+Analyze the 8 frames and choose your next move. Output only the action number (0-43):"""
 
         return prompt
 
