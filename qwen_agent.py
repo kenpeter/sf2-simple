@@ -54,9 +54,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             "cuda" if torch.cuda.is_available() else "cpu"
         )  # Set device to GPU if available, else CPU
 
-        # Multi-frame context for temporal understanding
+        # Multi-frame context for temporal understanding - 4 frame stack
         self.frame_history = []  # Store recent frames for temporal context
-        self.max_history_frames = 3  # Keep last 3 frames for context
+        self.max_history_frames = 4  # Keep last 4 frames for context (frame stacking)
 
         # Load processor and model for vision
         print(
@@ -141,31 +141,29 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         )  # Store total number of actions available
 
         # Action recovery frames based on actual SF2 Turbo frame data
-        self.action_frames = (
-            {  # Dictionary mapping action IDs to total animation durations (startup+active+recovery)
-                0: 1,  # NO_ACTION - instant response
-                1: 15,  # UP - jump has long recovery frames (estimated)
-                2: 5,  # DOWN - crouch animation frames (estimated)
-                3: 3,  # LEFT - walk animation frames (estimated)
-                6: 3,  # RIGHT - walk animation frames (estimated)
-                7: 20,  # UP_RIGHT - jump animation frames (estimated)
-                4: 20,  # UP_LEFT - jump animation frames (estimated)
-                5: 8,  # DOWN_LEFT - crouch walk animation frames (estimated)
-                8: 8,  # DOWN_RIGHT - crouch walk animation frames (estimated)
-                9: 11,  # LIGHT_PUNCH - Jab: 2+4+5=11 frames (SF2T data)
-                13: 9,  # MEDIUM_PUNCH - Strong: 1+2+6=9 frames (SF2T data)
-                17: 20,  # HEAVY_PUNCH - Fierce: estimated ~20 frames (conservative)
-                21: 12,  # LIGHT_KICK - Short kick: estimated similar to jab
-                26: 15,  # MEDIUM_KICK - Forward kick: estimated medium timing
-                32: 25,  # HEAVY_KICK - Roundhouse: estimated heavy timing
-                38: 51,  # HADOKEN_RIGHT - Jab Hadouken: 10+40+1=51 frames (SF2T data)
-                39: 34,  # DRAGON_PUNCH_RIGHT - Fierce Shoryuken: 4+4+26=34 frames (SF2T data)
-                40: 30,  # HURRICANE_KICK_RIGHT - Roundhouse Tatsumaki: 11+3+16=30 frames (SF2T data)
-                41: 51,  # HADOKEN_LEFT - Same as right hadouken
-                42: 34,  # DRAGON_PUNCH_LEFT - Same as right shoryuken
-                43: 30,  # HURRICANE_KICK_LEFT - Same as right tatsumaki
-            }
-        )
+        self.action_frames = {  # Dictionary mapping action IDs to total animation durations (startup+active+recovery)
+            0: 1,  # NO_ACTION - instant response
+            1: 15,  # UP - jump has long recovery frames (estimated)
+            2: 5,  # DOWN - crouch animation frames (estimated)
+            3: 3,  # LEFT - walk animation frames (estimated)
+            6: 3,  # RIGHT - walk animation frames (estimated)
+            7: 20,  # UP_RIGHT - jump animation frames (estimated)
+            4: 20,  # UP_LEFT - jump animation frames (estimated)
+            5: 8,  # DOWN_LEFT - crouch walk animation frames (estimated)
+            8: 8,  # DOWN_RIGHT - crouch walk animation frames (estimated)
+            9: 11,  # LIGHT_PUNCH - Jab: 2+4+5=11 frames (SF2T data)
+            13: 9,  # MEDIUM_PUNCH - Strong: 1+2+6=9 frames (SF2T data)
+            17: 20,  # HEAVY_PUNCH - Fierce: estimated ~20 frames (conservative)
+            21: 12,  # LIGHT_KICK - Short kick: estimated similar to jab
+            26: 15,  # MEDIUM_KICK - Forward kick: estimated medium timing
+            32: 25,  # HEAVY_KICK - Roundhouse: estimated heavy timing
+            38: 51,  # HADOKEN_RIGHT - Jab Hadouken: 10+40+1=51 frames (SF2T data)
+            39: 34,  # DRAGON_PUNCH_RIGHT - Fierce Shoryuken: 4+4+26=34 frames (SF2T data)
+            40: 30,  # HURRICANE_KICK_RIGHT - Roundhouse Tatsumaki: 11+3+16=30 frames (SF2T data)
+            41: 51,  # HADOKEN_LEFT - Same as right hadouken
+            42: 34,  # DRAGON_PUNCH_LEFT - Same as right shoryuken
+            43: 30,  # HURRICANE_KICK_LEFT - Same as right tatsumaki
+        }
 
         # Game state tracking
         self.action_history = []  # List to store history of past actions
@@ -176,10 +174,17 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
 
         # Action variety system to prevent blocking - SIMPLIFIED BASIC ACTIONS ONLY
         self.attack_cycle_index = 0  # Cycle through different attacks
-        self.aggressive_attacks = [9, 21, 3, 6, 1, 2]  # Basic: punch, kick, left, right, jump, crouch
+        self.aggressive_attacks = [
+            9,
+            21,
+            3,
+            6,
+            1,
+            2,
+        ]  # Basic: punch, kick, left, right, jump, crouch
         self.action_repeat_count = 0  # Count how many times same action repeated
         self.last_distance = 0  # Store previous distance between characters
-        
+
         # action has cool down period
         self.action_cooldown = 0
         # remember last executed action
@@ -334,19 +339,43 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         if abs(hp_diff) > 30:  # Significant health difference
             health_context = "winning" if hp_diff > 0 else "losing"
 
-        # Add temporal context from frame history
+        # Get enemy status early for pattern detection
+        enemy_status = features.get("enemy_status", 0)
+        agent_status_val = features.get("agent_status", 0)
+
+        # Add temporal context from 4-frame history stack
         history_context = ""
-        if len(self.frame_history) > 1:
-            prev_features = self.frame_history[-2]["features"]  # Previous frame
+        if len(self.frame_history) >= 2:
+            # Compare with previous frame
+            prev_features = self.frame_history[-2]["features"]
             hp_change = features["agent_hp"] - prev_features["agent_hp"]
             enemy_hp_change = features["enemy_hp"] - prev_features["enemy_hp"]
             distance_change = features["distance"] - prev_features["distance"]
 
-            history_context = f"""
-Previous Frame Context:
-HP Change: Agent {hp_change:+d}, Enemy {enemy_hp_change:+d}
-Distance Change: {distance_change:+d}px ({'closer' if distance_change < 0 else 'farther'})
-Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0 else 'Unknown'}"""
+            # has 4 frames vs has less than 4 frames
+            if len(self.frame_history) >= 4:
+                oldest_features = self.frame_history[0]["features"]
+                total_hp_change = features["agent_hp"] - oldest_features["agent_hp"]
+                total_enemy_hp_change = (
+                    features["enemy_hp"] - oldest_features["enemy_hp"]
+                )
+
+                history_context = f"""
+🎬 4-FRAME SEQUENCE ANALYSIS:
+Frame-to-frame: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
+Movement: {distance_change:+d}px ({'🚨 ENEMY APPROACHING!' if distance_change < -10 else '🏃 Enemy retreating' if distance_change > 10 else '⚖️ Neutral movement'})
+4-Frame Trend: My HP {total_hp_change:+d}, Enemy HP {total_enemy_hp_change:+d}
+Battle Momentum: {'⚠️ TAKING DAMAGE - DEFEND!' if total_hp_change < -5 else '💪 DEALING DAMAGE - KEEP PRESSURE!' if total_enemy_hp_change < -5 else '⚔️ NEUTRAL FIGHT'}
+
+🔮 PATTERN DETECTION:
+• Distance changing by {distance_change:+d}px suggests: {'🚨 INCOMING ATTACK!' if distance_change < -15 else '📉 ENEMY RETREATING' if distance_change > 15 else '🎯 POSITIONING'}
+• Enemy status sequence suggests: {'⚡ POSSIBLE SPECIAL MOVE STARTUP' if enemy_status != oldest_features.get('enemy_status', 0) else '👤 NORMAL MOVEMENT'}"""
+            else:
+                history_context = f"""
+🎬 BUILDING 4-FRAME STACK ({len(self.frame_history)}/4 frames):
+Recent Change: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
+Movement: {distance_change:+d}px ({'🚨 APPROACHING' if distance_change < -5 else '🏃 RETREATING' if distance_change > 5 else '⚖️ NEUTRAL'})
+Early Pattern: {'💥 TAKING HITS' if hp_change < 0 else '🎯 LANDING HITS' if enemy_hp_change < 0 else '⚔️ NEUTRAL EXCHANGE'}"""
 
         # Determine health status clearly
         agent_status = (
@@ -374,114 +403,145 @@ Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0
         # Basic combat strategy based on distance
         distance_strategy = ""
         if features["distance"] < 40:  # Close range
-            distance_strategy = "CLOSE RANGE: PUNCH (9), KICK (21), or BLOCK (3=away, 6=toward)!"
-        elif features["distance"] < 80:  # Medium range  
-            distance_strategy = "MEDIUM RANGE: MOVE CLOSER (6=RIGHT) or JUMP (1) to close gap!"
+            distance_strategy = (
+                "CLOSE RANGE: PUNCH (9), KICK (21), or BLOCK (3=away, 6=toward)!"
+            )
+        elif features["distance"] < 80:  # Medium range
+            distance_strategy = (
+                "MEDIUM RANGE: MOVE CLOSER (6=RIGHT) or JUMP (1) to close gap!"
+            )
         else:  # Long range
-            distance_strategy = "LONG RANGE: MOVE FORWARD (6=RIGHT) or JUMP (1) to get closer!"
+            distance_strategy = (
+                "LONG RANGE: MOVE FORWARD (6=RIGHT) or JUMP (1) to get closer!"
+            )
 
-        # BASIC FIGHTING MODE - Focus on fundamental moves only
-        action_recommendations = """
-🥊 BASIC FIGHTING MODE - KEEP IT SIMPLE! 🥊
-🎯 BASIC ACTIONS ONLY: 9=PUNCH, 21=KICK, 3=LEFT, 6=RIGHT, 1=JUMP, 2=CROUCH
-🛡️ BLOCK WHEN NEEDED: 3=LEFT (block), 6=RIGHT (toward enemy)
-⚡ MIX BASICS: Punch, kick, move, block - master the fundamentals!
-🚀 NO COMPLEX MOVES - JUST BASIC STREET FIGHTING!"""
-        
-        # Add raw status observations for learning
-        enemy_status = features.get("enemy_status", 0)
-        agent_status_val = features.get("agent_status", 0)
-        
-        action_recommendations += f"""
+        # 4-FRAME PATTERN ANALYSIS - Predict enemy moves and counter!
 
-📊 GAME STATE:
-- MY Status: {agent_status_val} 
-- ENEMY Status: {enemy_status}
-- Distance: {features['distance']}px (close<40, medium<80, far>80)
-- HP Difference: {hp_diff:+d} (positive=winning, negative=losing)
+        action_recommendations = f"""
+🔮 4-FRAME SEQUENCE ANALYSIS - PREDICT THE FUTURE! 🔮
 
-🧠 STRATEGY: Use basic moves effectively - timing and positioning matter more than complex combos!"""
+🎯 LOOK AT ALL 4 FRAMES TOGETHER - What pattern do you see?
 
-        prompt = f"""SF2 TACTICAL ANALYSIS:
-Distance: {features['distance']}px ({distance_text})
+📊 CURRENT SITUATION:
+- MY HP: {features['agent_hp']} | ENEMY HP: {features['enemy_hp']}
+- Distance: {features['distance']}px | Position: {'🔥 Close' if features['distance'] < 60 else '⚖️ Medium' if features['distance'] < 120 else '🏃 Far'}
+- MY Status: {agent_status_val} | ENEMY Status: {enemy_status}
+- HP Advantage: {hp_diff:+d}
+
+🔍 VISUAL PATTERN ANALYSIS (analyze what you SEE in the 4 frames):
+Look for these visual cues across the frame sequence:
+• Position changes: Enemy moving toward/away from you?
+• Height changes: Enemy crouching then rising (attack startup)?
+• Rapid movement: Sudden position shifts (special moves)?
+• Animation changes: Different poses between frames?
+• Distance trends: Getting closer/farther over time?
+
+🎯 ADAPTIVE COUNTER-STRATEGY:
+• If you observe rapid approach → Use 3=LEFT (block) or 21=KICK (space)
+• If you see upward movement → Use 2=CROUCH (avoid) or 9=PUNCH (anti-air)
+• If you notice retreat pattern → Use 6=RIGHT (chase) or 1=JUMP (close)
+• If distance stable + enemy animation change → Prepare counter-attack
+• Trust your visual analysis - adapt based on what YOU see in the frames
+
+⚡ BASIC COUNTER-ATTACKS:
+- 9=PUNCH: Quick attack when enemy vulnerable
+- 21=KICK: Keep distance, interrupt enemy moves
+- 3=LEFT: Block/retreat from dangerous attacks  
+- 6=RIGHT: Advance when enemy is recovering
+- 1=JUMP: Avoid low attacks or close distance
+- 2=CROUCH: Avoid high attacks, prepare counter
+"""
+
+        prompt = f"""🎬 4-FRAME SEQUENCE ANALYSIS - STREET FIGHTER 2 PREDICTION:
+
+🔍 ANALYZE ALL 4 FRAMES TOGETHER:
+Current Distance: {features['distance']}px ({distance_text})
 Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
-MY Health: {features['agent_hp']} ({agent_status}) → {my_approach}
-MY Status: {features['agent_status']} (animation state - observe patterns)
-ENEMY Health: {features['enemy_hp']} ({enemy_status}) → {enemy_threat}  
-ENEMY Status: {features['enemy_status']} (animation state - observe patterns)
+MY Health: {features['agent_hp']} ({agent_status})
+MY Status: {features['agent_status']} (watch my animation state)
+ENEMY Health: {features['enemy_hp']} ({enemy_status})  
+ENEMY Status: {features['enemy_status']} (CRITICAL - watch for attack patterns!)
 Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_context}
 
 {distance_strategy}
 
-BATTLE PLAN:{action_recommendations}
+🔮 PATTERN RECOGNITION MISSION:{action_recommendations}
 
-BASIC ACTIONS ONLY:
+🎯 BASIC ACTION ARSENAL:
 MOVEMENT: 3=LEFT 6=RIGHT 1=JUMP 2=CROUCH
-ATTACKS: 9=PUNCH 21=KICK (master these basics!)
-BLOCKING: 3=LEFT (block away) 6=RIGHT (block toward) 2=CROUCH (low block)
+ATTACKS: 9=PUNCH 21=KICK
+DEFENSE: 3=LEFT (block away) 2=CROUCH (low block)
 
-🥊 KEEP IT SIMPLE: Focus on timing and positioning with basic moves!
+⚡ PREDICTION-BASED STRATEGY:
+- Watch 4-frame sequence for enemy attack startup
+- Counter predicted moves with appropriate basic action
+- Use movement to avoid, attacks to punish, blocks to defend
 
-CRITICAL INSTRUCTION: YOU MUST RESPOND WITH ONLY A SINGLE NUMBER FOR THE ACTION.
-USE ONLY THESE BASIC ACTIONS: 0, 1, 2, 3, 6, 9, 21
-DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE ACTION NUMBER.
-MIX UP YOUR BASICS - DON'T REPEAT THE SAME MOVE!
+CRITICAL INSTRUCTION: ANALYZE THE 4 FRAMES FOR PATTERNS, THEN RESPOND WITH ONE NUMBER!
+USE ONLY BASIC ACTIONS: 0, 1, 2, 3, 6, 9, 21
+DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE PREDICTED COUNTER-ACTION NUMBER.
 
-BASIC FIGHTING EXAMPLES:
-- Close range: 9=PUNCH, 21=KICK, 3=BLOCK_LEFT, 6=BLOCK_RIGHT  
-- Medium range: 6=MOVE_RIGHT, 1=JUMP
-- Defense: 3=LEFT_BLOCK, 2=CROUCH_BLOCK
+🔮 PREDICTION EXAMPLES:
+- See enemy rushing forward → 3=LEFT_BLOCK or 2=CROUCH
+- See enemy jumping → 2=CROUCH or 9=PUNCH (anti-air)
+- See enemy retreating → 6=RIGHT (follow) or 1=JUMP (close gap)
+- See enemy vulnerable → 9=PUNCH or 21=KICK (attack!)
 
-BASIC STRATEGY:
-- Use 9=PUNCH and 21=KICK for attacks
-- Use 3=LEFT and 6=RIGHT for movement and blocking  
-- Use 1=JUMP and 2=CROUCH for positioning
-- Mix these basics - don't repeat the same action!
-
-YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
+YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
 
         return prompt
 
     def query_qwen_vl(
-        self, image: Image.Image, prompt: str
-    ) -> str:  # Method to query Qwen2.5-VL model
+        self, images: list, prompt: str
+    ) -> str:  # Method to query Qwen2.5-VL model with frame stack
         """
-        Query Qwen2.5-VL model with image and prompt
+        Query Qwen2.5-VL model with frame stack and prompt
 
         Args:
-            image: Game frame as PIL Image
+            images: List of game frames as PIL Images (frame stack)
             prompt: Text prompt for analysis
 
         Returns:
             Model's response containing reasoning and action
         """
+        # Create content list with multiple images (frame stack) + text
+        content = []
+
+        # content has image obj x N + text prompt
+        for i, img in enumerate(images):
+            content.append({"type": "image", "image": img})
+
+        # Add text prompt at the end
+        content.append({"type": "text", "text": prompt})
+
         # Create messages for Qwen2.5-VL format
         messages = [  # Create message list in chat format
-            {  # User message containing image and text
+            {  # User message containing multiple images and text
                 "role": "user",  # Set role as user
-                "content": [  # Content list with image and text
-                    {"type": "image", "image": image},  # Image component
-                    {"type": "text", "text": prompt},  # Text prompt component
-                ],
+                "content": content,  # Content list with frame stack + text
             }
         ]
 
-        # merge image and prompt and pass to vl model
+        # merge images (frame stack) and prompt and pass to vl model
         text_input = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
 
         # Debug the inputs being generated
-        inputs = self.processor(text=text_input, images=image, return_tensors="pt")
+        inputs = self.processor(text=text_input, images=images, return_tensors="pt")
 
         # DEBUG: Print what we're actually sending to the model
         print(f"\n🔧 DEBUG INPUT PROCESSING:")
         print(f"Text input length: {len(text_input)}")
-        print(f"Image type: {type(image)}")
-        print(f"Image size: {image.size}")
+        print(f"Frame stack size: {len(images)} images")
+        if len(images) > 0:
+            print(f"Image type: {type(images[0])}")
+            print(f"Image size: {images[0].size}")
         print(f"Input keys: {list(inputs.keys())}")
         if "pixel_values" in inputs:
-            print(f"✅ pixel_values shape: {inputs['pixel_values'].shape}")
+            print(
+                f"✅ pixel_values shape: {inputs['pixel_values'].shape} (includes {len(images)} frames)"
+            )
         else:
             print(f"❌ NO pixel_values in inputs!")
         print(f"Text preview: {text_input[:200]}...")
@@ -553,8 +613,16 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
 
             # Look for numbers that could be actions - PRIORITIZE BASIC ACTIONS
             numbers = re.findall(r"\b(\d+)\b", response)
-            basic_actions = [0, 1, 2, 3, 6, 9, 21]  # NO_ACTION, UP, DOWN, LEFT, RIGHT, PUNCH, KICK
-            
+            basic_actions = [
+                0,
+                1,
+                2,
+                3,
+                6,
+                9,
+                21,
+            ]  # NO_ACTION, UP, DOWN, LEFT, RIGHT, PUNCH, KICK
+
             # First check for basic actions
             for num_str in numbers:
                 num = int(num_str)
@@ -564,14 +632,16 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
                 if num in basic_actions:
                     print(f"✅ FOUND BASIC ACTION: {num}")
                     return num
-            
+
             # If no basic actions found, fall back to any valid action
             for num_str in numbers:
                 num = int(num_str)
                 if num == 2 and "Fighter 2" in response:
                     continue
                 if 0 <= num < self.num_actions:
-                    print(f"⚠️ FOUND NON-BASIC ACTION: {num} - converting to basic equivalent")
+                    print(
+                        f"⚠️ FOUND NON-BASIC ACTION: {num} - converting to basic equivalent"
+                    )
                     # Convert complex actions to basic equivalents
                     if num in [17, 13, 9]:  # Any punch -> basic punch
                         return 9
@@ -586,9 +656,11 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
 
             # If no numbers found, try to infer action from keywords - BASIC ACTIONS ONLY
             response_lower = response.lower()
-            
+
             # Map keywords to BASIC actions only!
-            if any(word in response_lower for word in ["punch", "hit", "attack", "strike"]):
+            if any(
+                word in response_lower for word in ["punch", "hit", "attack", "strike"]
+            ):
                 print(f"🔍 INFERRED FROM 'punch': 9 (LIGHT_PUNCH)")
                 return 9  # LIGHT_PUNCH (basic punch)
             elif any(word in response_lower for word in ["kick"]):
@@ -597,20 +669,30 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
             elif any(word in response_lower for word in ["jump", "up"]):
                 print(f"🔍 INFERRED FROM 'jump': 1 (UP)")
                 return 1  # UP (jump)
-            elif any(word in response_lower for word in ["right", "forward", "advance"]):
+            elif any(
+                word in response_lower for word in ["right", "forward", "advance"]
+            ):
                 print(f"🔍 INFERRED FROM 'right': 6 (RIGHT)")
                 return 6  # RIGHT (move right)
-            elif any(word in response_lower for word in ["left", "back", "retreat", "block"]):
+            elif any(
+                word in response_lower for word in ["left", "back", "retreat", "block"]
+            ):
                 print(f"🔍 INFERRED FROM 'left/block': 3 (LEFT)")
                 return 3  # LEFT (move left/block)
-            elif any(word in response_lower for word in ["crouch", "duck", "down", "low"]):
+            elif any(
+                word in response_lower for word in ["crouch", "duck", "down", "low"]
+            ):
                 print(f"🔍 INFERRED FROM 'crouch': 2 (DOWN)")
                 return 2  # DOWN (crouch)
-            
+
             # BASIC FALLBACK - cycle through basic actions only
             fallback_action = self.aggressive_attacks[self.attack_cycle_index]
-            self.attack_cycle_index = (self.attack_cycle_index + 1) % len(self.aggressive_attacks)
-            print(f"⚠️ NO KEYWORDS FOUND - CYCLING BASIC FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})")
+            self.attack_cycle_index = (self.attack_cycle_index + 1) % len(
+                self.aggressive_attacks
+            )
+            print(
+                f"⚠️ NO KEYWORDS FOUND - CYCLING BASIC FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})"
+            )
             return fallback_action
 
         except Exception as e:
@@ -634,16 +716,18 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
         """
         self.frame_counter += 1
         self.frames_since_last_action += 1
-        
+
         # the cool down reduced, so get ready for next action
         if self.action_cooldown > 0:
             self.action_cooldown -= 1
-            
+
         # not in cool down, we can execute
-        action_allowed = (self.action_cooldown <= 0)
-        
+        action_allowed = self.action_cooldown <= 0
+
         # 30 frames or 1 sec, we can do
-        if (self.frame_counter % 30 == 0 or self.frame_counter == 60) and action_allowed:
+        if (
+            self.frame_counter % 30 == 0 or self.frame_counter == 60
+        ) and action_allowed:
             # from obs to img
             image = self.capture_game_frame(observation)
             # so we have all the hp feature
@@ -657,12 +741,26 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
             # Create unified prompt with all game state info and actions
             prompt = self.create_unified_prompt(features)
 
-            # Use simple text generation for action selection
-            response = self.query_qwen_vl(image, prompt)
+            # Prepare frame stack for vision model
+            frame_stack = []
+            if len(self.frame_history) >= 4:
+                # Use last 4 frames as stack
+                for frame_data in self.frame_history[-4:]:
+                    frame_stack.append(frame_data["image"])
+            else:
+                # If we don't have 4 frames yet, pad with current frame
+                for frame_data in self.frame_history:
+                    frame_stack.append(frame_data["image"])
+                # Pad with current frame to reach 4 frames
+                while len(frame_stack) < 4:
+                    frame_stack.append(image)
+
+            # Use frame stack for temporal understanding
+            response = self.query_qwen_vl(frame_stack, prompt)
 
             # Parse action number from model response
             action = self.parse_action_from_response(response)
-            
+
             # Prevent repeating the same attack too many times (causes blocking)
             if action == self.last_action:
                 self.action_repeat_count += 1
@@ -670,8 +768,12 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
                     # Force a different attack from our aggressive cycle
                     old_action = action
                     action = self.aggressive_attacks[self.attack_cycle_index]
-                    self.attack_cycle_index = (self.attack_cycle_index + 1) % len(self.aggressive_attacks)
-                    print(f"🔄 BREAKING REPEAT: {old_action} → {action} ({self.action_meanings[action]})")
+                    self.attack_cycle_index = (self.attack_cycle_index + 1) % len(
+                        self.aggressive_attacks
+                    )
+                    print(
+                        f"🔄 BREAKING REPEAT: {old_action} → {action} ({self.action_meanings[action]})"
+                    )
                     self.action_repeat_count = 0
             else:
                 self.action_repeat_count = 0
@@ -681,7 +783,7 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
             self.action_cooldown = recovery_frames
             self.frames_since_last_action = 0
             self.last_executed_action = action
-            
+
             # Cache the new decision
             self.last_action = action
             self.last_reasoning = response
@@ -706,17 +808,21 @@ YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
         if verbose:
             model_status = (
                 "NEW"
-                if (self.frame_counter % 30 == 0 or self.frame_counter == 60) and action_allowed
-                else "RECOVERY" if not action_allowed
-                else "CACHED"
+                if (self.frame_counter % 30 == 0 or self.frame_counter == 60)
+                and action_allowed
+                else "RECOVERY" if not action_allowed else "CACHED"
             )
             print(f"\n🚀 Qwen2.5-VL Timing Decision ({model_status}):")
             print(f"Frame: {self.frame_counter}")
             print(f"Action: {action} ({action_name})")
             if not action_allowed:
-                print(f"⏳ Cooldown: {self.action_cooldown} frames from {self.action_meanings[self.last_executed_action]}")
+                print(
+                    f"⏳ Cooldown: {self.action_cooldown} frames from {self.action_meanings[self.last_executed_action]}"
+                )
             else:
-                print(f"Model Response: {response} {'(cached)' if model_status == 'CACHED' else ''}")
+                print(
+                    f"Model Response: {response} {'(cached)' if model_status == 'CACHED' else ''}"
+                )
 
         return action, response
 
