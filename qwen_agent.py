@@ -337,24 +337,24 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         dragon_punch = "39=DRAGON_PUNCH_RIGHT" if facing_right else "42=DRAGON_PUNCH_LEFT"  
         hurricane_kick = "40=HURRICANE_KICK_RIGHT" if facing_right else "43=HURRICANE_KICK_LEFT"
 
-        prompt = f"""Street Fighter 2 - Frame {self.frame_counter}
+        prompt = f"""SF2 Frame {self.frame_counter} | {hp_status} | {range_context} | {movement_context} | {facing_dir}
 
-SITUATION:
-My HP: {features['agent_hp']} | Enemy HP: {features['enemy_hp']} | Status: {hp_status}
-Range: {distance}px ({range_context}) | Movement: {movement_context} | Facing: {facing_dir}
+GAME STATE: My HP {features['agent_hp']} vs Enemy HP {features['enemy_hp']} | Distance {distance}px
 
-FIGHTING PRINCIPLES:
-- If enemy rushing → block/counter (actions 2,3 or defensive moves)
-- If enemy vulnerable → attack (punches 9-20, kicks 21-37)
-- At distance → fireball ({hadoken.split('=')[0]})
-- Anti-air/wakeup → uppercut ({dragon_punch.split('=')[0]})  
-- Close pressure → spinning kick ({hurricane_kick.split('=')[0]})
-- Mix up attacks to avoid being predictable
+TACTICAL ANALYSIS:
+- NEUTRAL: {movement_context} - {'Space control needed' if range_context == 'FAR' else 'Pressure/defense game' if range_context == 'CLOSE' else 'Footsies/pokes'}  
+- OFFENSE: {'Push advantage' if hp_status == 'WINNING' else 'Need damage' if hp_status == 'LOSING' else 'Trade evenly'}
+- DEFENSE: {'Block/counter' if movement_context == 'ENEMY RUSHING' else 'Anti-air ready' if range_context == 'CLOSE' else 'Zone control'}
 
-ACTIONS: 0=none, 1=up, 2=down, 3=left, 6=right, 9-20=punches, 21-37=kicks
-SPECIALS: {hadoken}, {dragon_punch}, {hurricane_kick}
+FRAME DATA AWARENESS:
+- Whiff punish opportunity if enemy misses
+- Frame advantage after blocked attacks  
+- Mixup pressure vs defensive options
+- Special move commitments (38+ frame recovery)
 
-Analyze the 8 frames and choose your next move. Output only the action number (0-43):"""
+OPTIONS: Move(0-8) | Light(9-12,21-25) | Med(13-16,26-31) | Heavy(17-20,32-37) | Specials({hadoken.split('=')[0]},{dragon_punch.split('=')[0]},{hurricane_kick.split('=')[0]})
+
+Choose action (0-43):"""
 
         return prompt
 
