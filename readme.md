@@ -182,6 +182,31 @@ TIMING SYSTEM:
 
 
 
+● wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/config.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/generation_config.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model.safetensors.index.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/tokenizer.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/tokenizer_config.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/vocab.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/merges.txt
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/special_tokens_map.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/added_tokens.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/preprocessor_config.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/chat_template.json
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00001-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00002-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00003-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00004-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00005-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00006-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00007-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00008-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00009-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00010-of-00011.safetensors
+  wget -c https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/resolve/main/model-00011-of-00011.safetensors
+
+
+
 
   # Create directory structure
   mkdir -p ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/main/
