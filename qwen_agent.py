@@ -38,7 +38,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     # agent init
     def __init__(
         self,
-        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
+        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
     ):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
@@ -47,16 +47,16 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             model_path: Path to Qwen model (local or HuggingFace)
         """
         # Initialize Qwen model
-        print(f"🤖 Loading Qwen model from: {model_path}")  # Print model loading status
+        print(f"🤖 Loading Qwen AWQ model from: {model_path}")  # Print model loading status
 
         # device cuda
         self.device = (
             "cuda" if torch.cuda.is_available() else "cpu"
         )  # Set device to GPU if available, else CPU
 
-        # Multi-frame context for temporal understanding - 4 frame stack
+        # Multi-frame context for temporal understanding - 8 frame stack
         self.frame_history = []  # Store recent frames for temporal context
-        self.max_history_frames = 4  # Keep last 4 frames for context (frame stacking)
+        self.max_history_frames = 8  # Keep last 8 frames for context (frame stacking)
 
         # Load processor and model for vision
         print(
@@ -77,18 +77,18 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             "📁 Step 2/2: Loading Qwen2.5-VL model from cache..."
         )  # Print loading status for model
 
-        # Load model without quantization for debugging vision capability
+        # Load AWQ quantized model using AutoAWQ
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             device_map="cuda",
-            torch_dtype=torch.float16,  # Use same dtype as working example
+            torch_dtype=torch.float16,  # AWQ uses fp16 for activations
             local_files_only=True,
         )
         print(
-            f"✅ Qwen model loaded successfully on {self.device}"
+            f"✅ Qwen AWQ model loaded successfully on {self.device}"
         )  # Print successful loading message
 
-        # Action space - matches discretizer.py (keep all actions but focus AI on basic ones)
+        #
         self.action_meanings = [  # Define all possible actions the agent can take
             "NO_ACTION",  # 0 - Do nothing action
             "UP",  # 1 - Jump upward
@@ -172,18 +172,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.last_action = 0  # Store the last action taken
         self.last_reasoning = "Initial state"  # Store reasoning for last decision
 
-        # Action variety system to prevent blocking - SIMPLIFIED BASIC ACTIONS ONLY
-        self.attack_cycle_index = 0  # Cycle through different attacks
-        self.aggressive_attacks = [
-            9,
-            21,
-            3,
-            6,
-            1,
-            2,
-        ]  # Basic: punch, kick, left, right, jump, crouch
+        # Simple action management
         self.action_repeat_count = 0  # Count how many times same action repeated
-        self.last_distance = 0  # Store previous distance between characters
 
         # action has cool down period
         self.action_cooldown = 0
@@ -352,8 +342,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             enemy_hp_change = features["enemy_hp"] - prev_features["enemy_hp"]
             distance_change = features["distance"] - prev_features["distance"]
 
-            # has 4 frames vs has less than 4 frames
-            if len(self.frame_history) >= 4:
+            # has 8 frames vs has less than 8 frames
+            if len(self.frame_history) >= 8:
                 oldest_features = self.frame_history[0]["features"]
                 total_hp_change = features["agent_hp"] - oldest_features["agent_hp"]
                 total_enemy_hp_change = (
@@ -361,18 +351,18 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 )
 
                 history_context = f"""
-🎬 4-FRAME SEQUENCE ANALYSIS:
-Frame-to-frame: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
+🎬 8-FRAME SEQUENCE ANALYSIS:
+Recent Change: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
 Movement: {distance_change:+d}px ({'🚨 ENEMY APPROACHING!' if distance_change < -10 else '🏃 Enemy retreating' if distance_change > 10 else '⚖️ Neutral movement'})
-4-Frame Trend: My HP {total_hp_change:+d}, Enemy HP {total_enemy_hp_change:+d}
-Battle Momentum: {'⚠️ TAKING DAMAGE - DEFEND!' if total_hp_change < -5 else '💪 DEALING DAMAGE - KEEP PRESSURE!' if total_enemy_hp_change < -5 else '⚔️ NEUTRAL FIGHT'}
+8-Frame Trend: My HP {total_hp_change:+d}, Enemy HP {total_enemy_hp_change:+d}
+Battle Momentum: {'⚠️ TAKING DAMAGE' if total_hp_change < -5 else '💪 DEALING DAMAGE' if total_enemy_hp_change < -5 else '⚖️ NEUTRAL FIGHT'}
 
 🔮 PATTERN DETECTION:
-• Distance changing by {distance_change:+d}px suggests: {'🚨 INCOMING ATTACK!' if distance_change < -15 else '📉 ENEMY RETREATING' if distance_change > 15 else '🎯 POSITIONING'}
-• Enemy status sequence suggests: {'⚡ POSSIBLE SPECIAL MOVE STARTUP' if enemy_status != oldest_features.get('enemy_status', 0) else '👤 NORMAL MOVEMENT'}"""
+• Distance trend: {'🚨 INCOMING ATTACK!' if distance_change < -15 else '📉 ENEMY RETREATING' if distance_change > 15 else '🎯 POSITIONING'}
+• Status pattern: {'⚡ ANIMATION CHANGE' if enemy_status != oldest_features.get('enemy_status', 0) else '👤 STABLE STATE'}"""
             else:
                 history_context = f"""
-🎬 BUILDING 4-FRAME STACK ({len(self.frame_history)}/4 frames):
+🎬 BUILDING 8-FRAME STACK ({len(self.frame_history)}/8 frames):
 Recent Change: Agent HP {hp_change:+d}, Enemy HP {enemy_hp_change:+d}
 Movement: {distance_change:+d}px ({'🚨 APPROACHING' if distance_change < -5 else '🏃 RETREATING' if distance_change > 5 else '⚖️ NEUTRAL'})
 Early Pattern: {'💥 TAKING HITS' if hp_change < 0 else '🎯 LANDING HITS' if enemy_hp_change < 0 else '⚔️ NEUTRAL EXCHANGE'}"""
@@ -392,35 +382,22 @@ Early Pattern: {'💥 TAKING HITS' if hp_change < 0 else '🎯 LANDING HITS' if 
             "WINNING" if hp_diff > 30 else "LOSING" if hp_diff < -30 else "EVEN"
         )
 
-        # Always prioritize aggressive approach - this is a fighting game!
-        my_approach = "ULTRA_AGGRESSIVE"  # Always be aggressive
-        enemy_threat = (
-            "TARGET"
-            if enemy_status == "HEALTHY"
-            else "WEAK_TARGET" if enemy_status == "LOW" else "FINISH_HIM"
-        )
+        # Neutral approach based on game state
+        my_approach = "BALANCED"  # Balanced fighting approach
 
-        # Basic combat strategy based on distance
+        # Distance-based strategy options
         distance_strategy = ""
         if features["distance"] < 40:  # Close range
-            distance_strategy = (
-                "CLOSE RANGE: PUNCH (9), KICK (21), or BLOCK (3=away, 6=toward)!"
-            )
+            distance_strategy = "CLOSE RANGE: Various attack, block, or movement options available"
         elif features["distance"] < 80:  # Medium range
-            distance_strategy = (
-                "MEDIUM RANGE: MOVE CLOSER (6=RIGHT) or JUMP (1) to close gap!"
-            )
+            distance_strategy = "MEDIUM RANGE: Multiple approach and attack options"
         else:  # Long range
-            distance_strategy = (
-                "LONG RANGE: MOVE FORWARD (6=RIGHT) or JUMP (1) to get closer!"
-            )
+            distance_strategy = "LONG RANGE: Movement and ranged attack options"
 
         # 4-FRAME PATTERN ANALYSIS - Predict enemy moves and counter!
 
         action_recommendations = f"""
-🔮 4-FRAME SEQUENCE ANALYSIS - PREDICT THE FUTURE! 🔮
-
-🎯 LOOK AT ALL 4 FRAMES TOGETHER - What pattern do you see?
+🎬 FRAME SEQUENCE ANALYSIS - FIGHTING GAME INTELLIGENCE 🎬
 
 📊 CURRENT SITUATION:
 - MY HP: {features['agent_hp']} | ENEMY HP: {features['enemy_hp']}
@@ -428,66 +405,46 @@ Early Pattern: {'💥 TAKING HITS' if hp_change < 0 else '🎯 LANDING HITS' if 
 - MY Status: {agent_status_val} | ENEMY Status: {enemy_status}
 - HP Advantage: {hp_diff:+d}
 
-🔍 VISUAL PATTERN ANALYSIS (analyze what you SEE in the 4 frames):
-Look for these visual cues across the frame sequence:
-• Position changes: Enemy moving toward/away from you?
-• Height changes: Enemy crouching then rising (attack startup)?
-• Rapid movement: Sudden position shifts (special moves)?
-• Animation changes: Different poses between frames?
-• Distance trends: Getting closer/farther over time?
+🔍 VISUAL ANALYSIS:
+Analyze the frame sequence for:
+• Movement patterns and positioning changes
+• Attack animations and defensive postures  
+• Distance changes and timing opportunities
+• Character state transitions
 
-🎯 ADAPTIVE COUNTER-STRATEGY:
-• If you observe rapid approach → Use 3=LEFT (block) or 21=KICK (space)
-• If you see upward movement → Use 2=CROUCH (avoid) or 9=PUNCH (anti-air)
-• If you notice retreat pattern → Use 6=RIGHT (chase) or 1=JUMP (close)
-• If distance stable + enemy animation change → Prepare counter-attack
-• Trust your visual analysis - adapt based on what YOU see in the frames
+🎯 AVAILABLE ACTIONS (choose any 0-43):
+MOVEMENT: 0=NONE, 1=UP, 2=DOWN, 3=LEFT, 4=UP_LEFT, 5=DOWN_LEFT, 6=RIGHT, 7=UP_RIGHT, 8=DOWN_RIGHT
+LIGHT ATTACKS: 9-12=LIGHT_PUNCH variants, 21-25=LIGHT_KICK variants
+MEDIUM ATTACKS: 13-16=MEDIUM_PUNCH variants, 26-31=MEDIUM_KICK variants  
+HEAVY ATTACKS: 17-20=HEAVY_PUNCH variants, 32-37=HEAVY_KICK variants
+SPECIALS: 38=HADOKEN_RIGHT, 39=DRAGON_PUNCH_RIGHT, 40=HURRICANE_KICK_RIGHT, 41-43=LEFT variants
 
-⚡ BASIC COUNTER-ATTACKS:
-- 9=PUNCH: Quick attack when enemy vulnerable
-- 21=KICK: Keep distance, interrupt enemy moves
-- 3=LEFT: Block/retreat from dangerous attacks  
-- 6=RIGHT: Advance when enemy is recovering
-- 1=JUMP: Avoid low attacks or close distance
-- 2=CROUCH: Avoid high attacks, prepare counter
+⚖️ STRATEGIC OPTIONS:
+• Choose based on situation analysis
+• Consider timing, distance, and enemy state
+• All actions are available - pick what fits best
 """
 
-        prompt = f"""🎬 4-FRAME SEQUENCE ANALYSIS - STREET FIGHTER 2 PREDICTION:
+        prompt = f"""🎬 8-FRAME SEQUENCE ANALYSIS - STREET FIGHTER 2:
 
-🔍 ANALYZE ALL 4 FRAMES TOGETHER:
-Current Distance: {features['distance']}px ({distance_text})
+🔍 ANALYZE ALL 8 FRAMES TOGETHER:
+Distance: {features['distance']}px ({distance_text})
 Position: Agent {abs(x_diff)}px {"L" if x_diff < 0 else "R"} of enemy
 MY Health: {features['agent_hp']} ({agent_status})
-MY Status: {features['agent_status']} (watch my animation state)
+MY Status: {features['agent_status']} 
 ENEMY Health: {features['enemy_hp']} ({enemy_status})  
-ENEMY Status: {features['enemy_status']} (CRITICAL - watch for attack patterns!)
+ENEMY Status: {features['enemy_status']} 
 Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_context}
 
 {distance_strategy}
 
-🔮 PATTERN RECOGNITION MISSION:{action_recommendations}
+🎯 FIGHTING ANALYSIS:{action_recommendations}
 
-🎯 BASIC ACTION ARSENAL:
-MOVEMENT: 3=LEFT 6=RIGHT 1=JUMP 2=CROUCH
-ATTACKS: 9=PUNCH 21=KICK
-DEFENSE: 3=LEFT (block away) 2=CROUCH (low block)
+CRITICAL INSTRUCTION: ANALYZE THE 8-FRAME SEQUENCE, THEN RESPOND WITH ONE ACTION NUMBER!
+CHOOSE ANY ACTION (0-43): All moves available
+DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE ACTION NUMBER.
 
-⚡ PREDICTION-BASED STRATEGY:
-- Watch 4-frame sequence for enemy attack startup
-- Counter predicted moves with appropriate basic action
-- Use movement to avoid, attacks to punish, blocks to defend
-
-CRITICAL INSTRUCTION: ANALYZE THE 4 FRAMES FOR PATTERNS, THEN RESPOND WITH ONE NUMBER!
-USE ONLY BASIC ACTIONS: 0, 1, 2, 3, 6, 9, 21
-DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE PREDICTED COUNTER-ACTION NUMBER.
-
-🔮 PREDICTION EXAMPLES:
-- See enemy rushing forward → 3=LEFT_BLOCK or 2=CROUCH
-- See enemy jumping → 2=CROUCH or 9=PUNCH (anti-air)
-- See enemy retreating → 6=RIGHT (follow) or 1=JUMP (close gap)
-- See enemy vulnerable → 9=PUNCH or 21=KICK (attack!)
-
-YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
+YOUR ACTION CHOICE (0-43): """
 
         return prompt
 
@@ -611,89 +568,51 @@ YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
                     print(f"✅ FOUND ACTION PATTERN: {action}")
                     return action
 
-            # Look for numbers that could be actions - PRIORITIZE BASIC ACTIONS
+            # Look for numbers that could be actions - ALL ACTIONS ALLOWED
             numbers = re.findall(r"\b(\d+)\b", response)
-            basic_actions = [
-                0,
-                1,
-                2,
-                3,
-                6,
-                9,
-                21,
-            ]  # NO_ACTION, UP, DOWN, LEFT, RIGHT, PUNCH, KICK
-
-            # First check for basic actions
+            
+            # Check for any valid action number
             for num_str in numbers:
                 num = int(num_str)
                 # Skip numbers likely from "Street Fighter 2" or other context
                 if num == 2 and "Fighter 2" in response:
                     continue
-                if num in basic_actions:
-                    print(f"✅ FOUND BASIC ACTION: {num}")
+                if 0 <= num < self.num_actions:
+                    print(f"✅ FOUND VALID ACTION: {num}")
                     return num
 
-            # If no basic actions found, fall back to any valid action
-            for num_str in numbers:
-                num = int(num_str)
-                if num == 2 and "Fighter 2" in response:
-                    continue
-                if 0 <= num < self.num_actions:
-                    print(
-                        f"⚠️ FOUND NON-BASIC ACTION: {num} - converting to basic equivalent"
-                    )
-                    # Convert complex actions to basic equivalents
-                    if num in [17, 13, 9]:  # Any punch -> basic punch
-                        return 9
-                    elif num in [32, 26, 21]:  # Any kick -> basic kick
-                        return 21
-                    elif num in [4, 7]:  # Diagonal jumps -> basic jump
-                        return 1
-                    elif num in [5, 8]:  # Crouch movements -> basic crouch
-                        return 2
-                    else:
-                        return num  # Use as-is if no basic equivalent
-
-            # If no numbers found, try to infer action from keywords - BASIC ACTIONS ONLY
+            # If no numbers found, try to infer action from keywords
             response_lower = response.lower()
 
-            # Map keywords to BASIC actions only!
-            if any(
-                word in response_lower for word in ["punch", "hit", "attack", "strike"]
-            ):
+            # Map keywords to actions
+            if any(word in response_lower for word in ["punch", "hit", "attack", "strike"]):
                 print(f"🔍 INFERRED FROM 'punch': 9 (LIGHT_PUNCH)")
-                return 9  # LIGHT_PUNCH (basic punch)
+                return 9  # LIGHT_PUNCH
             elif any(word in response_lower for word in ["kick"]):
                 print(f"🔍 INFERRED FROM 'kick': 21 (LIGHT_KICK)")
-                return 21  # LIGHT_KICK (basic kick)
+                return 21  # LIGHT_KICK
             elif any(word in response_lower for word in ["jump", "up"]):
                 print(f"🔍 INFERRED FROM 'jump': 1 (UP)")
-                return 1  # UP (jump)
-            elif any(
-                word in response_lower for word in ["right", "forward", "advance"]
-            ):
+                return 1  # UP
+            elif any(word in response_lower for word in ["right", "forward", "advance"]):
                 print(f"🔍 INFERRED FROM 'right': 6 (RIGHT)")
-                return 6  # RIGHT (move right)
-            elif any(
-                word in response_lower for word in ["left", "back", "retreat", "block"]
-            ):
+                return 6  # RIGHT
+            elif any(word in response_lower for word in ["left", "back", "retreat", "block"]):
                 print(f"🔍 INFERRED FROM 'left/block': 3 (LEFT)")
-                return 3  # LEFT (move left/block)
-            elif any(
-                word in response_lower for word in ["crouch", "duck", "down", "low"]
-            ):
+                return 3  # LEFT
+            elif any(word in response_lower for word in ["crouch", "duck", "down", "low"]):
                 print(f"🔍 INFERRED FROM 'crouch': 2 (DOWN)")
-                return 2  # DOWN (crouch)
+                return 2  # DOWN
+            elif any(word in response_lower for word in ["hadoken", "fireball"]):
+                print(f"🔍 INFERRED FROM 'hadoken': 38 (HADOKEN_RIGHT)")
+                return 38  # HADOKEN_RIGHT
+            elif any(word in response_lower for word in ["uppercut", "dragon"]):
+                print(f"🔍 INFERRED FROM 'uppercut': 39 (DRAGON_PUNCH_RIGHT)")
+                return 39  # DRAGON_PUNCH_RIGHT
 
-            # BASIC FALLBACK - cycle through basic actions only
-            fallback_action = self.aggressive_attacks[self.attack_cycle_index]
-            self.attack_cycle_index = (self.attack_cycle_index + 1) % len(
-                self.aggressive_attacks
-            )
-            print(
-                f"⚠️ NO KEYWORDS FOUND - CYCLING BASIC FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})"
-            )
-            return fallback_action
+            # Simple fallback - default to no action
+            print(f"⚠️ NO KEYWORDS FOUND - DEFAULTING TO: 0 (NO_ACTION)")
+            return 0
 
         except Exception as e:
             print(f"❌ Action parsing failed: {e}")
@@ -743,16 +662,16 @@ YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
 
             # Prepare frame stack for vision model
             frame_stack = []
-            if len(self.frame_history) >= 4:
-                # Use last 4 frames as stack
-                for frame_data in self.frame_history[-4:]:
+            if len(self.frame_history) >= 8:
+                # Use last 8 frames as stack
+                for frame_data in self.frame_history[-8:]:
                     frame_stack.append(frame_data["image"])
             else:
-                # If we don't have 4 frames yet, pad with current frame
+                # If we don't have 8 frames yet, pad with current frame
                 for frame_data in self.frame_history:
                     frame_stack.append(frame_data["image"])
-                # Pad with current frame to reach 4 frames
-                while len(frame_stack) < 4:
+                # Pad with current frame to reach 8 frames
+                while len(frame_stack) < 8:
                     frame_stack.append(image)
 
             # Use frame stack for temporal understanding
@@ -764,15 +683,12 @@ YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
             # Prevent repeating the same attack too many times (causes blocking)
             if action == self.last_action:
                 self.action_repeat_count += 1
-                if self.action_repeat_count > 2:  # If repeating more than 2 times
-                    # Force a different attack from our aggressive cycle
+                if self.action_repeat_count > 3:  # If repeating more than 3 times
+                    # Encourage variety by suggesting no action
                     old_action = action
-                    action = self.aggressive_attacks[self.attack_cycle_index]
-                    self.attack_cycle_index = (self.attack_cycle_index + 1) % len(
-                        self.aggressive_attacks
-                    )
+                    action = 0  # NO_ACTION to break pattern
                     print(
-                        f"🔄 BREAKING REPEAT: {old_action} → {action} ({self.action_meanings[action]})"
+                        f"🔄 BREAKING REPEAT: {old_action} → {action} (NO_ACTION)"
                     )
                     self.action_repeat_count = 0
             else:
@@ -845,7 +761,7 @@ YOUR PREDICTIVE COUNTER-ACTION (0,1,2,3,6,9,21): """
 
 # Demo functions from demo_qwen.py
 def demo_qwen_gameplay(
-    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # Function to demo Qwen agent gameplay
+    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # Function to demo Qwen agent gameplay
     episodes: int = 3,  # Default number of episodes to play
     render: bool = True,  # Default to render game visuals
     verbose: bool = True,
@@ -961,8 +877,8 @@ def test_qwen_simple():  # Function for simple agent testing
 
     # Create agent
     agent = QwenStreetFighterAgent(
-        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct"
-    )  # Create agent with 3B model
+        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ"
+    )  # Create agent with 7B AWQ model
 
     # Test a few decisions
     for i in range(3):  # Loop through 3 test iterations
@@ -987,13 +903,13 @@ def test_qwen_simple():  # Function for simple agent testing
 # Test script
 if __name__ == "__main__":  # Check if script is run directly
     parser = argparse.ArgumentParser(
-        description="Qwen Street Fighter Demo"
+        description="Qwen Street Fighter Demo (7B AWQ)"
     )  # Create argument parser
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",  # 3B model path argument
-        help="SmolVLM model local path",
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # 7B AWQ model path argument
+        help="Qwen2.5-VL AWQ model local path",
     )  # Help text for model argument
     parser.add_argument(
         "--episodes",
