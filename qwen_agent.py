@@ -88,7 +88,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             f"✅ Qwen model loaded successfully on {self.device}"
         )  # Print successful loading message
 
-        # Action space - matches discretizer.py
+        # Action space - matches discretizer.py (keep all actions but focus AI on basic ones)
         self.action_meanings = [  # Define all possible actions the agent can take
             "NO_ACTION",  # 0 - Do nothing action
             "UP",  # 1 - Jump upward
@@ -174,9 +174,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.last_action = 0  # Store the last action taken
         self.last_reasoning = "Initial state"  # Store reasoning for last decision
 
-        # Action variety system to prevent blocking
+        # Action variety system to prevent blocking - SIMPLIFIED BASIC ACTIONS ONLY
         self.attack_cycle_index = 0  # Cycle through different attacks
-        self.aggressive_attacks = [17, 32, 38, 39, 13, 26, 9, 21]  # Heavy, medium, light attacks + specials
+        self.aggressive_attacks = [9, 21, 3, 6, 1, 2]  # Basic: punch, kick, left, right, jump, crouch
         self.action_repeat_count = 0  # Count how many times same action repeated
         self.last_distance = 0  # Store previous distance between characters
         
@@ -371,22 +371,22 @@ Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0
             else "WEAK_TARGET" if enemy_status == "LOW" else "FINISH_HIM"
         )
 
-        # Ultra-aggressive combat strategy based on distance
+        # Basic combat strategy based on distance
         distance_strategy = ""
         if features["distance"] < 40:  # Close range
-            distance_strategy = "CLOSE RANGE CARNAGE: HEAVY PUNCHES (17), HEAVY KICKS (32), COMBOS!"
+            distance_strategy = "CLOSE RANGE: PUNCH (9), KICK (21), or BLOCK (3=away, 6=toward)!"
         elif features["distance"] < 80:  # Medium range  
-            distance_strategy = "MEDIUM RANGE ASSAULT: HADOKEN (38) + RUSH WITH ATTACKS!"
+            distance_strategy = "MEDIUM RANGE: MOVE CLOSER (6=RIGHT) or JUMP (1) to close gap!"
         else:  # Long range
-            distance_strategy = "LONG RANGE ATTACK: HADOKEN SPAM (38) OR RUSH FORWARD WITH RIGHT (6)!"
+            distance_strategy = "LONG RANGE: MOVE FORWARD (6=RIGHT) or JUMP (1) to get closer!"
 
-        # ULTRA AGGRESSIVE - let AI learn status patterns through observation
+        # BASIC FIGHTING MODE - Focus on fundamental moves only
         action_recommendations = """
-💀 ULTRA AGGRESSIVE MODE ACTIVATED! 💀
-🔥 PRIORITY ATTACKS: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 38=HADOKEN, 39=UPPERCUT!
-⚡ NO MERCY: Attack constantly! Mix heavy strikes with specials!
-🎯 COMBO TIME: Chain attacks together for maximum damage!
-🚀 MOVEMENT ONLY TO GET CLOSER TO ATTACK MORE!"""
+🥊 BASIC FIGHTING MODE - KEEP IT SIMPLE! 🥊
+🎯 BASIC ACTIONS ONLY: 9=PUNCH, 21=KICK, 3=LEFT, 6=RIGHT, 1=JUMP, 2=CROUCH
+🛡️ BLOCK WHEN NEEDED: 3=LEFT (block), 6=RIGHT (toward enemy)
+⚡ MIX BASICS: Punch, kick, move, block - master the fundamentals!
+🚀 NO COMPLEX MOVES - JUST BASIC STREET FIGHTING!"""
         
         # Add raw status observations for learning
         enemy_status = features.get("enemy_status", 0)
@@ -394,13 +394,13 @@ Trend: {'Taking damage' if hp_change < 0 else 'Stable/gaining' if hp_change >= 0
         
         action_recommendations += f"""
 
-📊 STATUS OBSERVATIONS:
-- MY Status: {agent_status_val} (learn what this means through play)
-- ENEMY Status: {enemy_status} (observe patterns - when vulnerable?)
+📊 GAME STATE:
+- MY Status: {agent_status_val} 
+- ENEMY Status: {enemy_status}
 - Distance: {features['distance']}px (close<40, medium<80, far>80)
 - HP Difference: {hp_diff:+d} (positive=winning, negative=losing)
 
-🧠 LEARN PATTERNS: Different enemy status values may mean vulnerable states!"""
+🧠 STRATEGY: Use basic moves effectively - timing and positioning matter more than complex combos!"""
 
         prompt = f"""SF2 TACTICAL ANALYSIS:
 Distance: {features['distance']}px ({distance_text})
@@ -415,31 +415,30 @@ Battle Status: {tactical_status} (My HP - Enemy HP = {hp_diff:+d}){history_conte
 
 BATTLE PLAN:{action_recommendations}
 
-QUICK REFERENCE:
+BASIC ACTIONS ONLY:
 MOVEMENT: 3=LEFT 6=RIGHT 1=JUMP 2=CROUCH
-LIGHT ATTACKS: 9=L_PUNCH 21=L_KICK (fast, safe)  
-MEDIUM ATTACKS: 13=M_PUNCH 26=M_KICK (good damage)
-HEAVY ATTACKS: 17=H_PUNCH 32=H_KICK (high damage, risky)
-SPECIALS: 38=HADOKEN 39=UPPERCUT 40=HURRICANE (high impact!)
+ATTACKS: 9=PUNCH 21=KICK (master these basics!)
+BLOCKING: 3=LEFT (block away) 6=RIGHT (block toward) 2=CROUCH (low block)
 
-🥊 FIGHT SMART: HEALTHY=ATTACK, LOW=DEFEND, VULNERABLE ENEMY=PUNISH!
+🥊 KEEP IT SIMPLE: Focus on timing and positioning with basic moves!
 
-CRITICAL INSTRUCTION: YOU MUST RESPOND WITH ONLY A SINGLE NUMBER (0-43) FOR THE ACTION.
+CRITICAL INSTRUCTION: YOU MUST RESPOND WITH ONLY A SINGLE NUMBER FOR THE ACTION.
+USE ONLY THESE BASIC ACTIONS: 0, 1, 2, 3, 6, 9, 21
 DO NOT EXPLAIN. DO NOT USE WORDS. JUST OUTPUT THE ACTION NUMBER.
-MIX UP YOUR ATTACKS - DON'T REPEAT THE SAME MOVE! VARIETY PREVENTS BLOCKING!
+MIX UP YOUR BASICS - DON'T REPEAT THE SAME MOVE!
 
-ATTACK VARIETY EXAMPLES:
-- Close range: 17=HEAVY_PUNCH, 32=HEAVY_KICK, 13=MEDIUM_PUNCH, 26=MEDIUM_KICK
-- Special moves: 38=HADOKEN, 39=UPPERCUT, 40=HURRICANE
-- Quick hits: 9=LIGHT_PUNCH, 21=LIGHT_KICK
+BASIC FIGHTING EXAMPLES:
+- Close range: 9=PUNCH, 21=KICK, 3=BLOCK_LEFT, 6=BLOCK_RIGHT  
+- Medium range: 6=MOVE_RIGHT, 1=JUMP
+- Defense: 3=LEFT_BLOCK, 2=CROUCH_BLOCK
 
-STATUS LEARNING:
-- Observe enemy status values and when they seem vulnerable
-- Try different attacks based on status patterns you notice
-- Learn through experience what each status number means
-- Focus on aggressive attacks while observing patterns
+BASIC STRATEGY:
+- Use 9=PUNCH and 21=KICK for attacks
+- Use 3=LEFT and 6=RIGHT for movement and blocking  
+- Use 1=JUMP and 2=CROUCH for positioning
+- Mix these basics - don't repeat the same action!
 
-YOUR RESPONSE MUST BE EXACTLY ONE ATTACK NUMBER: """
+YOUR RESPONSE MUST BE EXACTLY ONE BASIC ACTION NUMBER (0,1,2,3,6,9,21): """
 
         return prompt
 
@@ -552,62 +551,66 @@ YOUR RESPONSE MUST BE EXACTLY ONE ATTACK NUMBER: """
                     print(f"✅ FOUND ACTION PATTERN: {action}")
                     return action
 
-            # Look for numbers that could be actions (exclude common false positives)
+            # Look for numbers that could be actions - PRIORITIZE BASIC ACTIONS
             numbers = re.findall(r"\b(\d+)\b", response)
+            basic_actions = [0, 1, 2, 3, 6, 9, 21]  # NO_ACTION, UP, DOWN, LEFT, RIGHT, PUNCH, KICK
+            
+            # First check for basic actions
             for num_str in numbers:
                 num = int(num_str)
                 # Skip numbers likely from "Street Fighter 2" or other context
                 if num == 2 and "Fighter 2" in response:
                     continue
-                if 0 <= num < self.num_actions:
-                    print(f"✅ FOUND FIRST VALID NUMBER: {num}")
+                if num in basic_actions:
+                    print(f"✅ FOUND BASIC ACTION: {num}")
                     return num
+            
+            # If no basic actions found, fall back to any valid action
+            for num_str in numbers:
+                num = int(num_str)
+                if num == 2 and "Fighter 2" in response:
+                    continue
+                if 0 <= num < self.num_actions:
+                    print(f"⚠️ FOUND NON-BASIC ACTION: {num} - converting to basic equivalent")
+                    # Convert complex actions to basic equivalents
+                    if num in [17, 13, 9]:  # Any punch -> basic punch
+                        return 9
+                    elif num in [32, 26, 21]:  # Any kick -> basic kick
+                        return 21
+                    elif num in [4, 7]:  # Diagonal jumps -> basic jump
+                        return 1
+                    elif num in [5, 8]:  # Crouch movements -> basic crouch
+                        return 2
+                    else:
+                        return num  # Use as-is if no basic equivalent
 
-            # If no numbers found, try to infer action from keywords
+            # If no numbers found, try to infer action from keywords - BASIC ACTIONS ONLY
             response_lower = response.lower()
             
-            # Map keywords to actions - PRIORITIZE ATTACKS for aggressive play!
-            if "heavy attack" in response_lower or "heavy punch" in response_lower:
-                print(f"🔍 INFERRED FROM 'heavy attack': 17 (HEAVY_PUNCH)")
-                return 17  # HEAVY_PUNCH
-            elif "heavy kick" in response_lower:
-                print(f"🔍 INFERRED FROM 'heavy kick': 32 (HEAVY_KICK)")
-                return 32  # HEAVY_KICK
-            elif "hadoken" in response_lower or "fireball" in response_lower:
-                print(f"🔍 INFERRED FROM 'hadoken/fireball': 38 (HADOKEN_RIGHT)")
-                return 38  # HADOKEN_RIGHT
-            elif "uppercut" in response_lower or "dragon punch" in response_lower:
-                print(f"🔍 INFERRED FROM 'uppercut': 39 (DRAGON_PUNCH_RIGHT)")
-                return 39  # DRAGON_PUNCH_RIGHT
-            elif "medium punch" in response_lower or "med punch" in response_lower:
-                print(f"🔍 INFERRED FROM 'medium punch': 13 (MEDIUM_PUNCH)")
-                return 13  # MEDIUM_PUNCH
-            elif "medium kick" in response_lower or "med kick" in response_lower:
-                print(f"🔍 INFERRED FROM 'medium kick': 26 (MEDIUM_KICK)")
-                return 26  # MEDIUM_KICK
-            elif "light punch" in response_lower:
-                print(f"🔍 INFERRED FROM 'light punch': 9 (LIGHT_PUNCH)")
-                return 9  # LIGHT_PUNCH
-            elif "light kick" in response_lower:
-                print(f"🔍 INFERRED FROM 'light kick': 21 (LIGHT_KICK)")
-                return 21  # LIGHT_KICK
-            elif "jump" in response_lower:
+            # Map keywords to BASIC actions only!
+            if any(word in response_lower for word in ["punch", "hit", "attack", "strike"]):
+                print(f"🔍 INFERRED FROM 'punch': 9 (LIGHT_PUNCH)")
+                return 9  # LIGHT_PUNCH (basic punch)
+            elif any(word in response_lower for word in ["kick"]):
+                print(f"🔍 INFERRED FROM 'kick': 21 (LIGHT_KICK)")
+                return 21  # LIGHT_KICK (basic kick)
+            elif any(word in response_lower for word in ["jump", "up"]):
                 print(f"🔍 INFERRED FROM 'jump': 1 (UP)")
-                return 1  # UP
-            elif "move right" in response_lower or "go right" in response_lower or "right" in response_lower:
-                print(f"🔍 INFERRED FROM 'move right': 6 (RIGHT)")
-                return 6  # RIGHT
-            elif "move left" in response_lower or "go left" in response_lower or "left" in response_lower:
-                print(f"🔍 INFERRED FROM 'move left': 3 (LEFT)")
-                return 3  # LEFT
-            elif "crouch" in response_lower or "duck" in response_lower:
+                return 1  # UP (jump)
+            elif any(word in response_lower for word in ["right", "forward", "advance"]):
+                print(f"🔍 INFERRED FROM 'right': 6 (RIGHT)")
+                return 6  # RIGHT (move right)
+            elif any(word in response_lower for word in ["left", "back", "retreat", "block"]):
+                print(f"🔍 INFERRED FROM 'left/block': 3 (LEFT)")
+                return 3  # LEFT (move left/block)
+            elif any(word in response_lower for word in ["crouch", "duck", "down", "low"]):
                 print(f"🔍 INFERRED FROM 'crouch': 2 (DOWN)")
-                return 2  # DOWN
+                return 2  # DOWN (crouch)
             
-            # AGGRESSIVE FALLBACK - cycle through different attacks to prevent blocking!
+            # BASIC FALLBACK - cycle through basic actions only
             fallback_action = self.aggressive_attacks[self.attack_cycle_index]
             self.attack_cycle_index = (self.attack_cycle_index + 1) % len(self.aggressive_attacks)
-            print(f"⚠️ NO KEYWORDS FOUND - CYCLING ATTACK FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})")
+            print(f"⚠️ NO KEYWORDS FOUND - CYCLING BASIC FALLBACK: {fallback_action} ({self.action_meanings[fallback_action]})")
             return fallback_action
 
         except Exception as e:

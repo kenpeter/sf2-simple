@@ -1,9 +1,110 @@
+# Qwen Street Fighter Agent
+
 __win rate at 63.2%__
 
 <img width="516" height="570" alt="win" src="https://github.com/user-attachments/assets/59fe8e24-bafc-40d7-b628-7c8bd63aba12" />
 
 
 [training_small.webm](https://github.com/user-attachments/assets/f2f6f763-b9a5-4aeb-8150-f2e86ebe5a55)
+
+## How the Qwen Agent Code Works - Flow Diagram
+
+```
+START
+  │
+  ├─── INITIALIZATION PHASE
+  │     │
+  │     ├─ Load Qwen2.5-VL vision model from cache
+  │     ├─ Setup 44 total actions (but focus on 7 basic ones)
+  │     ├─ Initialize cooldown timers and action history
+  │     └─ Ready to play
+  │
+  ├─── MAIN GAME LOOP
+  │     │
+  │     ├─ Get game observation (screen frame + game state)
+  │     │
+  │     ├─── TIMING CONTROL SYSTEM
+  │     │     │
+  │     │     ├─ Check if frame_counter % 30 == 0 (every 0.5 seconds)
+  │     │     ├─ Check if action_cooldown <= 0 (not in recovery)
+  │     │     │
+  │     │     ├─ IF YES: Make new decision
+  │     │     └─ IF NO: Use cached action or NO_ACTION
+  │     │
+  │     ├─── DECISION MAKING PROCESS (when allowed)
+  │     │     │
+  │     │     ├─ capture_game_frame()
+  │     │     │   ├─ Convert numpy observation to PIL Image  
+  │     │     │   └─ Handle different image formats
+  │     │     │
+  │     │     ├─ extract_game_features()
+  │     │     │   ├─ Parse HP, positions, status from game info
+  │     │     │   ├─ Calculate distance, HP advantage, facing direction
+  │     │     │   └─ Build strategic context
+  │     │     │
+  │     │     ├─ create_unified_prompt()
+  │     │     │   ├─ Analyze current situation (health, distance, positioning)
+  │     │     │   ├─ Add frame history context (HP changes, movement)
+  │     │     │   ├─ Create strategy based on distance:
+  │     │     │   │   ├─ Close (<40px): Punch/Kick/Block
+  │     │     │   │   ├─ Medium (<80px): Move closer
+  │     │     │   │   └─ Far (>80px): Move forward or jump
+  │     │     │   └─ Generate action prompt focusing on basic moves only
+  │     │     │
+  │     │     ├─ query_qwen_vl()
+  │     │     │   ├─ Format messages with image + text prompt
+  │     │     │   ├─ Process inputs through Qwen2.5-VL model
+  │     │     │   ├─ Generate response (max 50 tokens, greedy decoding)
+  │     │     │   └─ Return AI's text response
+  │     │     │
+  │     │     └─ parse_action_from_response()
+  │     │         │
+  │     │         ├─ Extract numbers from AI response
+  │     │         ├─ Prioritize basic actions (0,1,2,3,6,9,21)
+  │     │         ├─ Convert complex actions to basic equivalents
+  │     │         ├─ Try keyword matching if no numbers found
+  │     │         └─ Use cycling fallback as last resort
+  │     │
+  │     ├─── ACTION PROCESSING
+  │     │     │
+  │     │     ├─ Anti-repeat system: prevent same action >2 times
+  │     │     ├─ Set cooldown based on action recovery frames
+  │     │     ├─ Cache action and reasoning for future frames  
+  │     │     └─ Update action history
+  │     │
+  │     ├─── EXECUTE ACTION
+  │     │     │
+  │     │     ├─ Send action number (0-43) to game environment
+  │     │     ├─ Environment processes action and updates game state
+  │     │     └─ Get reward/penalty based on combat effectiveness
+  │     │
+  │     └─ COOLDOWN MANAGEMENT
+  │           │
+  │           ├─ Decrement action_cooldown counter each frame
+  │           ├─ Track frames_since_last_action
+  │           └─ Block new decisions until cooldown expires
+  │
+  └─── EPISODE END
+        │
+        ├─ Reset all counters and history
+        ├─ Clear frame buffers and cached actions
+        └─ Ready for new episode
+
+BASIC ACTIONS FOCUSED ON:
+├─ 0 = NO_ACTION (wait/rest)
+├─ 1 = JUMP (up movement)
+├─ 2 = CROUCH (down/low block)
+├─ 3 = LEFT (move left/block away)
+├─ 6 = RIGHT (move right/block toward)  
+├─ 9 = PUNCH (basic attack)
+└─ 21 = KICK (basic attack)
+
+TIMING SYSTEM:
+├─ New decisions: Every 30 frames (0.5 seconds)
+├─ Action cooldowns: Vary by move (punch=11f, kick=12f, jump=15f)
+├─ Recovery frames: Must wait before next action
+└─ Real-time play: 60fps game, 2 decisions per second max
+```
 
 
 
