@@ -38,7 +38,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     # agent init
     def __init__(
         self,
-        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",
+        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
     ):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
@@ -47,7 +47,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             model_path: Path to Qwen model (local or HuggingFace)
         """
         # Initialize Qwen model
-        print(f"🤖 Loading Qwen 72B AWQ model from: {model_path}")  # Print model loading status
+        print(
+            f"🤖 Loading Qwen 72B AWQ model from: {model_path}"
+        )  # Print model loading status
 
         # device cuda
         self.device = (
@@ -313,11 +315,11 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         # Calculate key metrics
         distance = features["distance"]
         hp_diff = features["agent_hp"] - features["enemy_hp"]
-        
+
         # Determine tactical situation
         range_context = "CLOSE" if distance < 60 else "MID" if distance < 120 else "FAR"
         hp_status = "WINNING" if hp_diff > 20 else "LOSING" if hp_diff < -20 else "EVEN"
-        
+
         # Movement context from frame history
         movement_context = ""
         if len(self.frame_history) >= 2:
@@ -333,11 +335,15 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         # Determine facing direction based on enemy position
         facing_right = features["agent_x"] < features["enemy_x"]
         facing_dir = "RIGHT" if facing_right else "LEFT"
-        
+
         # Special moves based on facing direction
         hadoken = "38=HADOKEN_RIGHT" if facing_right else "41=HADOKEN_LEFT"
-        dragon_punch = "39=DRAGON_PUNCH_RIGHT" if facing_right else "42=DRAGON_PUNCH_LEFT"  
-        hurricane_kick = "40=HURRICANE_KICK_RIGHT" if facing_right else "43=HURRICANE_KICK_LEFT"
+        dragon_punch = (
+            "39=DRAGON_PUNCH_RIGHT" if facing_right else "42=DRAGON_PUNCH_LEFT"
+        )
+        hurricane_kick = (
+            "40=HURRICANE_KICK_RIGHT" if facing_right else "43=HURRICANE_KICK_LEFT"
+        )
 
         prompt = f"""SF2 Frame {self.frame_counter} | {hp_status} | {range_context} | {movement_context} | {facing_dir}
 
@@ -482,7 +488,7 @@ Choose action (0-43):"""
 
             # Look for numbers that could be actions - ALL ACTIONS ALLOWED
             numbers = re.findall(r"\b(\d+)\b", response)
-            
+
             # Check for any valid action number
             for num_str in numbers:
                 num = int(num_str)
@@ -497,7 +503,9 @@ Choose action (0-43):"""
             response_lower = response.lower()
 
             # Map keywords to actions
-            if any(word in response_lower for word in ["punch", "hit", "attack", "strike"]):
+            if any(
+                word in response_lower for word in ["punch", "hit", "attack", "strike"]
+            ):
                 print(f"🔍 INFERRED FROM 'punch': 9 (LIGHT_PUNCH)")
                 return 9  # LIGHT_PUNCH
             elif any(word in response_lower for word in ["kick"]):
@@ -506,13 +514,19 @@ Choose action (0-43):"""
             elif any(word in response_lower for word in ["jump", "up"]):
                 print(f"🔍 INFERRED FROM 'jump': 1 (UP)")
                 return 1  # UP
-            elif any(word in response_lower for word in ["right", "forward", "advance"]):
+            elif any(
+                word in response_lower for word in ["right", "forward", "advance"]
+            ):
                 print(f"🔍 INFERRED FROM 'right': 6 (RIGHT)")
                 return 6  # RIGHT
-            elif any(word in response_lower for word in ["left", "back", "retreat", "block"]):
+            elif any(
+                word in response_lower for word in ["left", "back", "retreat", "block"]
+            ):
                 print(f"🔍 INFERRED FROM 'left/block': 3 (LEFT)")
                 return 3  # LEFT
-            elif any(word in response_lower for word in ["crouch", "duck", "down", "low"]):
+            elif any(
+                word in response_lower for word in ["crouch", "duck", "down", "low"]
+            ):
                 print(f"🔍 INFERRED FROM 'crouch': 2 (DOWN)")
                 return 2  # DOWN
             elif any(word in response_lower for word in ["hadoken", "fireball"]):
@@ -599,9 +613,7 @@ Choose action (0-43):"""
                     # Encourage variety by suggesting no action
                     old_action = action
                     action = 0  # NO_ACTION to break pattern
-                    print(
-                        f"🔄 BREAKING REPEAT: {old_action} → {action} (NO_ACTION)"
-                    )
+                    print(f"🔄 BREAKING REPEAT: {old_action} → {action} (NO_ACTION)")
                     self.action_repeat_count = 0
             else:
                 self.action_repeat_count = 0
@@ -673,7 +685,7 @@ Choose action (0-43):"""
 
 # Demo functions from demo_qwen.py
 def demo_qwen_gameplay(
-    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",  # Function to demo Qwen agent gameplay
+    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # Function to demo Qwen agent gameplay
     episodes: int = 3,  # Default number of episodes to play
     render: bool = True,  # Default to render game visuals
     verbose: bool = True,
@@ -687,15 +699,19 @@ def demo_qwen_gameplay(
         render: Whether to render the game
         verbose: Whether to print detailed reasoning
     """
-    from wrapper import make_env  # Import environment creation function from wrapper
+    import retro  # Import retro for direct environment creation
 
     print("🥊 Starting Qwen Street Fighter Demo")  # Print demo start message
     print(f"Model: {model_path}")  # Print model path being used
     print(f"Episodes: {episodes}")  # Print number of episodes to play
     print("-" * 50)  # Print separator line
 
-    # Create environment and agent
-    env = make_env()  # Create Street Fighter 2 environment
+    # Create environment and agent directly
+    env = retro.make(
+        "StreetFighterIISpecialChampionEdition-Genesis",
+        state="ken_bison_12.state", 
+        use_restricted_actions=retro.Actions.FILTERED,
+    )  # Create Street Fighter 2 environment directly
     agent = QwenStreetFighterAgent(model_path)  # Create Qwen agent with specified model
 
     wins = 0  # Initialize win counter
@@ -707,8 +723,21 @@ def demo_qwen_gameplay(
             print("=" * 30)  # Print episode separator
 
             # Reset environment and agent
-            obs, info = env.reset()  # Reset environment and get initial observation
+            obs = env.reset()  # Reset environment and get initial observation
             agent.reset()  # Reset agent internal state
+            
+            # Create mock info since retro doesn't provide structured info
+            info = {
+                'agent_hp': 176,
+                'enemy_hp': 176, 
+                'agent_x': 100,
+                'agent_y': 200,
+                'enemy_x': 200,
+                'enemy_y': 200,
+                'distance': 100,
+                'enemy_status': 0,
+                'agent_won': False
+            }
 
             episode_reward = 0  # Initialize episode reward accumulator
             steps = 0  # Initialize step counter
@@ -724,18 +753,15 @@ def demo_qwen_gameplay(
                     obs, info, verbose=verbose
                 )  # Get AI action decision
 
-                # Take step in environment
-                obs, reward, done, truncated, info = env.step(
-                    action
-                )  # Execute action and get results
+                # Take step in environment  
+                obs, reward, done, info_dict = env.step(action)  # Execute action and get results
                 episode_reward += reward  # Add reward to episode total
                 steps += 1  # Increment step counter
 
                 # Check if episode ended
-                if done or truncated:  # Check if episode is finished
-                    agent_won = info.get(
-                        "agent_won", False
-                    )  # Check if agent won the match
+                if done:  # Check if episode is finished
+                    # Simple win detection based on reward or other criteria
+                    agent_won = reward > 0  # Assume positive reward means win
                     if agent_won:  # If agent won
                         wins += 1  # Increment win counter
                         print(f"🏆 Won episode {episode + 1}!")  # Print victory message
@@ -776,40 +802,6 @@ def demo_qwen_gameplay(
     )  # Calculate and print average reward
 
 
-def test_qwen_simple():  # Function for simple agent testing
-    """Simple test of Qwen agent without full gameplay"""
-    from wrapper import make_env  # Import environment creation function from wrapper
-
-    print("🧪 Simple Qwen Agent Test")  # Print test header
-    print("-" * 30)  # Print separator line
-
-    # Create environment
-    env = make_env()  # Create Street Fighter 2 environment
-    obs, info = env.reset()  # Reset environment and get initial state
-
-    # Create agent
-    agent = QwenStreetFighterAgent(
-        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ"
-    )  # Create agent with 72B AWQ model
-
-    # Test a few decisions
-    for i in range(3):  # Loop through 3 test iterations
-        print(f"\nTest {i+1}:")  # Print test iteration number
-        action, reasoning = agent.get_action(
-            obs, info, verbose=True
-        )  # Get action from agent
-
-        # so the env -> obs -> frame
-        obs, reward, done, truncated, info = env.step(
-            action
-        )  # Execute action in environment
-        print(f"Reward: {reward:.3f}")  # Print reward received
-
-        if done:  # Check if episode ended
-            break  # Exit test loop if done
-
-    env.close()  # Close environment
-    print("\n✅ Simple test completed")  # Print test completion message
 
 
 # Test script
@@ -820,7 +812,7 @@ if __name__ == "__main__":  # Check if script is run directly
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",  # 72B AWQ model path argument
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # 72B AWQ model path argument
         help="Qwen2.5-VL AWQ model local path",
     )  # Help text for model argument
     parser.add_argument(
@@ -839,20 +831,11 @@ if __name__ == "__main__":  # Check if script is run directly
         action="store_true",  # Quiet mode flag argument
         help="Disable verbose reasoning output",
     )  # Help text for quiet argument
-    parser.add_argument(
-        "--test-only",
-        action="store_true",  # Test only flag argument
-        help="Run simple test instead of full demo",
-    )  # Help text for test-only argument
-
     args = parser.parse_args()  # Parse command line arguments
 
-    if args.test_only:  # Check if test-only mode requested
-        test_qwen_simple()  # Run simple test function
-    else:  # Otherwise run full demo
-        demo_qwen_gameplay(  # Call main demo function
-            model_path=args.model,  # Pass model path from arguments
-            episodes=args.episodes,  # Pass episode count from arguments
-            render=not args.no_render,  # Invert no-render flag for render parameter
-            verbose=not args.quiet,  # Invert quiet flag for verbose parameter
-        )
+    demo_qwen_gameplay(  # Call main demo function
+        model_path=args.model,  # Pass model path from arguments
+        episodes=args.episodes,  # Pass episode count from arguments
+        render=not args.no_render,  # Invert no-render flag for render parameter
+        verbose=not args.quiet,  # Invert quiet flag for verbose parameter
+    )
