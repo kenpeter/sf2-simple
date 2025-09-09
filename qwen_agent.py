@@ -38,7 +38,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     # agent init
     def __init__(
         self,
-        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",
     ):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
@@ -47,7 +47,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             model_path: Path to Qwen model (local or HuggingFace)
         """
         # Initialize Qwen model
-        print(f"🤖 Loading Qwen AWQ model from: {model_path}")  # Print model loading status
+        print(f"🤖 Loading Qwen 72B AWQ model from: {model_path}")  # Print model loading status
 
         # device cuda
         self.device = (
@@ -77,15 +77,17 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             "📁 Step 2/2: Loading Qwen2.5-VL model from cache..."
         )  # Print loading status for model
 
-        # Load AWQ quantized model using AutoAWQ
+        # Load AWQ quantized model using AutoAWQ with memory optimization
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
-            device_map="cuda",
-            torch_dtype=torch.float16,  # AWQ uses fp16 for activations
+            device_map="auto",  # Auto device mapping for large model
+            dtype=torch.float16,  # AWQ uses fp16 for activations
             local_files_only=True,
+            low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
+            trust_remote_code=True,  # Trust remote code for AWQ models
         )
         print(
-            f"✅ Qwen AWQ model loaded successfully on {self.device}"
+            f"✅ Qwen 72B AWQ model loaded successfully on {self.device}"
         )  # Print successful loading message
 
         #
@@ -671,7 +673,7 @@ Choose action (0-43):"""
 
 # Demo functions from demo_qwen.py
 def demo_qwen_gameplay(
-    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # Function to demo Qwen agent gameplay
+    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",  # Function to demo Qwen agent gameplay
     episodes: int = 3,  # Default number of episodes to play
     render: bool = True,  # Default to render game visuals
     verbose: bool = True,
@@ -787,8 +789,8 @@ def test_qwen_simple():  # Function for simple agent testing
 
     # Create agent
     agent = QwenStreetFighterAgent(
-        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ"
-    )  # Create agent with 7B AWQ model
+        "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ"
+    )  # Create agent with 72B AWQ model
 
     # Test a few decisions
     for i in range(3):  # Loop through 3 test iterations
@@ -813,12 +815,12 @@ def test_qwen_simple():  # Function for simple agent testing
 # Test script
 if __name__ == "__main__":  # Check if script is run directly
     parser = argparse.ArgumentParser(
-        description="Qwen Street Fighter Demo (7B AWQ)"
+        description="Qwen Street Fighter Demo (72B AWQ)"
     )  # Create argument parser
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",  # 7B AWQ model path argument
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-72B-Instruct-AWQ",  # 72B AWQ model path argument
         help="Qwen2.5-VL AWQ model local path",
     )  # Help text for model argument
     parser.add_argument(
