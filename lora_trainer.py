@@ -20,6 +20,8 @@ import json
 import os
 from PIL import Image
 import random
+import base64
+from io import BytesIO
 
 
 class StreetFighterDataset:
@@ -27,25 +29,84 @@ class StreetFighterDataset:
     
     def __init__(self, data_path: str = None):
         self.data = []
-        if data_path and os.path.exists(data_path):
+        if data_path is not None and os.path.exists(data_path):
             self.load_data(data_path)
     
     def load_data(self, data_path: str):
-        """Load training data from file"""
+        """Load training data from JSON file with base64 image decoding"""
         with open(data_path, 'r') as f:
-            self.data = json.load(f)
+            data = json.load(f)
+        
+        # Convert base64 images back to PIL Images
+        self.data = []
+        for item in data:
+            if isinstance(item['image'], str):  # base64 encoded
+                # Decode base64 image
+                image_data = base64.b64decode(item['image'])
+                image = Image.open(BytesIO(image_data))
+                item['image'] = image
+            self.data.append(item)
+        
         print(f"📁 Loaded {len(self.data)} training examples")
     
     def add_example(self, image: Image.Image, game_state: Dict, action: int, reasoning: str):
         """Add a training example"""
-        # Convert PIL image to base64 or save path for later loading
         example = {
-            'image': image,
+            'image': image,  # Keep as PIL Image for processing
             'game_state': game_state,
             'action': action,
             'reasoning': reasoning
         }
         self.data.append(example)
+    
+    def save_data(self, data_path: str, append: bool = False):
+        """Save training data to JSON file with base64 image encoding"""
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(data_path), exist_ok=True)
+        
+        # Load existing data if appending
+        existing_data = []
+        if append and os.path.exists(data_path):
+            try:
+                with open(data_path, 'r') as f:
+                    existing_data = json.load(f)
+                print(f"📁 Found {len(existing_data)} existing training examples")
+            except (json.JSONDecodeError, FileNotFoundError):
+                print("⚠️ Could not load existing data, creating new file")
+                existing_data = []
+        
+        # Convert current data to JSON-serializable format
+        serializable_data = []
+        for item in self.data:
+            # Convert PIL Image to base64
+            if isinstance(item['image'], Image.Image):
+                buffered = BytesIO()
+                item['image'].save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                image_data = img_base64
+            else:
+                image_data = item['image']  # Already encoded
+            
+            serializable_item = {
+                'image': image_data,
+                'game_state': item['game_state'],
+                'action': item['action'],
+                'reasoning': item['reasoning']
+            }
+            serializable_data.append(serializable_item)
+        
+        # Combine with existing data if appending
+        if append:
+            all_data = existing_data + serializable_data
+            print(f"📊 Appending {len(serializable_data)} new examples to {len(existing_data)} existing ones")
+        else:
+            all_data = serializable_data
+        
+        # Save to JSON file
+        with open(data_path, 'w') as f:
+            json.dump(all_data, f, indent=2)
+        
+        print(f"💾 Saved {len(all_data)} total training examples to {data_path}")
     
     def create_prompt(self, game_state: Dict) -> str:
         """Create training prompt from game state"""
@@ -86,13 +147,15 @@ class StreetFighterLoRATrainer:
         if self.processor.tokenizer.pad_token is None:
             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         
-        # Load model
+        # Load model with memory optimization
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
-            device_map="cuda",
+            device_map="auto",  # Use auto device mapping for CPU offloading
             torch_dtype=torch.float16,
             local_files_only=True,
             trust_remote_code=True,
+            low_cpu_mem_usage=True,
+            max_memory={0: "10GB", "cpu": "30GB"}  # Limit GPU to 10GB, use CPU for overflow
         )
         
         # Configure LoRA
@@ -137,22 +200,36 @@ class StreetFighterLoRATrainer:
                 messages, tokenize=False, add_generation_prompt=False
             )
             
-            # Process inputs
+            # Process inputs using the same method as qwen_agent.py
+            # Convert PIL image to format expected by processor
+            image = example['image']
+            if hasattr(image, 'convert'):
+                image = image.convert('RGB')
+            
+            # Use the processor with proper image handling
             inputs = self.processor(
-                text=text,
-                images=[example['image']],
+                text=[text],
+                images=[image],
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=512
             )
             
-            return {
+            result = {
                 'input_ids': inputs['input_ids'].squeeze(),
                 'attention_mask': inputs['attention_mask'].squeeze(),
-                'pixel_values': inputs['pixel_values'].squeeze() if 'pixel_values' in inputs else None,
-                'labels': inputs['input_ids'].squeeze()  # For causal LM, labels = input_ids
+                'labels': inputs['input_ids'].squeeze(),  # For causal LM, labels = input_ids
             }
+            
+            # Add all necessary image-related tensors
+            if 'pixel_values' in inputs and inputs['pixel_values'] is not None:
+                result['pixel_values'] = inputs['pixel_values'].squeeze()
+            
+            if 'image_grid_thw' in inputs and inputs['image_grid_thw'] is not None:
+                result['image_grid_thw'] = inputs['image_grid_thw'].squeeze()
+            
+            return result
         
         # Process all examples
         processed_data = [process_example(example) for example in dataset.data]
@@ -171,29 +248,42 @@ class StreetFighterLoRATrainer:
         # Prepare dataset
         train_dataset = self.prepare_dataset(dataset)
         
-        # Training arguments
+        # Training arguments - optimized for GPU memory
         training_args = TrainingArguments(
             output_dir=self.output_dir,
             num_train_epochs=num_epochs,
             per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=4,
+            gradient_accumulation_steps=8,  # Increase to maintain effective batch size
             learning_rate=learning_rate,
             weight_decay=0.01,
             logging_steps=10,
             save_steps=save_steps,
-            save_total_limit=3,
-            warmup_steps=50,
+            save_total_limit=2,  # Reduce saved checkpoints
+            warmup_steps=20,  # Reduce warmup steps
             fp16=True,
+            gradient_checkpointing=False,  # Disable - causes issues with LoRA
             dataloader_pin_memory=False,
             remove_unused_columns=False,
+            dataloader_num_workers=0,  # Reduce memory overhead
+            optim="adamw_torch",  # Use more memory efficient optimizer
+            deepspeed="ds_config.json" if os.path.exists("ds_config.json") else None,
         )
         
-        # Custom data collator
+        # Custom data collator with proper tensor handling
         def data_collator(batch):
-            # Handle variable image sizes
-            input_ids = torch.stack([item['input_ids'] for item in batch])
-            attention_mask = torch.stack([item['attention_mask'] for item in batch])
-            labels = torch.stack([item['labels'] for item in batch])
+            # Convert all tensors and ensure proper dtypes
+            input_ids = torch.stack([
+                torch.tensor(item['input_ids'], dtype=torch.long) if not isinstance(item['input_ids'], torch.Tensor)
+                else item['input_ids'].long() for item in batch
+            ])
+            attention_mask = torch.stack([
+                torch.tensor(item['attention_mask'], dtype=torch.long) if not isinstance(item['attention_mask'], torch.Tensor)
+                else item['attention_mask'].long() for item in batch
+            ])
+            labels = torch.stack([
+                torch.tensor(item['labels'], dtype=torch.long) if not isinstance(item['labels'], torch.Tensor)
+                else item['labels'].long() for item in batch
+            ])
             
             result = {
                 'input_ids': input_ids,
@@ -202,9 +292,20 @@ class StreetFighterLoRATrainer:
             }
             
             # Add pixel values if present
-            if batch[0]['pixel_values'] is not None:
-                pixel_values = torch.stack([item['pixel_values'] for item in batch])
+            if 'pixel_values' in batch[0] and batch[0]['pixel_values'] is not None:
+                pixel_values = torch.stack([
+                    torch.tensor(item['pixel_values'], dtype=torch.float16) if not isinstance(item['pixel_values'], torch.Tensor)
+                    else item['pixel_values'].half() for item in batch
+                ])
                 result['pixel_values'] = pixel_values
+            
+            # Add image grid thw if present
+            if 'image_grid_thw' in batch[0] and batch[0]['image_grid_thw'] is not None:
+                image_grid_thw = torch.stack([
+                    torch.tensor(item['image_grid_thw'], dtype=torch.long) if not isinstance(item['image_grid_thw'], torch.Tensor)
+                    else item['image_grid_thw'].long() for item in batch
+                ])
+                result['image_grid_thw'] = image_grid_thw
             
             return result
         
@@ -215,6 +316,9 @@ class StreetFighterLoRATrainer:
             train_dataset=train_dataset,
             data_collator=data_collator,
         )
+        
+        # Ensure model is in training mode
+        self.model.train()
         
         # Train
         print(f"🚀 Starting training for {num_epochs} epochs...")
@@ -234,19 +338,14 @@ class StreetFighterLoRATrainer:
 
 def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetFighterDataset:
     """Collect training data by playing the game"""
-    import retro
-    from qwen_agent import QwenStreetFighterAgent
     import numpy as np
     from PIL import Image
+    from wrapper import StreetFighter
     
     print(f"🎮 Collecting gameplay data for {num_episodes} episodes...")
     
-    # Create environment directly
-    env = retro.make(
-        "StreetFighterIISpecialChampionEdition-Genesis",
-        state="ken_bison_12.state",
-        use_restricted_actions=retro.Actions.FILTERED,
-    )
+    # Use the same wrapper as the main training
+    env = StreetFighter()
     
     # Use existing agent if provided, otherwise create mock data
     if existing_agent:
@@ -274,8 +373,8 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 return info
                 
             def get_action(self, obs, info, verbose=False):
-                # Random action selection for data collection
-                import random
+                # Random action selection for data collection  
+                _ = obs, info, verbose  # Mark as used
                 action = random.randint(0, 43)
                 reasoning = f"Random action {action} for data collection"
                 return action, reasoning
@@ -329,8 +428,8 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 # Add to dataset
                 dataset.add_example(image, game_state, action, reasoning)
             
-            # Take step
-            obs, base_reward, done, info_dict = env.step(action)
+            # Take step using wrapper (returns 5 values: obs, reward, done, truncated, info)
+            obs, _, done, _, _ = env.step(action)
             
             # Calculate health change (agent_hp_change - enemy_hp_change)
             # we want to create health advantage compared your opponent
@@ -391,12 +490,20 @@ def main():
                        help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32,
                        help="LoRA alpha")
+    parser.add_argument("--append-data", action="store_true",
+                       help="Append new data to existing dataset instead of overwriting")
+    parser.add_argument("--resume-from", type=str, default=None,
+                       help="Resume training from checkpoint directory")
+    parser.add_argument("--save-steps", type=int, default=100,
+                       help="Save checkpoint every N steps")
+    parser.add_argument("--no-train", action="store_true",
+                       help="Only collect data, skip training")
     
     args = parser.parse_args()
     
     # Initialize trainer
     trainer = StreetFighterLoRATrainer(
-        model_path=args.model,
+        model_path=args.resume_from if args.resume_from else args.model,
         output_dir=args.output_dir,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -406,15 +513,8 @@ def main():
     if args.collect_data:
         print("📊 Using mock agent for data collection to save GPU memory")
         dataset = collect_gameplay_data(args.episodes, existing_agent=None)  # Use mock agent
-        # Save collected data
-        os.makedirs("./data", exist_ok=True)
-        with open("./data/sf2_training_data.json", "w") as f:
-            # Note: This is simplified - in practice you'd need to serialize images properly
-            json.dump([{
-                'game_state': ex['game_state'],
-                'action': ex['action'],
-                'reasoning': ex['reasoning']
-            } for ex in dataset.data], f, indent=2)
+        # Save collected data using save_data method with append option
+        dataset.save_data("./data/sf2_training_data.json", append=args.append_data)
     else:
         dataset = StreetFighterDataset(args.data_path)
         if len(dataset.data) == 0:
@@ -427,6 +527,7 @@ def main():
         num_epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        save_steps=args.save_steps,
     )
     
     # Save for inference

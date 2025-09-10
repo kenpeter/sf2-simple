@@ -108,15 +108,20 @@ TIMING SYSTEM:
 
 
 
+ Data Collection:
+  # Initial collection
+  python lora_trainer.py --collect-data --episodes 1
 
-  Option 2: Pre-collect data separately
-  # First, run only the agent to collect data
-  python qwen_agent.py --episodes 5 --no-render --quiet
+  # Accumulate more data  
+  python lora_trainer.py --collect-data --episodes 5 --append-data
 
-  # Then train with collected data (without loading agent again)
+  Training:
+  # Fresh training
   python lora_trainer.py --data-path ./data/sf2_training_data.json --epochs 3
-  
- python lora_trainer.py --collect-data --episodes 1 --epochs 1
+
+  # Resume from checkpoint
+  python l
+
 
 
      ================================================================================
