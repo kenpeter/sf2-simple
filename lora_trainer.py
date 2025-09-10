@@ -130,11 +130,12 @@ class StreetFighterLoRATrainer:
     
     def __init__(
         self,
-        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
         output_dir: str = "./sf2_lora_model",
         lora_rank: int = 16,
         lora_alpha: int = 32,
         lora_dropout: float = 0.1,
+        use_cpu_offload: bool = False,
     ):
         self.model_path = model_path
         self.output_dir = output_dir
@@ -147,16 +148,45 @@ class StreetFighterLoRATrainer:
         if self.processor.tokenizer.pad_token is None:
             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         
-        # Load model with memory optimization
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path,
-            device_map="auto",  # Use auto device mapping for CPU offloading
-            torch_dtype=torch.float16,
-            local_files_only=True,
-            trust_remote_code=True,
-            low_cpu_mem_usage=True,
-            max_memory={0: "10GB", "cpu": "30GB"}  # Limit GPU to 10GB, use CPU for overflow
-        )
+        # Load model with optional CPU offloading
+        if use_cpu_offload:
+            print("🔄 Using CPU offloading to save GPU memory...")
+            # Switch to regular model for CPU offloading (AWQ doesn't support it)
+            if "AWQ" in model_path:
+                print("⚠️ AWQ model doesn't support CPU offloading, switching to regular model...")
+                model_path = "Qwen/Qwen2.5-VL-3B-Instruct"  # Use HF model name directly
+                print(f"📍 Using model: {model_path}")
+            
+            device_map = {
+                # Keep essential layers on GPU
+                "model.embed_tokens": 0,
+                "model.visual": 0,  # Vision encoder stays on GPU
+                "lm_head": 0,
+                # Offload most transformer layers to CPU
+                **{f"model.layers.{i}": "cpu" for i in range(16, 28)},  # Last 12 layers to CPU for 3B model
+                # Keep first layers on GPU for better performance  
+                **{f"model.layers.{i}": 0 for i in range(0, 16)},
+            }
+            
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_path,
+                device_map=device_map,
+                torch_dtype=torch.float16,
+                local_files_only=False,  # Allow download of regular model
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                offload_folder="./offload_cache",  # Disk offload if needed
+                max_memory={0: "8GB", "cpu": "32GB"}  # More aggressive GPU limit
+            )
+        else:
+            print("📍 Loading model normally on GPU...")
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_path,
+                device_map="cuda",
+                torch_dtype=torch.float16,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
         
         # Configure LoRA
         lora_config = LoraConfig(
@@ -253,7 +283,7 @@ class StreetFighterLoRATrainer:
             output_dir=self.output_dir,
             num_train_epochs=num_epochs,
             per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=8,  # Increase to maintain effective batch size
+            gradient_accumulation_steps=16,  # Increase even more for CPU offloading
             learning_rate=learning_rate,
             weight_decay=0.01,
             logging_steps=10,
@@ -470,7 +500,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
 def main():
     parser = argparse.ArgumentParser(description="LoRA Fine-tuning for Street Fighter Qwen Agent")
     parser.add_argument("--model", type=str, 
-                       default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+                       default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
                        help="Base model path")
     parser.add_argument("--output-dir", type=str, default="./sf2_lora_model",
                        help="Output directory for LoRA model")
@@ -498,6 +528,8 @@ def main():
                        help="Save checkpoint every N steps")
     parser.add_argument("--no-train", action="store_true",
                        help="Only collect data, skip training")
+    parser.add_argument("--cpu-offload", action="store_true",
+                       help="Use CPU offloading to reduce GPU memory usage")
     
     args = parser.parse_args()
     
@@ -507,6 +539,7 @@ def main():
         output_dir=args.output_dir,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
+        use_cpu_offload=args.cpu_offload,
     )
     
     # Collect or load data
@@ -515,23 +548,30 @@ def main():
         dataset = collect_gameplay_data(args.episodes, existing_agent=None)  # Use mock agent
         # Save collected data using save_data method with append option
         dataset.save_data("./data/sf2_training_data.json", append=args.append_data)
+        
+        if args.no_train:
+            print("✅ Data collection completed! Training skipped due to --no-train flag.")
+            return
     else:
         dataset = StreetFighterDataset(args.data_path)
         if len(dataset.data) == 0:
             print("❌ No training data found. Use --collect-data to collect data first.")
             return
     
-    # Train model
-    trainer.train(
-        dataset=dataset,
-        num_epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        save_steps=args.save_steps,
-    )
-    
-    # Save for inference
-    trainer.save_for_inference()
+    # Train model (only if not skipped)
+    if not args.no_train:
+        trainer.train(
+            dataset=dataset,
+            num_epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            save_steps=args.save_steps,
+        )
+        
+        # Save for inference
+        trainer.save_for_inference()
+    else:
+        print("⏭️ Training skipped due to --no-train flag.")
 
 
 if __name__ == "__main__":
