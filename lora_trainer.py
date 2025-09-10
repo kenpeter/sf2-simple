@@ -232,10 +232,12 @@ class StreetFighterLoRATrainer:
         print(f"💾 Model saved for inference at {save_path}")
 
 
-def collect_gameplay_data(num_episodes: int = 5) -> StreetFighterDataset:
+def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetFighterDataset:
     """Collect training data by playing the game"""
     import retro
     from qwen_agent import QwenStreetFighterAgent
+    import numpy as np
+    from PIL import Image
     
     print(f"🎮 Collecting gameplay data for {num_episodes} episodes...")
     
@@ -245,7 +247,41 @@ def collect_gameplay_data(num_episodes: int = 5) -> StreetFighterDataset:
         state="ken_bison_12.state",
         use_restricted_actions=retro.Actions.FILTERED,
     )
-    agent = QwenStreetFighterAgent()
+    
+    # Use existing agent if provided, otherwise create mock data
+    if existing_agent:
+        agent = existing_agent
+    else:
+        # Create mock agent for data collection without loading model
+        class MockAgent:
+            def __init__(self):
+                self.frame_counter = 0
+                
+            def reset(self):
+                self.frame_counter = 0
+                
+            def capture_game_frame(self, obs):
+                if isinstance(obs, np.ndarray):
+                    if obs.dtype != np.uint8:
+                        obs = (obs * 255).astype(np.uint8)
+                    if len(obs.shape) == 3 and obs.shape[2] in [3, 4]:
+                        if obs.shape[2] == 4:
+                            obs = obs[:, :, :3]
+                        return Image.fromarray(obs)
+                return Image.fromarray(np.zeros((224, 320, 3), dtype=np.uint8))
+                
+            def extract_game_features(self, info):
+                return info
+                
+            def get_action(self, obs, info, verbose=False):
+                # Random action selection for data collection
+                import random
+                action = random.randint(0, 43)
+                reasoning = f"Random action {action} for data collection"
+                return action, reasoning
+                
+        agent = MockAgent()
+        
     dataset = StreetFighterDataset()
     
     # Health tracking
@@ -368,7 +404,8 @@ def main():
     
     # Collect or load data
     if args.collect_data:
-        dataset = collect_gameplay_data(args.episodes)
+        print("📊 Using mock agent for data collection to save GPU memory")
+        dataset = collect_gameplay_data(args.episodes, existing_agent=None)  # Use mock agent
         # Save collected data
         os.makedirs("./data", exist_ok=True)
         with open("./data/sf2_training_data.json", "w") as f:

@@ -79,13 +79,12 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             "📁 Step 2/2: Loading Qwen2.5-VL model from cache..."
         )  # Print loading status for model
 
-        # Load AWQ quantized model using AutoAWQ with memory optimization
+        # Load AWQ quantized model - AWQ requires GPU only, no CPU offloading
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
-            device_map="auto",  # Auto device mapping for large model
+            device_map="cuda:0",  # Force GPU only for AWQ models
             dtype=torch.float16,  # AWQ uses fp16 for activations
             local_files_only=True,
-            low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
             trust_remote_code=True,  # Trust remote code for AWQ models
         )
         print(
