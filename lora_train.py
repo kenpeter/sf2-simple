@@ -437,20 +437,37 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 self.action_repeat_count = 0
                 
             def capture_game_frame(self, obs):
-                if isinstance(obs, np.ndarray):
-                    if obs.dtype != np.uint8:
-                        obs = (obs * 255).astype(np.uint8)
-                    if len(obs.shape) == 3 and obs.shape[2] in [3, 4]:
-                        if obs.shape[2] == 4:
-                            obs = obs[:, :, :3]
-                        return Image.fromarray(obs)
-                return Image.fromarray(np.zeros((224, 320, 3), dtype=np.uint8))
+                from PIL import Image
+                import cv2
+                
+                # Get raw observation from retro environment instead of preprocessed one
+                try:
+                    raw_obs = env.game.env.unwrapped.render()  # Get raw RGB frame
+                    if raw_obs is not None and isinstance(raw_obs, np.ndarray):
+                        if len(raw_obs.shape) == 3 and raw_obs.shape[2] == 3:
+                            # Resize to model's expected input size
+                            resized = cv2.resize(raw_obs, (320, 224), interpolation=cv2.INTER_CUBIC)
+                            return Image.fromarray(resized)
+                except:
+                    pass
+                
+                # Fallback: try to use the preprocessed obs if it has visual info
+                if isinstance(obs, np.ndarray) and len(obs.shape) == 3:
+                    if obs.shape[2] == 1:  # Grayscale
+                        # Convert back to RGB
+                        rgb_obs = np.repeat(obs, 3, axis=2)
+                        return Image.fromarray(rgb_obs.astype(np.uint8))
+                    elif obs.shape[2] == 3:  # RGB
+                        return Image.fromarray(obs.astype(np.uint8))
+                        
+                # Last resort: create a meaningful placeholder
+                return Image.fromarray(np.ones((224, 320, 3), dtype=np.uint8) * 128)
                 
             def extract_game_features(self, info):
                 return info
                 
             def get_action(self, obs, info, verbose=False):
-                """Rule-based expert agent for better training data"""
+                """Anti-Bison expert agent based on SF2 boss strategies"""
                 _ = obs  # Mark as used
                 
                 # Extract game state
@@ -458,76 +475,105 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 enemy_hp = info.get('enemy_hp', 176) 
                 agent_x = info.get('agent_x', 100)
                 enemy_x = info.get('enemy_x', 200)
+                enemy_status = info.get('enemy_status', 0)
                 distance = abs(agent_x - enemy_x)
                 
                 # Calculate advantage
                 hp_advantage = agent_hp - enemy_hp
                 facing_right = agent_x < enemy_x
                 
-                # Expert strategy based on game state
+                # Anti-Bison expert strategy
                 action = 0  # Default NO_ACTION
-                reasoning = "Expert rule-based decision: "
+                reasoning = "Anti-Bison expert: "
                 
-                # Strategy 1: Health-based decision making
-                if hp_advantage > 30:
-                    # We're winning - play aggressively
-                    if distance < 40:  # Close range
-                        action = 17 if facing_right else 17  # HEAVY_PUNCH
-                        reasoning += "Winning + Close = Heavy attack"
-                    elif distance < 80:  # Medium range  
-                        action = 13 if facing_right else 13  # MEDIUM_PUNCH
-                        reasoning += "Winning + Medium = Medium attack"
-                    else:  # Far range
+                # Anti-Bison Strategy based on research
+                
+                # Priority 1: Bison's vulnerable moments 
+                if enemy_status != 0:  # Enemy in recovery/animation
+                    if distance < 50:
+                        action = 17  # HEAVY_PUNCH (punish recovery)
+                        reasoning += "Punish Bison recovery with heavy attack"
+                    else:
+                        action = 6 if facing_right else 3  # Move closer to punish
+                        reasoning += "Close distance to punish Bison"
+                
+                # Priority 2: Counter Bison's range advantage
+                elif distance > 100:  # Far range - Bison loves Psycho Crusher
+                    if self.frame_counter % 3 == 0:
+                        action = 2  # DOWN (crouch to avoid Psycho Crusher)
+                        reasoning += "Crouch to avoid Psycho Crusher"
+                    elif self.frame_counter % 3 == 1:
+                        action = 38 if facing_right else 41  # Counter with projectile
+                        reasoning += "Counter-projectile vs Bison"
+                    else:
+                        action = 6 if facing_right else 3  # Careful approach
+                        reasoning += "Careful approach vs Bison"
+                
+                # Priority 3: Mid-range poking (Bison's weak spot)
+                elif distance > 60 and distance <= 100:  # Medium range
+                    frame_mod = self.frame_counter % 8  # More variety
+                    if frame_mod == 0:
+                        action = 26  # MEDIUM_KICK (outrange Bison normals)
+                        reasoning += "Medium kick poke vs Bison"
+                    elif frame_mod == 1:
+                        action = 13  # MEDIUM_PUNCH (safe poke)
+                        reasoning += "Medium punch poke vs Bison"
+                    elif frame_mod == 2:
+                        action = 21  # LIGHT_KICK (quick poke)
+                        reasoning += "Light kick poke vs Bison"
+                    elif frame_mod == 3:
+                        action = 9   # LIGHT_PUNCH (quick attack)
+                        reasoning += "Light punch poke vs Bison"
+                    elif frame_mod == 4:
+                        action = 32  # HEAVY_KICK (power attack)
+                        reasoning += "Heavy kick vs Bison"
+                    elif frame_mod == 5:
                         action = 38 if facing_right else 41  # HADOKEN
-                        reasoning += "Winning + Far = Projectile"
-                        
-                elif hp_advantage < -30:
-                    # We're losing - play defensively but try to get damage
-                    if distance < 30:  # Very close
-                        action = 2  # DOWN (crouch block)
-                        reasoning += "Losing + Very close = Defensive crouch"
-                    elif distance < 60:  # Close range
-                        action = 9  # LIGHT_PUNCH (safe attack)
-                        reasoning += "Losing + Close = Safe light attack"
-                    else:  # Far range
-                        action = 6 if facing_right else 3  # Move closer
-                        reasoning += "Losing + Far = Close distance"
-                        
-                else:
-                    # Even match - balanced strategy
-                    if distance < 35:  # Close range
-                        # Mix between attacks and movement
-                        if self.frame_counter % 4 == 0:
-                            action = 21  # LIGHT_KICK
-                            reasoning += "Even + Close = Light kick"
-                        elif self.frame_counter % 4 == 1:
-                            action = 13  # MEDIUM_PUNCH  
-                            reasoning += "Even + Close = Medium punch"
-                        elif self.frame_counter % 4 == 2:
-                            action = 2   # DOWN (crouch)
-                            reasoning += "Even + Close = Defensive crouch"
-                        else:
-                            action = 3 if facing_right else 6  # Move away
-                            reasoning += "Even + Close = Retreat"
-                            
-                    elif distance < 80:  # Medium range
+                        reasoning += "Fireball vs Bison"
+                    elif frame_mod == 6:
+                        action = 2   # DOWN (defensive)
+                        reasoning += "Defensive crouch vs Bison"
+                    else:
+                        action = 1   # UP (jump over potential Head Stomp)
+                        reasoning += "Jump to avoid Head Stomp"
+                
+                # Priority 4: Close range - very dangerous vs Bison
+                elif distance <= 60:  # Close range - Bison is deadly here
+                    if hp_advantage > 20:  # Only aggressive if winning
                         if self.frame_counter % 3 == 0:
-                            action = 6 if facing_right else 3  # Move closer
-                            reasoning += "Even + Medium = Approach"
+                            action = 9   # LIGHT_PUNCH (safest attack)
+                            reasoning += "Winning - safe light attack vs Bison"
                         elif self.frame_counter % 3 == 1:
-                            action = 9  # LIGHT_PUNCH
-                            reasoning += "Even + Medium = Light attack"
+                            action = 21  # LIGHT_KICK (different timing)
+                            reasoning += "Winning - light kick vs Bison"
                         else:
-                            action = 1  # UP (jump)
-                            reasoning += "Even + Medium = Jump"
-                            
-                    else:  # Far range
-                        if self.frame_counter % 2 == 0:
-                            action = 6 if facing_right else 3  # Move closer
-                            reasoning += "Even + Far = Close distance"
+                            action = 2   # DOWN (block expected counter)
+                            reasoning += "Winning - block Bison counter"
+                    else:  # Losing or even - be very careful
+                        if self.frame_counter % 5 == 0:
+                            action = 9   # LIGHT_PUNCH (quick poke)
+                            reasoning += "Careful light poke vs Bison"
+                        elif self.frame_counter % 5 == 1:
+                            action = 2   # DOWN (block)
+                            reasoning += "Block Bison pressure"
+                        elif self.frame_counter % 5 == 2:
+                            action = 3 if facing_right else 6  # Back away
+                            reasoning += "Retreat from dangerous Bison"
+                        elif self.frame_counter % 5 == 3:
+                            action = 1   # UP (jump away)
+                            reasoning += "Jump away from Bison"
                         else:
-                            action = 38 if facing_right else 41  # HADOKEN
-                            reasoning += "Even + Far = Projectile"
+                            action = 0   # NO_ACTION (wait for opening)
+                            reasoning += "Wait for Bison opening"
+                
+                # Health-based modifiers
+                if hp_advantage < -50:  # Desperately losing
+                    if distance < 40 and self.frame_counter % 6 == 0:
+                        action = 17  # HEAVY_PUNCH (desperate damage)
+                        reasoning += " -> Desperate heavy attack"
+                    elif distance > 80:
+                        action = 38 if facing_right else 41  # HADOKEN (chip damage)
+                        reasoning += " -> Desperate projectile"
                 
                 # Prevent action repetition (causes predictable blocking)
                 if action == self.last_action:
@@ -575,8 +621,6 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
         step = 0
         max_steps = 1000
         episode_reward = 0
-        episode_examples = []  # Store examples for this episode
-        
         while step < max_steps:
             # Create info with health tracking (mock values for now)
             current_agent_hp = agent_hp  # Would extract from game memory in real implementation
@@ -597,18 +641,13 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
             # Get action from agent
             action, reasoning = agent.get_action(obs, info, verbose=False)
             
-            # Capture current state for training (store temporarily)
+            # Capture current state for training
             if step % 30 == 0:  # Sample every 30 frames
                 image = agent.capture_game_frame(obs)
                 game_state = agent.extract_game_features(info)
                 
-                # Store example temporarily for this episode
-                episode_examples.append({
-                    'image': image,
-                    'game_state': game_state,
-                    'action': action,
-                    'reasoning': reasoning
-                })
+                # Add to dataset immediately (like before)
+                dataset.add_example(image, game_state, action, reasoning)
             
             # Take step using wrapper (returns 5 values: obs, reward, done, truncated, info)
             obs, _, done, _, _ = env.step(action)
@@ -644,19 +683,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 agent_won = info.get('agent_won', False)
                 print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}")
                 
-                # Only save examples from winning episodes
-                if agent_won:
-                    print(f"🏆 WINNER! Adding {len(episode_examples)} examples to dataset")
-                    for example in episode_examples:
-                        dataset.add_example(
-                            example['image'], 
-                            example['game_state'], 
-                            example['action'], 
-                            example['reasoning']
-                        )
-                else:
-                    print(f"💀 Lost. Discarding {len(episode_examples)} examples from this episode")
-                
+                print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}")
                 break
     
     env.close()
