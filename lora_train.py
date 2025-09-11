@@ -135,7 +135,6 @@ class StreetFighterLoRATrainer:
         lora_rank: int = 16,
         lora_alpha: int = 32,
         lora_dropout: float = 0.1,
-        use_cpu_offload: bool = False,
     ):
         self.model_path = model_path
         self.output_dir = output_dir
@@ -148,45 +147,15 @@ class StreetFighterLoRATrainer:
         if self.processor.tokenizer.pad_token is None:
             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         
-        # Load model with optional CPU offloading
-        if use_cpu_offload:
-            print("🔄 Using CPU offloading to save GPU memory...")
-            # Switch to regular model for CPU offloading (AWQ doesn't support it)
-            if "AWQ" in model_path:
-                print("⚠️ AWQ model doesn't support CPU offloading, switching to regular model...")
-                model_path = "Qwen/Qwen2.5-VL-3B-Instruct"  # Use HF model name directly
-                print(f"📍 Using model: {model_path}")
-            
-            device_map = {
-                # Keep essential layers on GPU
-                "model.embed_tokens": 0,
-                "model.visual": 0,  # Vision encoder stays on GPU
-                "lm_head": 0,
-                # Offload most transformer layers to CPU
-                **{f"model.layers.{i}": "cpu" for i in range(16, 28)},  # Last 12 layers to CPU for 3B model
-                # Keep first layers on GPU for better performance  
-                **{f"model.layers.{i}": 0 for i in range(0, 16)},
-            }
-            
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                device_map=device_map,
-                torch_dtype=torch.float16,
-                local_files_only=False,  # Allow download of regular model
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                offload_folder="./offload_cache",  # Disk offload if needed
-                max_memory={0: "8GB", "cpu": "32GB"}  # More aggressive GPU limit
-            )
-        else:
-            print("📍 Loading model normally on GPU...")
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                device_map="cuda",
-                torch_dtype=torch.float16,
-                local_files_only=True,
-                trust_remote_code=True,
-            )
+        # Load model on GPU (AWQ models don't support CPU offloading)
+        print("📍 Loading model on GPU...")
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model_path,
+            device_map="cuda",
+            torch_dtype=torch.float16,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
         
         # Configure LoRA
         lora_config = LoraConfig(
@@ -596,8 +565,7 @@ def main():
                        help="Save checkpoint every N steps")
     parser.add_argument("--no-train", action="store_true",
                        help="Only collect data, skip training")
-    parser.add_argument("--cpu-offload", action="store_true",
-                       help="Use CPU offloading to reduce GPU memory usage")
+# CPU offload removed - AWQ models don't support it
     
     args = parser.parse_args()
     
@@ -607,7 +575,6 @@ def main():
         output_dir=args.output_dir,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
-        use_cpu_offload=args.cpu_offload,
     )
     
     # Collect or load data
