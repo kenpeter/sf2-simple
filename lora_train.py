@@ -26,88 +26,92 @@ from io import BytesIO
 
 class StreetFighterDataset:
     """Dataset for Street Fighter gameplay data"""
-    
+
     def __init__(self, data_path: str = None):
         self.data = []
         if data_path is not None and os.path.exists(data_path):
             self.load_data(data_path)
-    
+
     def load_data(self, data_path: str):
         """Load training data from JSON file with base64 image decoding"""
-        with open(data_path, 'r') as f:
+        with open(data_path, "r") as f:
             data = json.load(f)
-        
+
         # Convert base64 images back to PIL Images
         self.data = []
         for item in data:
-            if isinstance(item['image'], str):  # base64 encoded
+            if isinstance(item["image"], str):  # base64 encoded
                 # Decode base64 image
-                image_data = base64.b64decode(item['image'])
+                image_data = base64.b64decode(item["image"])
                 image = Image.open(BytesIO(image_data))
-                item['image'] = image
+                item["image"] = image
             self.data.append(item)
-        
+
         print(f"📁 Loaded {len(self.data)} training examples")
-    
-    def add_example(self, image: Image.Image, game_state: Dict, action: int, reasoning: str):
+
+    def add_example(
+        self, image: Image.Image, game_state: Dict, action: int, reasoning: str
+    ):
         """Add a training example"""
         example = {
-            'image': image,  # Keep as PIL Image for processing
-            'game_state': game_state,
-            'action': action,
-            'reasoning': reasoning
+            "image": image,  # Keep as PIL Image for processing
+            "game_state": game_state,
+            "action": action,
+            "reasoning": reasoning,
         }
         self.data.append(example)
-    
+
     def save_data(self, data_path: str, append: bool = False):
         """Save training data to JSON file with base64 image encoding"""
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(data_path), exist_ok=True)
-        
+
         # Load existing data if appending
         existing_data = []
         if append and os.path.exists(data_path):
             try:
-                with open(data_path, 'r') as f:
+                with open(data_path, "r") as f:
                     existing_data = json.load(f)
                 print(f"📁 Found {len(existing_data)} existing training examples")
             except (json.JSONDecodeError, FileNotFoundError):
                 print("⚠️ Could not load existing data, creating new file")
                 existing_data = []
-        
+
         # Convert current data to JSON-serializable format
         serializable_data = []
         for item in self.data:
             # Convert PIL Image to base64
-            if isinstance(item['image'], Image.Image):
+            if isinstance(item["image"], Image.Image):
                 buffered = BytesIO()
-                item['image'].save(buffered, format="PNG")
-                img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                item["image"].save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 image_data = img_base64
             else:
-                image_data = item['image']  # Already encoded
-            
+                image_data = item["image"]  # Already encoded
+
             serializable_item = {
-                'image': image_data,
-                'game_state': item['game_state'],
-                'action': item['action'],
-                'reasoning': item['reasoning']
+                "image": image_data,
+                "game_state": item["game_state"],
+                "action": item["action"],
+                "reasoning": item["reasoning"],
             }
             serializable_data.append(serializable_item)
-        
+
         # Combine with existing data if appending
         if append:
             all_data = existing_data + serializable_data
-            print(f"📊 Appending {len(serializable_data)} new examples to {len(existing_data)} existing ones")
+            print(
+                f"📊 Appending {len(serializable_data)} new examples to {len(existing_data)} existing ones"
+            )
         else:
             all_data = serializable_data
-        
+
         # Save to JSON file
-        with open(data_path, 'w') as f:
+        with open(data_path, "w") as f:
             json.dump(all_data, f, indent=2)
-        
+
         print(f"💾 Saved {len(all_data)} total training examples to {data_path}")
-    
+
     def create_prompt(self, game_state: Dict) -> str:
         """Create training prompt from game state"""
         prompt = f"""STREET FIGHTER 2 ANALYSIS
@@ -127,7 +131,7 @@ Return only the action number (0-43):"""
 
 class StreetFighterLoRATrainer:
     """LoRA trainer for Street Fighter Qwen agent"""
-    
+
     def __init__(
         self,
         model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
@@ -138,15 +142,17 @@ class StreetFighterLoRATrainer:
     ):
         self.model_path = model_path
         self.output_dir = output_dir
-        
+
         # Initialize model and processor
         print(f"🤖 Loading base model: {model_path}")
-        self.processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)
-        
+        self.processor = AutoProcessor.from_pretrained(
+            model_path, local_files_only=True
+        )
+
         # Fix tokenizer if needed
         if self.processor.tokenizer.pad_token is None:
             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
-        
+
         # Load model on GPU (AWQ models don't support CPU offloading)
         print("📍 Loading model on GPU...")
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -156,55 +162,61 @@ class StreetFighterLoRATrainer:
             local_files_only=True,
             trust_remote_code=True,
         )
-        
+
         # Configure LoRA
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            target_modules=[
+                "q_proj",
+                "v_proj",
+                "k_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
         )
-        
+
         # Apply LoRA to model
         self.model = get_peft_model(self.model, lora_config)
         print(f"✅ LoRA applied with rank {lora_rank}, alpha {lora_alpha}")
-        
+
         # Print trainable parameters
         self.model.print_trainable_parameters()
-    
+
     def prepare_dataset(self, dataset: StreetFighterDataset) -> Dataset:
         """Prepare dataset for training"""
+
         def process_example(example):
             # Create prompt
-            prompt = dataset.create_prompt(example['game_state'])
-            
+            prompt = dataset.create_prompt(example["game_state"])
+
             # Create full conversation
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": example['image']},
-                        {"type": "text", "text": prompt}
-                    ]
+                        {"type": "image", "image": example["image"]},
+                        {"type": "text", "text": prompt},
+                    ],
                 },
-                {
-                    "role": "assistant", 
-                    "content": str(example['action'])
-                }
+                {"role": "assistant", "content": str(example["action"])},
             ]
-            
+
             # Apply chat template
             text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
-            
+
             # Process inputs using the same method as qwen_agent.py
             # Convert PIL image to format expected by processor
-            image = example['image']
-            if hasattr(image, 'convert'):
-                image = image.convert('RGB')
-            
+            image = example["image"]
+            if hasattr(image, "convert"):
+                image = image.convert("RGB")
+
             # Use the processor with proper image handling
             inputs = self.processor(
                 text=[text],
@@ -212,29 +224,31 @@ class StreetFighterLoRATrainer:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=512
+                max_length=512,
             )
-            
+
             result = {
-                'input_ids': inputs['input_ids'].squeeze(),
-                'attention_mask': inputs['attention_mask'].squeeze(),
-                'labels': inputs['input_ids'].squeeze(),  # For causal LM, labels = input_ids
+                "input_ids": inputs["input_ids"].squeeze(),
+                "attention_mask": inputs["attention_mask"].squeeze(),
+                "labels": inputs[
+                    "input_ids"
+                ].squeeze(),  # For causal LM, labels = input_ids
             }
-            
+
             # Add all necessary image-related tensors
-            if 'pixel_values' in inputs and inputs['pixel_values'] is not None:
-                result['pixel_values'] = inputs['pixel_values'].squeeze()
-            
-            if 'image_grid_thw' in inputs and inputs['image_grid_thw'] is not None:
-                result['image_grid_thw'] = inputs['image_grid_thw'].squeeze()
-            
+            if "pixel_values" in inputs and inputs["pixel_values"] is not None:
+                result["pixel_values"] = inputs["pixel_values"].squeeze()
+
+            if "image_grid_thw" in inputs and inputs["image_grid_thw"] is not None:
+                result["image_grid_thw"] = inputs["image_grid_thw"].squeeze()
+
             return result
-        
+
         # Process all examples
         processed_data = [process_example(example) for example in dataset.data]
-        
+
         return Dataset.from_list(processed_data)
-    
+
     def train(
         self,
         dataset: StreetFighterDataset,
@@ -247,14 +261,20 @@ class StreetFighterLoRATrainer:
         """Train the LoRA model"""
         # Prepare dataset
         train_dataset = self.prepare_dataset(dataset)
-        
+
         # Training arguments - optimized for GPU memory
         training_args = TrainingArguments(
+            # output model dir
             output_dir=self.output_dir,
+            # how many iteration
             num_train_epochs=num_epochs,
+            # batch size can be 1 not too large
             per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=16,  # Increase even more for CPU offloading
+            # load 1 batch to GPU, then process, 16x1
+            gradient_accumulation_steps=16,
+            # learning rate
             learning_rate=learning_rate,
+            # wegith decay
             weight_decay=0.01,
             logging_steps=10,
             save_steps=save_steps,
@@ -268,47 +288,77 @@ class StreetFighterLoRATrainer:
             optim="adamw_torch",  # Use more memory efficient optimizer
             deepspeed="ds_config.json" if os.path.exists("ds_config.json") else None,
         )
-        
+
         # Custom data collator with proper tensor handling
         def data_collator(batch):
             # Convert all tensors and ensure proper dtypes
-            input_ids = torch.stack([
-                torch.tensor(item['input_ids'], dtype=torch.long) if not isinstance(item['input_ids'], torch.Tensor)
-                else item['input_ids'].long() for item in batch
-            ])
-            attention_mask = torch.stack([
-                torch.tensor(item['attention_mask'], dtype=torch.long) if not isinstance(item['attention_mask'], torch.Tensor)
-                else item['attention_mask'].long() for item in batch
-            ])
-            labels = torch.stack([
-                torch.tensor(item['labels'], dtype=torch.long) if not isinstance(item['labels'], torch.Tensor)
-                else item['labels'].long() for item in batch
-            ])
-            
+            input_ids = torch.stack(
+                [
+                    (
+                        torch.tensor(item["input_ids"], dtype=torch.long)
+                        if not isinstance(item["input_ids"], torch.Tensor)
+                        else item["input_ids"].long()
+                    )
+                    for item in batch
+                ]
+            )
+            attention_mask = torch.stack(
+                [
+                    (
+                        torch.tensor(item["attention_mask"], dtype=torch.long)
+                        if not isinstance(item["attention_mask"], torch.Tensor)
+                        else item["attention_mask"].long()
+                    )
+                    for item in batch
+                ]
+            )
+            labels = torch.stack(
+                [
+                    (
+                        torch.tensor(item["labels"], dtype=torch.long)
+                        if not isinstance(item["labels"], torch.Tensor)
+                        else item["labels"].long()
+                    )
+                    for item in batch
+                ]
+            )
+
             result = {
-                'input_ids': input_ids,
-                'attention_mask': attention_mask,
-                'labels': labels,
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
             }
-            
+
             # Add pixel values if present
-            if 'pixel_values' in batch[0] and batch[0]['pixel_values'] is not None:
-                pixel_values = torch.stack([
-                    torch.tensor(item['pixel_values'], dtype=torch.float16) if not isinstance(item['pixel_values'], torch.Tensor)
-                    else item['pixel_values'].half() for item in batch
-                ])
-                result['pixel_values'] = pixel_values
-            
+            if "pixel_values" in batch[0] and batch[0]["pixel_values"] is not None:
+                pixel_values = torch.stack(
+                    [
+                        (
+                            torch.tensor(item["pixel_values"], dtype=torch.float16)
+                            if not isinstance(item["pixel_values"], torch.Tensor)
+                            else item["pixel_values"].half()
+                        )
+                        for item in batch
+                    ]
+                )
+                result["pixel_values"] = pixel_values
+
             # Add image grid thw if present
-            if 'image_grid_thw' in batch[0] and batch[0]['image_grid_thw'] is not None:
-                image_grid_thw = torch.stack([
-                    torch.tensor(item['image_grid_thw'], dtype=torch.long) if not isinstance(item['image_grid_thw'], torch.Tensor)
-                    else item['image_grid_thw'].long() for item in batch
-                ])
-                result['image_grid_thw'] = image_grid_thw
-            
+            if "image_grid_thw" in batch[0] and batch[0]["image_grid_thw"] is not None:
+                image_grid_thw = torch.stack(
+                    [
+                        (
+                            torch.tensor(item["image_grid_thw"], dtype=torch.long)
+                            if not isinstance(item["image_grid_thw"], torch.Tensor)
+                            else item["image_grid_thw"].long()
+                        )
+                        for item in batch
+                    ]
+                )
+                result["image_grid_thw"] = image_grid_thw
+
             return result
-        
+
         # Create trainer
         trainer = Trainer(
             model=self.model,
@@ -316,10 +366,10 @@ class StreetFighterLoRATrainer:
             train_dataset=train_dataset,
             data_collator=data_collator,
         )
-        
+
         # Ensure model is in training mode
         self.model.train()
-        
+
         # Train with optional resume
         if resume_from_checkpoint:
             print(f"🔄 Resuming training from checkpoint: {resume_from_checkpoint}")
@@ -328,20 +378,22 @@ class StreetFighterLoRATrainer:
         else:
             print(f"🚀 Starting training for {num_epochs} epochs...")
             trainer.train()
-        
+
         # Save model
         print(f"💾 Saving LoRA model to {self.output_dir}")
         trainer.save_model()
-        
+
         print("✅ Training completed!")
-    
+
     def save_for_inference(self, save_path: str = "./sf2_lora_inference"):
         """Save model for inference"""
         self.model.save_pretrained(save_path)
         print(f"💾 Model saved for inference at {save_path}")
 
 
-def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetFighterDataset:
+def collect_gameplay_data(
+    num_episodes: int = 5, existing_agent=None
+) -> StreetFighterDataset:
     """Collect training data by playing the game"""
     import numpy as np
     from PIL import Image
@@ -350,7 +402,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
     from gymnasium import spaces
     import retro
     from discretizer import StreetFighter2Discretizer
-    
+
     # Simple StreetFighter wrapper for data collection
     class StreetFighter(gym.Env):
         def __init__(self):
@@ -362,30 +414,34 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 use_restricted_actions=retro.Actions.FILTERED,
             )
             self.game = StreetFighter2Discretizer(game)
-            self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
+            self.observation_space = spaces.Box(
+                low=0, high=255, shape=(84, 84, 1), dtype=np.uint8
+            )
             self.action_space = self.game.action_space
             self.agent_hp = 176
             self.enemy_hp = 176
-        
+
         def preprocess(self, observation):
             gray = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
             resize = cv2.resize(gray, (84, 84), interpolation=cv2.INTER_CUBIC)
             return np.reshape(resize, (84, 84, 1))
-        
+
         def step(self, action):
             obs, _, done, truncated, info = self.game.step(action)
             obs = self.preprocess(obs)
-            
+
             # Health tracking and reward calculation
             current_agent_hp = info.get("agent_hp", self.agent_hp)
             current_enemy_hp = info.get("enemy_hp", self.enemy_hp)
-            
-            delta_hp_diff = (current_agent_hp - self.agent_hp) - (current_enemy_hp - self.enemy_hp)
+
+            delta_hp_diff = (current_agent_hp - self.agent_hp) - (
+                current_enemy_hp - self.enemy_hp
+            )
             reward = delta_hp_diff / 176.0 - 0.0001
-            
+
             self.agent_hp = current_agent_hp
             self.enemy_hp = current_enemy_hp
-            
+
             if self.agent_hp <= 0 or self.enemy_hp <= 0:
                 done = True
                 if self.enemy_hp <= 0 and self.agent_hp > 0:
@@ -394,9 +450,9 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 else:
                     reward -= 1.0
                     info["agent_won"] = False
-            
+
             return obs, reward, done, truncated, info
-        
+
         def reset(self, **kwargs):
             result = self.game.reset(**kwargs)
             if isinstance(result, tuple):
@@ -408,18 +464,18 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
             self.agent_hp = info.get("agent_hp", 176)
             self.enemy_hp = info.get("enemy_hp", 176)
             return obs, info
-        
+
         def render(self, mode="human"):
             return self.game.render()
-        
+
         def close(self):
             self.game.close()
-    
+
     print(f"🎮 Collecting gameplay data for {num_episodes} episodes...")
-    
+
     # Use the same wrapper as the main training
     env = StreetFighter()
-    
+
     # Use existing agent if provided, otherwise create mock data
     if existing_agent:
         agent = existing_agent
@@ -430,27 +486,29 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 self.frame_counter = 0
                 self.last_action = 0
                 self.action_repeat_count = 0
-                
+
             def reset(self):
                 self.frame_counter = 0
                 self.last_action = 0
                 self.action_repeat_count = 0
-                
+
             def capture_game_frame(self, obs):
                 from PIL import Image
                 import cv2
-                
+
                 # Get raw observation from retro environment instead of preprocessed one
                 try:
                     raw_obs = env.game.env.unwrapped.render()  # Get raw RGB frame
                     if raw_obs is not None and isinstance(raw_obs, np.ndarray):
                         if len(raw_obs.shape) == 3 and raw_obs.shape[2] == 3:
                             # Resize to model's expected input size
-                            resized = cv2.resize(raw_obs, (320, 224), interpolation=cv2.INTER_CUBIC)
+                            resized = cv2.resize(
+                                raw_obs, (320, 224), interpolation=cv2.INTER_CUBIC
+                            )
                             return Image.fromarray(resized)
                 except:
                     pass
-                
+
                 # Fallback: try to use the preprocessed obs if it has visual info
                 if isinstance(obs, np.ndarray) and len(obs.shape) == 3:
                     if obs.shape[2] == 1:  # Grayscale
@@ -459,36 +517,36 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                         return Image.fromarray(rgb_obs.astype(np.uint8))
                     elif obs.shape[2] == 3:  # RGB
                         return Image.fromarray(obs.astype(np.uint8))
-                        
+
                 # Last resort: create a meaningful placeholder
                 return Image.fromarray(np.ones((224, 320, 3), dtype=np.uint8) * 128)
-                
+
             def extract_game_features(self, info):
                 return info
-                
+
             def get_action(self, obs, info, verbose=False):
                 """Anti-Bison expert agent based on SF2 boss strategies"""
                 _ = obs  # Mark as used
-                
+
                 # Extract game state
-                agent_hp = info.get('agent_hp', 176)
-                enemy_hp = info.get('enemy_hp', 176) 
-                agent_x = info.get('agent_x', 100)
-                enemy_x = info.get('enemy_x', 200)
-                enemy_status = info.get('enemy_status', 0)
+                agent_hp = info.get("agent_hp", 176)
+                enemy_hp = info.get("enemy_hp", 176)
+                agent_x = info.get("agent_x", 100)
+                enemy_x = info.get("enemy_x", 200)
+                enemy_status = info.get("enemy_status", 0)
                 distance = abs(agent_x - enemy_x)
-                
+
                 # Calculate advantage
                 hp_advantage = agent_hp - enemy_hp
                 facing_right = agent_x < enemy_x
-                
+
                 # Anti-Bison expert strategy
                 action = 0  # Default NO_ACTION
                 reasoning = "Anti-Bison expert: "
-                
+
                 # Anti-Bison Strategy based on research
-                
-                # Priority 1: Bison's vulnerable moments 
+
+                # Priority 1: Bison's vulnerable moments
                 if enemy_status != 0:  # Enemy in recovery/animation
                     if distance < 50:
                         action = 17  # HEAVY_PUNCH (punish recovery)
@@ -496,7 +554,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                     else:
                         action = 6 if facing_right else 3  # Move closer to punish
                         reasoning += "Close distance to punish Bison"
-                
+
                 # Priority 2: Counter Bison's range advantage
                 elif distance > 100:  # Far range - Bison loves Psycho Crusher
                     if self.frame_counter % 3 == 0:
@@ -508,7 +566,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                     else:
                         action = 6 if facing_right else 3  # Careful approach
                         reasoning += "Careful approach vs Bison"
-                
+
                 # Priority 3: Mid-range poking (Bison's weak spot)
                 elif distance > 60 and distance <= 100:  # Medium range
                     frame_mod = self.frame_counter % 8  # More variety
@@ -522,7 +580,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                         action = 21  # LIGHT_KICK (quick poke)
                         reasoning += "Light kick poke vs Bison"
                     elif frame_mod == 3:
-                        action = 9   # LIGHT_PUNCH (quick attack)
+                        action = 9  # LIGHT_PUNCH (quick attack)
                         reasoning += "Light punch poke vs Bison"
                     elif frame_mod == 4:
                         action = 32  # HEAVY_KICK (power attack)
@@ -531,41 +589,41 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                         action = 38 if facing_right else 41  # HADOKEN
                         reasoning += "Fireball vs Bison"
                     elif frame_mod == 6:
-                        action = 2   # DOWN (defensive)
+                        action = 2  # DOWN (defensive)
                         reasoning += "Defensive crouch vs Bison"
                     else:
-                        action = 1   # UP (jump over potential Head Stomp)
+                        action = 1  # UP (jump over potential Head Stomp)
                         reasoning += "Jump to avoid Head Stomp"
-                
+
                 # Priority 4: Close range - very dangerous vs Bison
                 elif distance <= 60:  # Close range - Bison is deadly here
                     if hp_advantage > 20:  # Only aggressive if winning
                         if self.frame_counter % 3 == 0:
-                            action = 9   # LIGHT_PUNCH (safest attack)
+                            action = 9  # LIGHT_PUNCH (safest attack)
                             reasoning += "Winning - safe light attack vs Bison"
                         elif self.frame_counter % 3 == 1:
                             action = 21  # LIGHT_KICK (different timing)
                             reasoning += "Winning - light kick vs Bison"
                         else:
-                            action = 2   # DOWN (block expected counter)
+                            action = 2  # DOWN (block expected counter)
                             reasoning += "Winning - block Bison counter"
                     else:  # Losing or even - be very careful
                         if self.frame_counter % 5 == 0:
-                            action = 9   # LIGHT_PUNCH (quick poke)
+                            action = 9  # LIGHT_PUNCH (quick poke)
                             reasoning += "Careful light poke vs Bison"
                         elif self.frame_counter % 5 == 1:
-                            action = 2   # DOWN (block)
+                            action = 2  # DOWN (block)
                             reasoning += "Block Bison pressure"
                         elif self.frame_counter % 5 == 2:
                             action = 3 if facing_right else 6  # Back away
                             reasoning += "Retreat from dangerous Bison"
                         elif self.frame_counter % 5 == 3:
-                            action = 1   # UP (jump away)
+                            action = 1  # UP (jump away)
                             reasoning += "Jump away from Bison"
                         else:
-                            action = 0   # NO_ACTION (wait for opening)
+                            action = 0  # NO_ACTION (wait for opening)
                             reasoning += "Wait for Bison opening"
-                
+
                 # Health-based modifiers
                 if hp_advantage < -50:  # Desperately losing
                     if distance < 40 and self.frame_counter % 6 == 0:
@@ -574,7 +632,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                     elif distance > 80:
                         action = 38 if facing_right else 41  # HADOKEN (chip damage)
                         reasoning += " -> Desperate projectile"
-                
+
                 # Prevent action repetition (causes predictable blocking)
                 if action == self.last_action:
                     self.action_repeat_count += 1
@@ -582,76 +640,82 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                         # Choose alternative action
                         if action in [9, 13, 17]:  # If punching, try kicking
                             action = 21  # LIGHT_KICK
-                        elif action in [21, 26, 32]:  # If kicking, try punching  
-                            action = 9   # LIGHT_PUNCH
+                        elif action in [21, 26, 32]:  # If kicking, try punching
+                            action = 9  # LIGHT_PUNCH
                         elif action in [3, 6]:  # If moving, try jumping
-                            action = 1   # UP
+                            action = 1  # UP
                         else:  # Default to no action
-                            action = 0   # NO_ACTION
+                            action = 0  # NO_ACTION
                         reasoning += " -> Anti-repeat variation"
                         self.action_repeat_count = 0
                 else:
                     self.action_repeat_count = 0
-                    
+
                 self.last_action = action
                 self.frame_counter += 1
-                
+
                 if verbose:
-                    print(f"🧠 Expert: HP {agent_hp} vs {enemy_hp} (diff: {hp_advantage:+d}), Dist: {distance}, Action: {action}")
-                
+                    print(
+                        f"🧠 Expert: HP {agent_hp} vs {enemy_hp} (diff: {hp_advantage:+d}), Dist: {distance}, Action: {action}"
+                    )
+
                 return action, reasoning
-                
+
         agent = ExpertAgent()
-        
+
     dataset = StreetFighterDataset()
-    
+
     # Health tracking
     agent_hp = 176
     enemy_hp = 176
-    
+
     for episode in range(num_episodes):
         print(f"Episode {episode + 1}/{num_episodes}")
         obs = env.reset()
         agent.reset()
-        
+
         # Reset health tracking
         agent_hp = 176
         enemy_hp = 176
-        
+
         step = 0
         max_steps = 1000
         episode_reward = 0
         while step < max_steps:
             # Create info with health tracking (mock values for now)
-            current_agent_hp = agent_hp  # Would extract from game memory in real implementation
-            current_enemy_hp = enemy_hp  # Would extract from game memory in real implementation
-            
+            current_agent_hp = (
+                agent_hp  # Would extract from game memory in real implementation
+            )
+            current_enemy_hp = (
+                enemy_hp  # Would extract from game memory in real implementation
+            )
+
             info = {
-                'agent_hp': current_agent_hp,
-                'enemy_hp': current_enemy_hp,
-                'agent_x': 100,
-                'agent_y': 200,
-                'enemy_x': 200,
-                'enemy_y': 200,
-                'distance': 100,
-                'enemy_status': 0,
-                'agent_won': False
+                "agent_hp": current_agent_hp,
+                "enemy_hp": current_enemy_hp,
+                "agent_x": 100,
+                "agent_y": 200,
+                "enemy_x": 200,
+                "enemy_y": 200,
+                "distance": 100,
+                "enemy_status": 0,
+                "agent_won": False,
             }
-            
+
             # Get action from agent
             action, reasoning = agent.get_action(obs, info, verbose=False)
-            
+
             # Capture current state for training
             if step % 30 == 0:  # Sample every 30 frames
                 image = agent.capture_game_frame(obs)
                 game_state = agent.extract_game_features(info)
-                
+
                 # Add to dataset immediately (like before)
                 dataset.add_example(image, game_state, action, reasoning)
-            
+
             # Take step using wrapper (returns 5 values: obs, reward, done, truncated, info)
             obs, _, done, _, _ = env.step(action)
-            
+
             # Calculate health change (agent_hp_change - enemy_hp_change)
             # we want to create health advantage compared your opponent
             delta_hp_diff = (current_agent_hp - agent_hp) - (
@@ -675,57 +739,86 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 else:
                     reward -= 1.0  # Large loss penalty
                     info["agent_won"] = False
-            
+
             episode_reward += reward
             step += 1
-            
+
             if done:
-                agent_won = info.get('agent_won', False)
-                print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}")
-                
-                print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}")
+                agent_won = info.get("agent_won", False)
+                print(
+                    f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}"
+                )
+
+                print(
+                    f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}"
+                )
                 break
-    
+
     env.close()
     print(f"📊 Collected {len(dataset.data)} training examples")
     return dataset
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LoRA Fine-tuning for Street Fighter Qwen Agent")
-    parser.add_argument("--model", type=str, 
-                       default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
-                       help="Base model path")
-    parser.add_argument("--output-dir", type=str, default="./sf2_lora_model",
-                       help="Output directory for LoRA model")
-    parser.add_argument("--data-path", type=str, default=None,
-                       help="Path to training data JSON file")
-    parser.add_argument("--collect-data", action="store_true",
-                       help="Collect training data by playing the game")
-    parser.add_argument("--episodes", type=int, default=5,
-                       help="Number of episodes to collect data from")
-    parser.add_argument("--epochs", type=int, default=3,
-                       help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=1,
-                       help="Training batch size")
-    parser.add_argument("--learning-rate", type=float, default=1e-4,
-                       help="Learning rate")
-    parser.add_argument("--lora-rank", type=int, default=16,
-                       help="LoRA rank")
-    parser.add_argument("--lora-alpha", type=int, default=32,
-                       help="LoRA alpha")
-    parser.add_argument("--append-data", action="store_true",
-                       help="Append new data to existing dataset instead of overwriting")
-    parser.add_argument("--resume-from", type=str, default=None,
-                       help="Resume training from checkpoint directory")
-    parser.add_argument("--save-steps", type=int, default=100,
-                       help="Save checkpoint every N steps")
-    parser.add_argument("--no-train", action="store_true",
-                       help="Only collect data, skip training")
-# CPU offload removed - AWQ models don't support it
-    
+    parser = argparse.ArgumentParser(
+        description="LoRA Fine-tuning for Street Fighter Qwen Agent"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
+        help="Base model path",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./sf2_lora_model",
+        help="Output directory for LoRA model",
+    )
+    parser.add_argument(
+        "--data-path", type=str, default=None, help="Path to training data JSON file"
+    )
+    parser.add_argument(
+        "--collect-data",
+        action="store_true",
+        help="Collect training data by playing the game",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=5,
+        help="Number of episodes to collect data from",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=3, help="Number of training epochs"
+    )
+    parser.add_argument("--batch-size", type=int, default=1, help="Training batch size")
+    parser.add_argument(
+        "--learning-rate", type=float, default=1e-4, help="Learning rate"
+    )
+    parser.add_argument("--lora-rank", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    parser.add_argument(
+        "--append-data",
+        action="store_true",
+        help="Append new data to existing dataset instead of overwriting",
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint directory",
+    )
+    parser.add_argument(
+        "--save-steps", type=int, default=100, help="Save checkpoint every N steps"
+    )
+    parser.add_argument(
+        "--no-train", action="store_true", help="Only collect data, skip training"
+    )
+    # CPU offload removed - AWQ models don't support it
+
     args = parser.parse_args()
-    
+
     # Initialize trainer
     trainer = StreetFighterLoRATrainer(
         model_path=args.model,  # Always use base model path
@@ -733,23 +826,29 @@ def main():
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
     )
-    
+
     # Collect or load data
     if args.collect_data:
         print("🧠 Using expert rule-based agent for better training data")
-        dataset = collect_gameplay_data(args.episodes, existing_agent=None)  # Use mock agent
+        dataset = collect_gameplay_data(
+            args.episodes, existing_agent=None
+        )  # Use mock agent
         # Save collected data using save_data method with append option
         dataset.save_data("./data/sf2_training_data.json", append=args.append_data)
-        
+
         if args.no_train:
-            print("✅ Data collection completed! Training skipped due to --no-train flag.")
+            print(
+                "✅ Data collection completed! Training skipped due to --no-train flag."
+            )
             return
     else:
         dataset = StreetFighterDataset(args.data_path)
         if len(dataset.data) == 0:
-            print("❌ No training data found. Use --collect-data to collect data first.")
+            print(
+                "❌ No training data found. Use --collect-data to collect data first."
+            )
             return
-    
+
     # Train model (only if not skipped)
     if not args.no_train:
         trainer.train(
@@ -760,7 +859,7 @@ def main():
             save_steps=args.save_steps,
             resume_from_checkpoint=args.resume_from,
         )
-        
+
         # No need for separate inference directory - use checkpoints directly
     else:
         print("⏭️ Training skipped due to --no-train flag.")
