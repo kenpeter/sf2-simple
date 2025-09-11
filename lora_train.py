@@ -424,13 +424,17 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
     if existing_agent:
         agent = existing_agent
     else:
-        # Create mock agent for data collection without loading model
-        class MockAgent:
+        # Create expert rule-based agent for better training data
+        class ExpertAgent:
             def __init__(self):
                 self.frame_counter = 0
+                self.last_action = 0
+                self.action_repeat_count = 0
                 
             def reset(self):
                 self.frame_counter = 0
+                self.last_action = 0
+                self.action_repeat_count = 0
                 
             def capture_game_frame(self, obs):
                 if isinstance(obs, np.ndarray):
@@ -446,13 +450,112 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
                 return info
                 
             def get_action(self, obs, info, verbose=False):
-                # Random action selection for data collection  
-                _ = obs, info, verbose  # Mark as used
-                action = random.randint(0, 43)
-                reasoning = f"Random action {action} for data collection"
+                """Rule-based expert agent for better training data"""
+                _ = obs  # Mark as used
+                
+                # Extract game state
+                agent_hp = info.get('agent_hp', 176)
+                enemy_hp = info.get('enemy_hp', 176) 
+                agent_x = info.get('agent_x', 100)
+                enemy_x = info.get('enemy_x', 200)
+                distance = abs(agent_x - enemy_x)
+                
+                # Calculate advantage
+                hp_advantage = agent_hp - enemy_hp
+                facing_right = agent_x < enemy_x
+                
+                # Expert strategy based on game state
+                action = 0  # Default NO_ACTION
+                reasoning = "Expert rule-based decision: "
+                
+                # Strategy 1: Health-based decision making
+                if hp_advantage > 30:
+                    # We're winning - play aggressively
+                    if distance < 40:  # Close range
+                        action = 17 if facing_right else 17  # HEAVY_PUNCH
+                        reasoning += "Winning + Close = Heavy attack"
+                    elif distance < 80:  # Medium range  
+                        action = 13 if facing_right else 13  # MEDIUM_PUNCH
+                        reasoning += "Winning + Medium = Medium attack"
+                    else:  # Far range
+                        action = 38 if facing_right else 41  # HADOKEN
+                        reasoning += "Winning + Far = Projectile"
+                        
+                elif hp_advantage < -30:
+                    # We're losing - play defensively but try to get damage
+                    if distance < 30:  # Very close
+                        action = 2  # DOWN (crouch block)
+                        reasoning += "Losing + Very close = Defensive crouch"
+                    elif distance < 60:  # Close range
+                        action = 9  # LIGHT_PUNCH (safe attack)
+                        reasoning += "Losing + Close = Safe light attack"
+                    else:  # Far range
+                        action = 6 if facing_right else 3  # Move closer
+                        reasoning += "Losing + Far = Close distance"
+                        
+                else:
+                    # Even match - balanced strategy
+                    if distance < 35:  # Close range
+                        # Mix between attacks and movement
+                        if self.frame_counter % 4 == 0:
+                            action = 21  # LIGHT_KICK
+                            reasoning += "Even + Close = Light kick"
+                        elif self.frame_counter % 4 == 1:
+                            action = 13  # MEDIUM_PUNCH  
+                            reasoning += "Even + Close = Medium punch"
+                        elif self.frame_counter % 4 == 2:
+                            action = 2   # DOWN (crouch)
+                            reasoning += "Even + Close = Defensive crouch"
+                        else:
+                            action = 3 if facing_right else 6  # Move away
+                            reasoning += "Even + Close = Retreat"
+                            
+                    elif distance < 80:  # Medium range
+                        if self.frame_counter % 3 == 0:
+                            action = 6 if facing_right else 3  # Move closer
+                            reasoning += "Even + Medium = Approach"
+                        elif self.frame_counter % 3 == 1:
+                            action = 9  # LIGHT_PUNCH
+                            reasoning += "Even + Medium = Light attack"
+                        else:
+                            action = 1  # UP (jump)
+                            reasoning += "Even + Medium = Jump"
+                            
+                    else:  # Far range
+                        if self.frame_counter % 2 == 0:
+                            action = 6 if facing_right else 3  # Move closer
+                            reasoning += "Even + Far = Close distance"
+                        else:
+                            action = 38 if facing_right else 41  # HADOKEN
+                            reasoning += "Even + Far = Projectile"
+                
+                # Prevent action repetition (causes predictable blocking)
+                if action == self.last_action:
+                    self.action_repeat_count += 1
+                    if self.action_repeat_count > 2:  # Don't repeat more than 2 times
+                        # Choose alternative action
+                        if action in [9, 13, 17]:  # If punching, try kicking
+                            action = 21  # LIGHT_KICK
+                        elif action in [21, 26, 32]:  # If kicking, try punching  
+                            action = 9   # LIGHT_PUNCH
+                        elif action in [3, 6]:  # If moving, try jumping
+                            action = 1   # UP
+                        else:  # Default to no action
+                            action = 0   # NO_ACTION
+                        reasoning += " -> Anti-repeat variation"
+                        self.action_repeat_count = 0
+                else:
+                    self.action_repeat_count = 0
+                    
+                self.last_action = action
+                self.frame_counter += 1
+                
+                if verbose:
+                    print(f"🧠 Expert: HP {agent_hp} vs {enemy_hp} (diff: {hp_advantage:+d}), Dist: {distance}, Action: {action}")
+                
                 return action, reasoning
                 
-        agent = MockAgent()
+        agent = ExpertAgent()
         
     dataset = StreetFighterDataset()
     
@@ -472,6 +575,7 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
         step = 0
         max_steps = 1000
         episode_reward = 0
+        episode_examples = []  # Store examples for this episode
         
         while step < max_steps:
             # Create info with health tracking (mock values for now)
@@ -493,13 +597,18 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
             # Get action from agent
             action, reasoning = agent.get_action(obs, info, verbose=False)
             
-            # Capture current state for training
+            # Capture current state for training (store temporarily)
             if step % 30 == 0:  # Sample every 30 frames
                 image = agent.capture_game_frame(obs)
                 game_state = agent.extract_game_features(info)
                 
-                # Add to dataset
-                dataset.add_example(image, game_state, action, reasoning)
+                # Store example temporarily for this episode
+                episode_examples.append({
+                    'image': image,
+                    'game_state': game_state,
+                    'action': action,
+                    'reasoning': reasoning
+                })
             
             # Take step using wrapper (returns 5 values: obs, reward, done, truncated, info)
             obs, _, done, _, _ = env.step(action)
@@ -532,7 +641,22 @@ def collect_gameplay_data(num_episodes: int = 5, existing_agent=None) -> StreetF
             step += 1
             
             if done:
-                print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {info.get('agent_won', False)}")
+                agent_won = info.get('agent_won', False)
+                print(f"Episode {episode + 1} ended: Reward = {episode_reward:.3f}, Agent Won = {agent_won}")
+                
+                # Only save examples from winning episodes
+                if agent_won:
+                    print(f"🏆 WINNER! Adding {len(episode_examples)} examples to dataset")
+                    for example in episode_examples:
+                        dataset.add_example(
+                            example['image'], 
+                            example['game_state'], 
+                            example['action'], 
+                            example['reasoning']
+                        )
+                else:
+                    print(f"💀 Lost. Discarding {len(episode_examples)} examples from this episode")
+                
                 break
     
     env.close()
@@ -585,7 +709,7 @@ def main():
     
     # Collect or load data
     if args.collect_data:
-        print("📊 Using mock agent for data collection to save GPU memory")
+        print("🧠 Using expert rule-based agent for better training data")
         dataset = collect_gameplay_data(args.episodes, existing_agent=None)  # Use mock agent
         # Save collected data using save_data method with append option
         dataset.save_data("./data/sf2_training_data.json", append=args.append_data)
