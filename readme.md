@@ -108,19 +108,24 @@ TIMING SYSTEM:
 
 
 
- Data Collection:
+
+
   # Initial collection
-  python lora_trainer.py --collect-data --episodes 1
+  python lora_trainer.py --collect-data --episodes 1 --no-train
 
   # Accumulate more data  
-  python lora_trainer.py --collect-data --episodes 5 --append-data
+  python lora_trainer.py --collect-data --episodes 5 --no-train --append-data
 
-  Training:
+  Training
+
   # Fresh training
   python lora_trainer.py --data-path ./data/sf2_training_data.json --epochs 3
 
   # Resume from checkpoint
-  python l
+  python lora_trainer.py --data-path ./data/sf2_training_data.json --epochs 3 --resume-from-checkpoint
+
+
+
 
 
 

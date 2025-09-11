@@ -14,6 +14,7 @@ from transformers import (
     AutoProcessor,
     BitsAndBytesConfig,
 )
+from peft import PeftModel  # Import PEFT for LoRA adapter loading
 from qwen_vl_utils import process_vision_info
 
 # Import NumPy for numerical array operations
@@ -39,12 +40,14 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     def __init__(
         self,
         model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+        lora_path: str = None,
     ):  # Constructor method for agent initialization
         """
         Initialize the Qwen agent
 
         Args:
             model_path: Path to Qwen model (local or HuggingFace)
+            lora_path: Path to LoRA adapter (optional)
         """
         # Initialize Qwen model
         print(
@@ -87,6 +90,12 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             local_files_only=True,
             trust_remote_code=True,  # Trust remote code for AWQ models
         )
+        
+        # Load LoRA adapter if provided
+        if lora_path:
+            print(f"🎯 Loading LoRA adapter from: {lora_path}")
+            self.model = PeftModel.from_pretrained(self.model, lora_path)
+            print("✅ LoRA adapter loaded successfully")
         print(
             f"✅ Qwen 72B AWQ model loaded successfully on {self.device}"
         )  # Print successful loading message
@@ -688,6 +697,7 @@ def demo_qwen_gameplay(
     episodes: int = 3,  # Default number of episodes to play
     render: bool = True,  # Default to render game visuals
     verbose: bool = True,
+    lora_path: str = None,  # Path to LoRA adapter
 ):  # Default to verbose output
     """
     Demo Qwen agent playing Street Fighter 2
@@ -697,6 +707,7 @@ def demo_qwen_gameplay(
         episodes: Number of episodes to play
         render: Whether to render the game
         verbose: Whether to print detailed reasoning
+        lora_path: Path to LoRA adapter (optional)
     """
     import retro  # Import retro for direct environment creation
 
@@ -711,7 +722,7 @@ def demo_qwen_gameplay(
         state="ken_bison_12.state", 
         use_restricted_actions=retro.Actions.FILTERED,
     )  # Create Street Fighter 2 environment directly
-    agent = QwenStreetFighterAgent(model_path)  # Create Qwen agent with specified model
+    agent = QwenStreetFighterAgent(model_path, lora_path)  # Create Qwen agent with specified model and LoRA
 
     wins = 0  # Initialize win counter
     total_rewards = []  # Initialize list to store episode rewards
@@ -815,6 +826,12 @@ if __name__ == "__main__":  # Check if script is run directly
         help="Qwen2.5-VL AWQ model local path",
     )  # Help text for model argument
     parser.add_argument(
+        "--lora",
+        type=str,
+        default=None,
+        help="Path to LoRA adapter (e.g., ./sf2_lora_inference)",
+    )
+    parser.add_argument(
         "--episodes",
         type=int,
         default=3,  # Episodes count argument
@@ -837,4 +854,5 @@ if __name__ == "__main__":  # Check if script is run directly
         episodes=args.episodes,  # Pass episode count from arguments
         render=not args.no_render,  # Invert no-render flag for render parameter
         verbose=not args.quiet,  # Invert quiet flag for verbose parameter
+        lora_path=args.lora,  # Pass LoRA path from arguments
     )
