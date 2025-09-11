@@ -113,21 +113,32 @@ TIMING SYSTEM:
   python lora_train.py --collect-data --episodes 1 --no-train
 
   # Append more data  
-  python lora_train.py --collect-data --episodes 2 --append-data --no-train
+  python lora_train.py --collect-data --episodes 20 --append-data --no-train
 
   Training:
   # Fresh training
   python lora_train.py --data-path ./data/sf2_training_data.json --epochs 1 --batch-size 1
 
-  # With checkpoints
-  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 3 --save-steps 20
+  # With checkpoints (every 100 steps - good gap)
+  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 3 --save-steps 100
+
+  # Resume training from checkpoint
+  python lora_train.py --resume-from ./sf2_lora_model/checkpoint-6 --epochs 1 --batch-size 1
 
   Inference:
-  # Base model
+  # Base model only
   python play.py --episodes 1 --no-render --quiet
 
-  # With LoRA (use correct 3B model)
+  # With final LoRA model
   python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora ./sf2_lora_inference
+
+  # With checkpoint LoRA (NEW!)
+  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora
+  ./sf2_lora_model/checkpoint-6
+
+  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora
+  ./sf2_lora_model/checkpoint-18
+
 
 
 

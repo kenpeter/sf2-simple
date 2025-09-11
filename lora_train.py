@@ -242,6 +242,7 @@ class StreetFighterLoRATrainer:
         batch_size: int = 1,
         learning_rate: float = 1e-4,
         save_steps: int = 100,
+        resume_from_checkpoint: str = None,
     ):
         """Train the LoRA model"""
         # Prepare dataset
@@ -319,9 +320,14 @@ class StreetFighterLoRATrainer:
         # Ensure model is in training mode
         self.model.train()
         
-        # Train
-        print(f"🚀 Starting training for {num_epochs} epochs...")
-        trainer.train()
+        # Train with optional resume
+        if resume_from_checkpoint:
+            print(f"🔄 Resuming training from checkpoint: {resume_from_checkpoint}")
+            print(f"🚀 Starting training for {num_epochs} epochs...")
+            trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:
+            print(f"🚀 Starting training for {num_epochs} epochs...")
+            trainer.train()
         
         # Save model
         print(f"💾 Saving LoRA model to {self.output_dir}")
@@ -571,7 +577,7 @@ def main():
     
     # Initialize trainer
     trainer = StreetFighterLoRATrainer(
-        model_path=args.resume_from if args.resume_from else args.model,
+        model_path=args.model,  # Always use base model path
         output_dir=args.output_dir,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -601,6 +607,7 @@ def main():
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             save_steps=args.save_steps,
+            resume_from_checkpoint=args.resume_from,
         )
         
         # Save for inference

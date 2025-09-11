@@ -93,9 +93,17 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         
         # Load LoRA adapter if provided
         if lora_path:
+            import os
             print(f"🎯 Loading LoRA adapter from: {lora_path}")
-            self.model = PeftModel.from_pretrained(self.model, lora_path)
-            print("✅ LoRA adapter loaded successfully")
+            
+            # Check if it's a checkpoint directory or final model directory
+            if os.path.exists(os.path.join(lora_path, "adapter_config.json")):
+                print(f"📁 Detected LoRA adapter directory")
+                self.model = PeftModel.from_pretrained(self.model, lora_path)
+                print("✅ LoRA adapter loaded successfully")
+            else:
+                print(f"❌ No adapter_config.json found in {lora_path}")
+                print("💡 Make sure the path contains LoRA adapter files")
         print(
             f"✅ Qwen 72B AWQ model loaded successfully on {self.device}"
         )  # Print successful loading message
