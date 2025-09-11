@@ -108,24 +108,26 @@ TIMING SYSTEM:
 
 
 
-
-
+  Data Collection:
   # Initial collection
-  python lora_trainer.py --collect-data --episodes 1 --no-train
+  python lora_train.py --collect-data --episodes 1 --no-train
 
-  # Accumulate more data  
-  python lora_trainer.py --collect-data --episodes 5 --no-train --append-data
+  # Append more data  
+  python lora_train.py --collect-data --episodes 2 --append-data --no-train
 
-  Training
-
+  Training:
   # Fresh training
-  python lora_trainer.py --data-path ./data/sf2_training_data.json --epochs 3
+  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 1 --batch-size 1
 
-  # Resume from checkpoint
-  python lora_trainer.py --data-path ./data/sf2_training_data.json --epochs 3 --resume-from-checkpoint
+  # With checkpoints
+  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 3 --save-steps 20
 
+  Inference:
+  # Base model
+  python play.py --episodes 1 --no-render --quiet
 
-
+  # With LoRA (use correct 3B model)
+  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora ./sf2_lora_inference
 
 
 
