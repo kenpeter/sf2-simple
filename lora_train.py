@@ -610,8 +610,7 @@ def main():
             resume_from_checkpoint=args.resume_from,
         )
         
-        # Save for inference
-        trainer.save_for_inference()
+        # No need for separate inference directory - use checkpoints directly
     else:
         print("⏭️ Training skipped due to --no-train flag.")
 

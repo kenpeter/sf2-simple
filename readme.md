@@ -108,37 +108,37 @@ TIMING SYSTEM:
 
 
 
-  Data Collection:
+ # Data Collection:
   # Initial collection
   python lora_train.py --collect-data --episodes 1 --no-train
 
   # Append more data  
   python lora_train.py --collect-data --episodes 20 --append-data --no-train
 
-  Training:
+  # Training:
   # Fresh training
   python lora_train.py --data-path ./data/sf2_training_data.json --epochs 1 --batch-size 1
 
-  # With checkpoints (every 100 steps - good gap)
+  # With checkpoints (every 100 steps)
   python lora_train.py --data-path ./data/sf2_training_data.json --epochs 3 --save-steps 100
 
   # Resume training from checkpoint
   python lora_train.py --resume-from ./sf2_lora_model/checkpoint-6 --epochs 1 --batch-size 1
 
-  Inference:
+  # Inference:
   # Base model only
   python play.py --episodes 1 --no-render --quiet
 
-  # With final LoRA model
-  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora ./sf2_lora_inference
+  # With latest checkpoint (final model)
+  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora ./sf2_lora_model
 
-  # With checkpoint LoRA (NEW!)
+  # With specific checkpoint
   python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora
   ./sf2_lora_model/checkpoint-6
 
-  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora
-  ./sf2_lora_model/checkpoint-18
+  Now you can delete the sf2_lora_inference directory since it's no longer needed! 🗑️
 
+  
 
 
 
