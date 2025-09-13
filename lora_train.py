@@ -271,7 +271,7 @@ class StreetFighterLoRATrainer:
         # Prepare dataset
         train_dataset = self.prepare_dataset(dataset)
 
-        # Training arguments - optimized for GPU memory
+        # Training arguments - optimized for GPU memory with better progress tracking
         training_args = TrainingArguments(
             # output model dir
             output_dir=self.output_dir,
@@ -285,7 +285,10 @@ class StreetFighterLoRATrainer:
             learning_rate=learning_rate,
             # wegith decay
             weight_decay=0.01,
-            logging_steps=10,
+            # Progress tracking - log more frequently for better feedback
+            logging_steps=5,  # Log every 5 steps instead of 10
+            logging_first_step=True,
+            logging_strategy="steps",
             save_steps=save_steps,
             save_total_limit=2,  # Reduce saved checkpoints
             warmup_steps=20,  # Reduce warmup steps
@@ -295,6 +298,10 @@ class StreetFighterLoRATrainer:
             remove_unused_columns=False,
             dataloader_num_workers=0,  # Reduce memory overhead
             optim="adamw_torch",  # Use more memory efficient optimizer
+            # Better progress reporting
+            report_to=None,  # Disable wandb/tensorboard for cleaner output
+            disable_tqdm=False,  # Keep progress bars
+            log_level="info",
             deepspeed="ds_config.json" if os.path.exists("ds_config.json") else None,
         )
 
@@ -368,12 +375,66 @@ class StreetFighterLoRATrainer:
 
             return result
 
-        # Create trainer
+        # Custom callback for better progress tracking
+        from transformers import TrainerCallback
+        
+        class ProgressCallback(TrainerCallback):
+            def __init__(self, total_steps):
+                self.total_steps = total_steps
+                self.start_time = None
+                
+            def on_train_begin(self, args, state, control, **kwargs):
+                import time
+                self.start_time = time.time()
+                print(f"🎯 Training {len(train_dataset)} examples for {num_epochs} epochs")
+                print(f"📊 Total steps: {self.total_steps} (batch_size={batch_size}, grad_accum={training_args.gradient_accumulation_steps})")
+                
+            def on_log(self, args, state, control, logs=None, **kwargs):
+                import time
+                if logs:
+                    current_step = state.global_step
+                    progress_pct = (current_step / self.total_steps) * 100
+                    
+                    # Format loss
+                    loss = logs.get('train_loss', 0)
+                    lr = logs.get('learning_rate', learning_rate)
+                    
+                    # Calculate ETA - handle division by zero
+                    if self.start_time and current_step > 0 and self.total_steps > 0:
+                        elapsed = time.time() - self.start_time
+                        steps_per_sec = current_step / elapsed
+                        remaining_steps = self.total_steps - current_step
+                        eta_sec = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0
+                        eta_min = eta_sec / 60
+                        eta_str = f"{eta_min:.1f}min" if eta_min > 1 else f"{eta_sec:.0f}s"
+                    else:
+                        eta_str = "N/A"
+                    
+                    # Handle division by zero for progress
+                    if self.total_steps > 0:
+                        progress_pct = (current_step / self.total_steps) * 100
+                        print(f"📈 Step {current_step}/{self.total_steps} ({progress_pct:.1f}%) | Loss: {loss:.4f} | LR: {lr:.2e} | ETA: {eta_str}")
+                    else:
+                        print(f"📈 Step {current_step} | Loss: {loss:.4f} | LR: {lr:.2e}")
+                    
+            def on_train_end(self, args, state, control, **kwargs):
+                import time
+                if self.start_time:
+                    total_time = time.time() - self.start_time
+                    print(f"⏱️ Training completed in {total_time/60:.1f} minutes")
+
+        # Calculate total training steps
+        effective_batch_size = batch_size * training_args.gradient_accumulation_steps
+        steps_per_epoch = max(1, len(train_dataset) // effective_batch_size)
+        total_steps = max(1, steps_per_epoch * num_epochs)
+        
+        # Create trainer with progress callback
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
             data_collator=data_collator,
+            callbacks=[ProgressCallback(total_steps)],
         )
 
         # Ensure model is in training mode
