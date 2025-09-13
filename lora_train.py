@@ -27,15 +27,24 @@ from io import BytesIO
 class StreetFighterDataset:
     """Dataset for Street Fighter gameplay data"""
 
-    def __init__(self, data_path: str = None):
+    def __init__(self, data_path: str = None, shuffle=True, sample_size=None):
         self.data = []
         if data_path is not None and os.path.exists(data_path):
-            self.load_data(data_path)
+            self.load_data(data_path, shuffle=shuffle, sample_size=sample_size)
 
-    def load_data(self, data_path: str):
+    def load_data(self, data_path: str, shuffle=True, sample_size=None):
         """Load training data from JSON file with base64 image decoding"""
         with open(data_path, "r") as f:
             data = json.load(f)
+
+        # Random sampling options for better training diversity
+        if sample_size and len(data) > sample_size:
+            print(f"🎲 Randomly sampling {sample_size} from {len(data)} examples")
+            data = random.sample(data, sample_size)
+        
+        if shuffle:
+            print(f"🔀 Shuffling {len(data)} training examples")
+            random.shuffle(data)
 
         # Convert base64 images back to PIL Images
         self.data = []
@@ -47,7 +56,7 @@ class StreetFighterDataset:
                 item["image"] = image
             self.data.append(item)
 
-        print(f"📁 Loaded {len(self.data)} training examples")
+        print(f"📁 Loaded {len(self.data)} training examples (randomized: {shuffle})")
 
     def add_example(
         self, image: Image.Image, game_state: Dict, action: int, reasoning: str
@@ -1099,6 +1108,12 @@ def main():
     parser.add_argument(
         "--no-train", action="store_true", help="Only collect data, skip training"
     )
+    parser.add_argument(
+        "--no-shuffle", action="store_true", help="Don't shuffle training data (use sequential order)"
+    )
+    parser.add_argument(
+        "--sample-size", type=int, default=None, help="Randomly sample this many examples for training"
+    )
     # CPU offload removed - AWQ models don't support it
 
     args = parser.parse_args()
@@ -1126,7 +1141,11 @@ def main():
             )
             return
     else:
-        dataset = StreetFighterDataset(args.data_path)
+        dataset = StreetFighterDataset(
+            args.data_path, 
+            shuffle=not args.no_shuffle,
+            sample_size=args.sample_size
+        )
         if len(dataset.data) == 0:
             print(
                 "❌ No training data found. Use --collect-data to collect data first."
