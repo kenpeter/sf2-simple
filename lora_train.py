@@ -145,8 +145,11 @@ class StreetFighterLoRATrainer:
         self,
         model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
         output_dir: str = "./sf2_lora_model",
+        # lora rank?
         lora_rank: int = 16,
+        # lora alpha
         lora_alpha: int = 32,
+        # lora dropout: dropout
         lora_dropout: float = 0.1,
     ):
         self.model_path = model_path
@@ -172,10 +175,42 @@ class StreetFighterLoRATrainer:
             trust_remote_code=True,
         )
 
+        """
+        
+            Detailed flow:
+
+            Input (hidden states)
+                ↓
+            ┌─ q_proj → Query vectors ─┐
+            ├─ k_proj → Key vectors   ─┤
+            └─ v_proj → Value vectors ─┘
+                ↓
+            Attention computation (Q·K·V)
+                ↓
+            o_proj → transform attention output
+                ↓
+            Add & Norm (residual connection)
+                ↓
+            ┌─ gate_proj → SiLU activation ─┐
+            └─ up_proj → higher dimension  ─┘
+                ↓
+            Element-wise multiply (gate * up)
+                ↓
+            down_proj → back to original dimension
+                ↓
+            Add & Norm (residual connection)
+                ↓
+            Output (to next transformer block)
+
+        """
+
         # Configure LoRA
         lora_config = LoraConfig(
+            # model tpye
             task_type=TaskType.CAUSAL_LM,
+            # how much we get from original matrix
             r=lora_rank,
+            # lora_alpha / lora_rank, how much inference to the raw lora correctness
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
             target_modules=[
