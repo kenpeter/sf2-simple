@@ -486,11 +486,21 @@ def collect_gameplay_data(
                 self.frame_counter = 0
                 self.last_action = 0
                 self.action_repeat_count = 0
+                # Quality filtering state
+                self.last_sampled_step = -100
+                self.recent_game_states = []
+                self.action_distribution = {}
+                self.last_hp_values = {"agent": 176, "enemy": 176}
 
             def reset(self):
                 self.frame_counter = 0
                 self.last_action = 0
                 self.action_repeat_count = 0
+                # Reset quality filtering state
+                self.last_sampled_step = -100
+                self.recent_game_states = []
+                self.action_distribution = {}
+                self.last_hp_values = {"agent": 176, "enemy": 176}
 
             def capture_game_frame(self, obs):
                 from PIL import Image
@@ -532,7 +542,9 @@ def collect_gameplay_data(
                 agent_hp = info.get("agent_hp", 176)
                 enemy_hp = info.get("enemy_hp", 176)
                 agent_x = info.get("agent_x", 100)
+                agent_y = info.get("agent_y", 200)
                 enemy_x = info.get("enemy_x", 200)
+                enemy_y = info.get("enemy_y", 200)
                 enemy_status = info.get("enemy_status", 0)
                 distance = abs(agent_x - enemy_x)
 
@@ -540,9 +552,12 @@ def collect_gameplay_data(
                 hp_advantage = agent_hp - enemy_hp
                 facing_right = agent_x < enemy_x
 
-                # Anti-Bison expert strategy
+                # Generate enhanced reasoning with detailed analysis
                 action = 0  # Default NO_ACTION
-                reasoning = "Anti-Bison expert: "
+                reasoning = self._generate_enhanced_reasoning(
+                    agent_hp, enemy_hp, agent_x, agent_y, enemy_x, enemy_y, 
+                    enemy_status, distance, hp_advantage, facing_right
+                )
 
                 # Anti-Bison Strategy based on research
 
@@ -550,88 +565,65 @@ def collect_gameplay_data(
                 if enemy_status != 0:  # Enemy in recovery/animation
                     if distance < 50:
                         action = 17  # HEAVY_PUNCH (punish recovery)
-                        reasoning += "Punish Bison recovery with heavy attack"
                     else:
                         action = 6 if facing_right else 3  # Move closer to punish
-                        reasoning += "Close distance to punish Bison"
 
                 # Priority 2: Counter Bison's range advantage
                 elif distance > 100:  # Far range - Bison loves Psycho Crusher
                     if self.frame_counter % 3 == 0:
                         action = 2  # DOWN (crouch to avoid Psycho Crusher)
-                        reasoning += "Crouch to avoid Psycho Crusher"
                     elif self.frame_counter % 3 == 1:
                         action = 38 if facing_right else 41  # Counter with projectile
-                        reasoning += "Counter-projectile vs Bison"
                     else:
                         action = 6 if facing_right else 3  # Careful approach
-                        reasoning += "Careful approach vs Bison"
 
                 # Priority 3: Mid-range poking (Bison's weak spot)
                 elif distance > 60 and distance <= 100:  # Medium range
                     frame_mod = self.frame_counter % 8  # More variety
                     if frame_mod == 0:
                         action = 26  # MEDIUM_KICK (outrange Bison normals)
-                        reasoning += "Medium kick poke vs Bison"
                     elif frame_mod == 1:
                         action = 13  # MEDIUM_PUNCH (safe poke)
-                        reasoning += "Medium punch poke vs Bison"
                     elif frame_mod == 2:
                         action = 21  # LIGHT_KICK (quick poke)
-                        reasoning += "Light kick poke vs Bison"
                     elif frame_mod == 3:
                         action = 9  # LIGHT_PUNCH (quick attack)
-                        reasoning += "Light punch poke vs Bison"
                     elif frame_mod == 4:
                         action = 32  # HEAVY_KICK (power attack)
-                        reasoning += "Heavy kick vs Bison"
                     elif frame_mod == 5:
                         action = 38 if facing_right else 41  # HADOKEN
-                        reasoning += "Fireball vs Bison"
                     elif frame_mod == 6:
                         action = 2  # DOWN (defensive)
-                        reasoning += "Defensive crouch vs Bison"
                     else:
                         action = 1  # UP (jump over potential Head Stomp)
-                        reasoning += "Jump to avoid Head Stomp"
 
                 # Priority 4: Close range - very dangerous vs Bison
                 elif distance <= 60:  # Close range - Bison is deadly here
                     if hp_advantage > 20:  # Only aggressive if winning
                         if self.frame_counter % 3 == 0:
                             action = 9  # LIGHT_PUNCH (safest attack)
-                            reasoning += "Winning - safe light attack vs Bison"
                         elif self.frame_counter % 3 == 1:
                             action = 21  # LIGHT_KICK (different timing)
-                            reasoning += "Winning - light kick vs Bison"
                         else:
                             action = 2  # DOWN (block expected counter)
-                            reasoning += "Winning - block Bison counter"
                     else:  # Losing or even - be very careful
                         if self.frame_counter % 5 == 0:
                             action = 9  # LIGHT_PUNCH (quick poke)
-                            reasoning += "Careful light poke vs Bison"
                         elif self.frame_counter % 5 == 1:
                             action = 2  # DOWN (block)
-                            reasoning += "Block Bison pressure"
                         elif self.frame_counter % 5 == 2:
                             action = 3 if facing_right else 6  # Back away
-                            reasoning += "Retreat from dangerous Bison"
                         elif self.frame_counter % 5 == 3:
                             action = 1  # UP (jump away)
-                            reasoning += "Jump away from Bison"
                         else:
                             action = 0  # NO_ACTION (wait for opening)
-                            reasoning += "Wait for Bison opening"
 
                 # Health-based modifiers
                 if hp_advantage < -50:  # Desperately losing
                     if distance < 40 and self.frame_counter % 6 == 0:
                         action = 17  # HEAVY_PUNCH (desperate damage)
-                        reasoning += " -> Desperate heavy attack"
                     elif distance > 80:
                         action = 38 if facing_right else 41  # HADOKEN (chip damage)
-                        reasoning += " -> Desperate projectile"
 
                 # Prevent action repetition (causes predictable blocking)
                 if action == self.last_action:
@@ -646,10 +638,12 @@ def collect_gameplay_data(
                             action = 1  # UP
                         else:  # Default to no action
                             action = 0  # NO_ACTION
-                        reasoning += " -> Anti-repeat variation"
                         self.action_repeat_count = 0
                 else:
                     self.action_repeat_count = 0
+
+                # Update reasoning with final action choice and strategic context
+                reasoning = self._finalize_reasoning(reasoning, action, hp_advantage, distance, enemy_status)
 
                 self.last_action = action
                 self.frame_counter += 1
@@ -660,6 +654,196 @@ def collect_gameplay_data(
                     )
 
                 return action, reasoning
+
+            def _generate_enhanced_reasoning(self, agent_hp, enemy_hp, agent_x, agent_y, enemy_x, enemy_y, enemy_status, distance, hp_advantage, facing_right):
+                """Generate detailed reasoning with state analysis"""
+                
+                # State analysis
+                health_status = self._analyze_health_situation(agent_hp, enemy_hp, hp_advantage)
+                position_analysis = self._analyze_positioning(distance, agent_x, enemy_x, facing_right)
+                enemy_state = self._analyze_enemy_state(enemy_status, distance)
+                
+                reasoning = f"SITUATION: {health_status} {position_analysis} {enemy_state}"
+                return reasoning
+            
+            def _analyze_health_situation(self, agent_hp, enemy_hp, hp_advantage):
+                """Analyze current health situation"""
+                agent_hp_pct = (agent_hp / 176.0) * 100
+                enemy_hp_pct = (enemy_hp / 176.0) * 100
+                
+                if hp_advantage > 50:
+                    return f"Winning decisively ({agent_hp_pct:.0f}% vs {enemy_hp_pct:.0f}%)."
+                elif hp_advantage > 20:
+                    return f"Ahead in health ({agent_hp_pct:.0f}% vs {enemy_hp_pct:.0f}%)."
+                elif hp_advantage > -20:
+                    return f"Even match ({agent_hp_pct:.0f}% vs {enemy_hp_pct:.0f}%)."
+                elif hp_advantage > -50:
+                    return f"Behind in health ({agent_hp_pct:.0f}% vs {enemy_hp_pct:.0f}%)."
+                else:
+                    return f"Desperately losing ({agent_hp_pct:.0f}% vs {enemy_hp_pct:.0f}%)."
+            
+            def _analyze_positioning(self, distance, agent_x, enemy_x, facing_right):
+                """Analyze current positioning and spacing"""
+                if distance > 100:
+                    return f"Bison at long range ({distance}px) - danger of Psycho Crusher/Scissor Kick."
+                elif distance > 60:
+                    return f"Mid-range ({distance}px) - optimal footsies distance vs Bison."
+                elif distance > 30:
+                    return f"Close range ({distance}px) - Bison's deadly zone, high risk."
+                else:
+                    return f"Point-blank ({distance}px) - extremely dangerous vs Bison's normals."
+            
+            def _analyze_enemy_state(self, enemy_status, distance):
+                """Analyze enemy's current state and vulnerabilities"""
+                if enemy_status != 0:
+                    if distance < 50:
+                        return "Bison in recovery - punish opportunity!"
+                    else:
+                        return "Bison vulnerable - close distance for punish."
+                else:
+                    return "Bison active - expect charge moves or normals."
+            
+            def _finalize_reasoning(self, base_reasoning, action, hp_advantage, distance, enemy_status):
+                """Add action justification and strategic context"""
+                action_explanation = self._explain_action(action, hp_advantage, distance, enemy_status)
+                strategic_context = self._add_strategic_context(action, hp_advantage, distance)
+                
+                return f"{base_reasoning} ACTION: {action_explanation} STRATEGY: {strategic_context}"
+            
+            def _explain_action(self, action, hp_advantage, distance, enemy_status):
+                """Explain why this specific action was chosen"""
+                action_names = {
+                    0: "No action", 1: "Jump", 2: "Crouch", 3: "Move back", 6: "Move forward",
+                    9: "Light punch", 13: "Medium punch", 17: "Heavy punch",
+                    21: "Light kick", 26: "Medium kick", 32: "Heavy kick",
+                    38: "Hadoken right", 41: "Hadoken left"
+                }
+                
+                action_name = action_names.get(action, f"Action {action}")
+                
+                if enemy_status != 0 and action == 17:
+                    return f"{action_name} to punish Bison's recovery frames."
+                elif distance > 100 and action == 2:
+                    return f"{action_name} to avoid Bison's charge attacks."
+                elif distance > 100 and action in [38, 41]:
+                    return f"{action_name} to counter-zone Bison's long-range game."
+                elif 60 < distance <= 100 and action in [21, 26, 9, 13]:
+                    return f"{action_name} - safe poke in Bison's weak mid-range."
+                elif distance <= 60 and hp_advantage > 20 and action in [9, 21]:
+                    return f"{action_name} - aggressive but safe since ahead."
+                elif distance <= 60 and hp_advantage <= 20 and action == 2:
+                    return f"{action_name} - defensive vs dangerous Bison."
+                elif hp_advantage < -50 and action == 17:
+                    return f"{action_name} - desperate damage attempt."
+                else:
+                    return f"{action_name} based on current situation."
+            
+            def _add_strategic_context(self, action, hp_advantage, distance):
+                """Add strategic context and improvement suggestions"""
+                if action in [9, 13, 17, 21, 26, 32]:  # Attack actions
+                    if distance > 60:
+                        return "Good spacing control. Follow up with movement or fireball."
+                    else:
+                        return "Risky close-range attack. Be ready to block Bison's counter."
+                elif action in [38, 41]:  # Projectiles
+                    return "Fireball controls space. Watch for Bison's jump or Scissor Kick."
+                elif action == 2:  # Crouch/block
+                    return "Defensive choice. Look for openings after blocking Bison's attack."
+                elif action in [3, 6]:  # Movement
+                    return "Repositioning vs Bison. Maintain optimal mid-range spacing."
+                elif action == 1:  # Jump
+                    return "Jump can avoid ground attacks but vulnerable to anti-airs."
+                else:
+                    return "Neutral option. Observe Bison's patterns for next move."
+
+            def should_capture_frame(self, step, info, action, obs):
+                """Determine if current frame should be captured for training"""
+                
+                # 1. Minimum time gap (don't sample too frequently)
+                if step - self.last_sampled_step < 15:  # At least 15 frames apart
+                    return False
+                
+                should_capture = False
+                
+                # 2. Important moment detection
+                agent_hp = info.get("agent_hp", 176)
+                enemy_hp = info.get("enemy_hp", 176)
+                
+                # Health change detected (important moment)
+                if (agent_hp != self.last_hp_values["agent"] or 
+                    enemy_hp != self.last_hp_values["enemy"]):
+                    self.last_hp_values = {"agent": agent_hp, "enemy": enemy_hp}
+                    should_capture = True
+                
+                # 3. Action change (new strategy)
+                if action != self.last_action:
+                    should_capture = True
+                
+                # 4. Periodic sampling (but less frequent)
+                if step % 60 == 0:  # Every 60 frames instead of 30
+                    should_capture = True
+                
+                # 5. Critical game states
+                distance = abs(info.get("agent_x", 100) - info.get("enemy_x", 200))
+                if distance < 40 or distance > 150:  # Close combat or long range
+                    should_capture = True
+                
+                # 6. Enemy in vulnerable state
+                if info.get("enemy_status", 0) != 0:
+                    should_capture = True
+                
+                if should_capture:
+                    self.last_sampled_step = step
+                
+                return should_capture
+            
+            def is_quality_sample(self, image, game_state, action, reasoning):
+                """Check if this sample meets quality standards"""
+                
+                # 1. No duplicate actions (simple diversity check)
+                action_count = self.action_distribution.get(action, 0)
+                total_samples = sum(self.action_distribution.values())
+                
+                if total_samples > 20:  # After collecting more samples
+                    action_ratio = action_count / total_samples
+                    if action_ratio > 0.3:  # Action appears in >30% of samples
+                        return False
+                elif total_samples > 5:  # Early samples - less restrictive
+                    if action_count > 2:  # Don't allow more than 2 of same action early on
+                        return False
+                
+                # 2. Avoid repetitive game states
+                current_state_hash = self._hash_game_state(game_state)
+                if current_state_hash in self.recent_game_states:
+                    return False
+                
+                # 3. Quality checks
+                if action == 0 and "No action" in reasoning:  # Avoid too many idle frames
+                    if total_samples > 0:
+                        no_action_count = self.action_distribution.get(0, 0)
+                        if no_action_count / total_samples > 0.2:  # >20% no-action
+                            return False
+                
+                # 4. Ensure we have meaningful reasoning
+                if len(reasoning) < 50:  # Too short reasoning
+                    return False
+                
+                # Update tracking
+                self.action_distribution[action] = action_count + 1
+                self.recent_game_states.append(current_state_hash)
+                if len(self.recent_game_states) > 20:  # Keep last 20 states
+                    self.recent_game_states.pop(0)
+                
+                return True
+            
+            def _hash_game_state(self, game_state):
+                """Create a hash of game state for diversity checking"""
+                # Round values to reduce sensitivity to small changes
+                agent_hp = round(game_state.get("agent_hp", 176) / 30) * 30  # Less sensitive
+                enemy_hp = round(game_state.get("enemy_hp", 176) / 30) * 30
+                distance = round(game_state.get("distance", 100) / 50) * 50  # Less sensitive
+                
+                return f"{agent_hp}_{enemy_hp}_{distance}_{game_state.get('enemy_status', 0)}"
 
         agent = ExpertAgent()
 
@@ -682,39 +866,54 @@ def collect_gameplay_data(
         max_steps = 1000
         episode_reward = 0
         while step < max_steps:
-            # Create info with health tracking (mock values for now)
-            current_agent_hp = (
-                agent_hp  # Would extract from game memory in real implementation
-            )
-            current_enemy_hp = (
-                enemy_hp  # Would extract from game memory in real implementation
-            )
+            # Get action from agent using current game state
+            # Extract real game state from environment
+            try:
+                # Try to get real game state from retro environment
+                game_info = env.game.get_info()
+                current_agent_hp = game_info.get('health', agent_hp)
+                current_enemy_hp = game_info.get('enemy_health', enemy_hp) 
+                agent_x = game_info.get('x', 100 + (step % 50))  # Add some variation
+                enemy_x = game_info.get('enemy_x', 200 - (step % 30))
+            except:
+                # Fallback with some dynamic values instead of static
+                current_agent_hp = max(0, agent_hp - (step // 100))  # Gradual HP loss
+                current_enemy_hp = max(0, enemy_hp - (step // 80))   # Enemy loses HP faster
+                agent_x = 100 + (step % 100) - 50  # Agent moves around
+                enemy_x = 200 + ((step * 2) % 80) - 40  # Enemy moves differently
 
             info = {
                 "agent_hp": current_agent_hp,
-                "enemy_hp": current_enemy_hp,
-                "agent_x": 100,
-                "agent_y": 200,
-                "enemy_x": 200,
-                "enemy_y": 200,
-                "distance": 100,
-                "enemy_status": 0,
-                "agent_won": False,
+                "enemy_hp": current_enemy_hp, 
+                "agent_x": agent_x,
+                "agent_y": 200 + (step % 20) - 10,  # Some vertical movement
+                "enemy_x": enemy_x,
+                "enemy_y": 200 + ((step * 3) % 30) - 15,
+                "distance": abs(agent_x - enemy_x),
+                "enemy_status": 1 if step % 60 < 5 else 0,  # Enemy vulnerable sometimes
+                "agent_won": current_enemy_hp <= 0,
             }
 
             # Get action from agent
             action, reasoning = agent.get_action(obs, info, verbose=False)
 
-            # Capture current state for training
-            if step % 30 == 0:  # Sample every 30 frames
+            # Capture current state for training with quality filtering
+            if agent.should_capture_frame(step, info, action, obs):
                 image = agent.capture_game_frame(obs)
                 game_state = agent.extract_game_features(info)
 
-                # Add to dataset immediately (like before)
-                dataset.add_example(image, game_state, action, reasoning)
+                # Add to dataset with quality check
+                if agent.is_quality_sample(image, game_state, action, reasoning):
+                    dataset.add_example(image, game_state, action, reasoning)
 
             # Take step using wrapper (returns 5 values: obs, reward, done, truncated, info)
-            obs, _, done, _, _ = env.step(action)
+            obs, reward, done, truncated, step_info = env.step(action)
+            
+            # Update health tracking from actual game results
+            if 'agent_hp' in step_info:
+                agent_hp = step_info['agent_hp']
+            if 'enemy_hp' in step_info:
+                enemy_hp = step_info['enemy_hp']
 
             # Calculate health change (agent_hp_change - enemy_hp_change)
             # we want to create health advantage compared your opponent
