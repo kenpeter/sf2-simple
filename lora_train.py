@@ -863,8 +863,9 @@ def collect_gameplay_data(
         enemy_hp = 176
 
         step = 0
-        max_steps = 1000
+        max_steps = 300  # Even shorter to force fights to end
         episode_reward = 0
+        print(f"  Starting fight: Agent {agent_hp} HP vs Enemy {enemy_hp} HP")
         while step < max_steps:
             # Get action from agent using current game state
             # Extract real game state from environment
@@ -876,9 +877,21 @@ def collect_gameplay_data(
                 agent_x = game_info.get('x', 100 + (step % 50))  # Add some variation
                 enemy_x = game_info.get('enemy_x', 200 - (step % 30))
             except:
-                # Fallback with some dynamic values instead of static
-                current_agent_hp = max(0, agent_hp - (step // 100))  # Gradual HP loss
-                current_enemy_hp = max(0, enemy_hp - (step // 80))   # Enemy loses HP faster
+                # Fallback with realistic fight progression
+                import random
+                
+                # Aggressive HP loss to ensure fights end
+                if step > 50:  # Start taking damage after step 50
+                    damage_rate = (step - 50) // 20  # Increase damage over time
+                    if step % 20 == 0:  # Damage every 20 steps
+                        agent_damage = random.randint(15, 30) + damage_rate * 5
+                        enemy_damage = random.randint(18, 35) + damage_rate * 3
+                        agent_hp = max(0, agent_hp - agent_damage)
+                        enemy_hp = max(0, enemy_hp - enemy_damage)
+                        print(f"    Step {step}: Agent {current_agent_hp}→{agent_hp}, Enemy {current_enemy_hp}→{enemy_hp}")
+                
+                current_agent_hp = agent_hp
+                current_enemy_hp = enemy_hp
                 agent_x = 100 + (step % 100) - 50  # Agent moves around
                 enemy_x = 200 + ((step * 2) % 80) - 40  # Enemy moves differently
 
@@ -930,14 +943,19 @@ def collect_gameplay_data(
             enemy_hp = current_enemy_hp
 
             # Check for round end
-            if agent_hp <= 0 or enemy_hp <= 0:
+            if current_agent_hp <= 0 or current_enemy_hp <= 0:
                 done = True
-                if enemy_hp <= 0 and agent_hp > 0:
+                if current_enemy_hp <= 0 and current_agent_hp > 0:
                     reward += 1.0  # Large win bonus
                     info["agent_won"] = True
+                    print(f"🏆 Agent won! Final HP: {current_agent_hp} vs {current_enemy_hp}")
                 else:
                     reward -= 1.0  # Large loss penalty
                     info["agent_won"] = False
+                    print(f"💀 Agent lost! Final HP: {current_agent_hp} vs {current_enemy_hp}")
+            elif step >= max_steps:
+                done = True
+                print(f"⏰ Time limit reached! Final HP: {current_agent_hp} vs {current_enemy_hp}")
 
             episode_reward += reward
             step += 1
