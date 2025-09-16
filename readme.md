@@ -108,38 +108,17 @@ TIMING SYSTEM:
 
 
 
- # Data Collection:
-  # Initial collection
-  python lora_train.py --collect-data --episodes 1 --no-train
+  # Start online training (learns while playing)
+  python lora_train.py --episodes 10 --update-frequency 10
 
-  # Append more data  
-  python lora_train.py --collect-data --episodes 20 --append-data --no-train
+  # Play with the base model
+  python play.py --episodes 3
 
-  # Training:
-  # Fresh training
-  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 1 --batch-size 1
+  # Online training with custom parameters
+  python lora_train.py --episodes 20 --learning-rate 1e-5 --render
 
-  # With checkpoints (every 100 steps)
-  python lora_train.py --data-path ./data/sf2_training_data.json --epochs 3 --save-steps 100
-
-  # Resume training from checkpoint
-  python lora_train.py --resume-from ./sf2_lora_model/checkpoint-6 --epochs 1 --batch-size 1
-
-  # Inference:
-  # Base model only
-  python play.py --episodes 1 --no-render --quiet
-
-  # With latest checkpoint (final model)
-  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora ./sf2_lora_model
-
-  # With specific checkpoint
-  python play.py --episodes 1 --model /home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ --lora
-  ./sf2_lora_model/checkpoint-6
-
-  Now you can delete the sf2_lora_inference directory since it's no longer needed! 🗑️
 
   
-
 
 
      ================================================================================

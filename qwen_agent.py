@@ -51,7 +51,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         """
         # Initialize Qwen model
         print(
-            f"🤖 Loading Qwen 72B AWQ model from: {model_path}"
+            f"🤖 Loading Qwen XB AWQ model from: {model_path}"
         )  # Print model loading status
 
         # device cuda
@@ -90,12 +90,13 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             local_files_only=True,
             trust_remote_code=True,  # Trust remote code for AWQ models
         )
-        
+
         # Load LoRA adapter if provided
         if lora_path:
             import os
+
             print(f"🎯 Loading LoRA adapter from: {lora_path}")
-            
+
             # Check if it's a checkpoint directory or final model directory
             if os.path.exists(os.path.join(lora_path, "adapter_config.json")):
                 print(f"📁 Detected LoRA adapter directory")
@@ -105,7 +106,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 print(f"❌ No adapter_config.json found in {lora_path}")
                 print("💡 Make sure the path contains LoRA adapter files")
         print(
-            f"✅ Qwen 72B AWQ model loaded successfully on {self.device}"
+            f"✅ Qwen XB AWQ model loaded successfully on {self.device}"
         )  # Print successful loading message
 
         #
@@ -700,8 +701,6 @@ Choose action (0-43):"""
 
 
 # Demo functions removed - use play.py for gameplay
-
-
 
 
 # qwen_agent.py is now an isolated agent class only

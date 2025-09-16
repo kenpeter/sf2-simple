@@ -81,7 +81,6 @@ def play_street_fighter(
     episodes: int = 3,
     render: bool = True,
     verbose: bool = True,
-    lora_path: str = None,
 ):
     """
     Play Street Fighter 2 with Qwen agent
@@ -91,12 +90,9 @@ def play_street_fighter(
         episodes: Number of episodes to play
         render: Whether to render the game
         verbose: Whether to print detailed reasoning
-        lora_path: Path to LoRA adapter (optional)
     """
     print("🥊 Starting Street Fighter 2 Gameplay")
     print(f"Model: {model_path}")
-    if lora_path:
-        print(f"LoRA: {lora_path}")
     print(f"Episodes: {episodes}")
     print("-" * 50)
 
@@ -104,7 +100,7 @@ def play_street_fighter(
     env = StreetFighter()
     
     # Create agent
-    agent = QwenStreetFighterAgent(model_path, lora_path)
+    agent = QwenStreetFighterAgent(model_path)
 
     total_rewards = []
     wins = 0
@@ -179,12 +175,6 @@ def main():
         help="Qwen2.5-VL model path",
     )
     parser.add_argument(
-        "--lora",
-        type=str,
-        default=None,
-        help="Path to LoRA adapter (e.g., ./sf2_lora_inference)",
-    )
-    parser.add_argument(
         "--episodes",
         type=int,
         default=3,
@@ -208,7 +198,6 @@ def main():
         episodes=args.episodes,
         render=not args.no_render,
         verbose=not args.quiet,
-        lora_path=args.lora,
     )
 
 
