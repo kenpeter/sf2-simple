@@ -22,6 +22,7 @@ import random
 from collections import deque
 import threading
 import time
+import glob
 
 # Import game environment
 import retro
@@ -30,6 +31,82 @@ from gymnasium import spaces
 import cv2
 from discretizer import StreetFighter2Discretizer
 from qwen_agent import QwenStreetFighterAgent
+
+
+def find_latest_checkpoint(output_dir: str = "./sf2_online_lora") -> str:
+    """Find the latest checkpoint in the output directory"""
+    if not os.path.exists(output_dir):
+        return None
+    
+    # Find all checkpoint directories
+    checkpoint_pattern = os.path.join(output_dir, "checkpoint_*")
+    checkpoints = glob.glob(checkpoint_pattern)
+    
+    if not checkpoints:
+        return None
+    
+    # Extract checkpoint numbers and find the latest
+    checkpoint_nums = []
+    for cp in checkpoints:
+        try:
+            num = int(os.path.basename(cp).split('_')[1])
+            checkpoint_nums.append((num, cp))
+        except (IndexError, ValueError):
+            continue
+    
+    if not checkpoint_nums:
+        return None
+    
+    # Return the checkpoint with highest number
+    latest_checkpoint = max(checkpoint_nums, key=lambda x: x[0])[1]
+    return latest_checkpoint
+
+
+def list_checkpoints(output_dir: str = "./sf2_online_lora"):
+    """List all available checkpoints"""
+    if not os.path.exists(output_dir):
+        print(f"❌ Directory {output_dir} does not exist")
+        return
+    
+    checkpoint_pattern = os.path.join(output_dir, "checkpoint_*")
+    checkpoints = glob.glob(checkpoint_pattern)
+    
+    if not checkpoints:
+        print(f"📁 No checkpoints found in {output_dir}")
+        return
+    
+    print(f"📁 Available checkpoints in {output_dir}:")
+    
+    checkpoint_info = []
+    for cp in checkpoints:
+        try:
+            num = int(os.path.basename(cp).split('_')[1])
+            
+            # Try to load training state
+            state_file = os.path.join(cp, "training_state.json")
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+                loss = state.get('avg_recent_loss', 'N/A')
+                lr = state.get('learning_rate', 'N/A')
+                info = f"(Loss: {loss:.4f}, LR: {lr})" if loss != 'N/A' else ""
+            else:
+                info = "(No training state)"
+            
+            checkpoint_info.append((num, cp, info))
+        except (IndexError, ValueError):
+            continue
+    
+    # Sort by checkpoint number
+    checkpoint_info.sort(key=lambda x: x[0])
+    
+    for num, cp, info in checkpoint_info:
+        print(f"  • checkpoint_{num}: {cp} {info}")
+    
+    if checkpoint_info:
+        latest_num = max(checkpoint_info, key=lambda x: x[0])[0]
+        print(f"\n💡 Latest checkpoint: checkpoint_{latest_num}")
+        print(f"💡 To resume: --resume-from ./sf2_online_lora/checkpoint_{latest_num}")
 
 
 class OnlineExperienceBuffer:
@@ -80,6 +157,7 @@ class OnlineLoRATrainer:
         lora_dropout: float = 0.1,
         experience_buffer_size: int = 100,  # Reduced buffer size
         learning_rate: float = 5e-5,
+        resume_from: str = None,  # Path to checkpoint to resume from
     ):
         self.model_path = model_path
         self.output_dir = output_dir
@@ -123,15 +201,41 @@ class OnlineLoRATrainer:
             ],
         )
         
-        # Apply LoRA
-        self.model = get_peft_model(self.model, lora_config)
-        print(f"✅ Online LoRA applied with rank {lora_rank}, alpha {lora_alpha}")
+        # Apply LoRA or load from checkpoint
+        if resume_from and os.path.exists(resume_from):
+            print(f"🔄 Resuming from checkpoint: {resume_from}")
+            # Load the LoRA adapter from checkpoint
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(self.model, resume_from)
+            print("✅ LoRA checkpoint loaded successfully")
+            
+            # Enable training mode and ensure gradients are enabled
+            self.model.train()
+            for param in self.model.parameters():
+                if param.requires_grad:
+                    param.requires_grad = True
+            
+            # Try to load training state
+            state_file = os.path.join(resume_from, "training_state.json")
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    training_state = json.load(f)
+                self.total_updates = training_state.get('total_updates', 0)
+                print(f"📊 Resuming from update #{self.total_updates}")
+            else:
+                self.total_updates = 0
+                print("⚠️ No training state found, starting update count from 0")
+        else:
+            # Apply fresh LoRA
+            self.model = get_peft_model(self.model, lora_config)
+            print(f"✅ Online LoRA applied with rank {lora_rank}, alpha {lora_alpha}")
+            self.total_updates = 0
+        
         self.model.print_trainable_parameters()
         
         # Training state
         self.training_active = False
         self.training_thread = None
-        self.total_updates = 0
         
         # Initialize optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
@@ -314,11 +418,27 @@ Return action number (0-43):"""
             return None
     
     def save_model(self):
-        """Save the current model state"""
+        """Save the current model state with training information"""
         save_path = os.path.join(self.output_dir, f"checkpoint_{self.total_updates}")
         os.makedirs(save_path, exist_ok=True)
+        
+        # Save the LoRA adapter
         self.model.save_pretrained(save_path)
-        print(f"💾 Model saved to {save_path}")
+        
+        # Save training state
+        training_state = {
+            'total_updates': self.total_updates,
+            'avg_recent_loss': np.mean(self.update_losses[-10:]) if self.update_losses else 0.0,
+            'buffer_size': len(self.experience_buffer),
+            'learning_rate': self.learning_rate,
+        }
+        
+        state_file = os.path.join(save_path, "training_state.json")
+        with open(state_file, 'w') as f:
+            json.dump(training_state, f, indent=2)
+        
+        print(f"💾 Model and training state saved to {save_path}")
+        return save_path
     
     def get_training_stats(self) -> Dict:
         """Get current training statistics"""
@@ -413,11 +533,14 @@ def run_online_training(
     update_frequency: int = 30,  # Less frequent updates
     save_frequency: int = 100,   # Less frequent saves
     render: bool = False,
+    resume_from: str = None,     # Resume from checkpoint
 ):
     """Run online training with real-time learning"""
     
     print("🎮 Starting Online LoRA Training")
     print(f"Model: {model_path}")
+    if resume_from:
+        print(f"🔄 Resuming from: {resume_from}")
     print(f"Episodes: {episodes}")
     print(f"Learning Rate: {learning_rate}")
     print("-" * 50)
@@ -426,6 +549,7 @@ def run_online_training(
     trainer = OnlineLoRATrainer(
         model_path=model_path,
         learning_rate=learning_rate,
+        resume_from=resume_from,
     )
     
     # Initialize environment
@@ -595,8 +719,38 @@ def main():
         action="store_true",
         help="Render the game during training"
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint directory (e.g., ./sf2_online_lora/checkpoint_40)"
+    )
+    parser.add_argument(
+        "--auto-resume",
+        action="store_true",
+        help="Automatically resume from the latest checkpoint"
+    )
+    parser.add_argument(
+        "--list-checkpoints",
+        action="store_true",
+        help="List all available checkpoints and exit"
+    )
     
     args = parser.parse_args()
+    
+    # Handle special commands
+    if args.list_checkpoints:
+        list_checkpoints()
+        return
+    
+    # Handle auto-resume
+    resume_from = args.resume_from
+    if args.auto_resume and not resume_from:
+        resume_from = find_latest_checkpoint()
+        if resume_from:
+            print(f"🔄 Auto-resuming from latest checkpoint: {resume_from}")
+        else:
+            print("⚠️ No checkpoints found for auto-resume, starting fresh training")
     
     run_online_training(
         model_path=args.model,
@@ -605,6 +759,7 @@ def main():
         update_frequency=args.update_frequency,
         save_frequency=args.save_frequency,
         render=args.render,
+        resume_from=resume_from,
     )
 
 
