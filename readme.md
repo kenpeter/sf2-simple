@@ -107,18 +107,16 @@ TIMING SYSTEM:
 ```
 
 
+  # Fresh training (recommended)
+  python lora_train.py --episodes 2 --update-frequency 25
 
-  # Start online training (learns while playing)
-  python lora_train.py --episodes 10 --update-frequency 10
+  # Monitor progress
+  python lora_train.py --list-checkpoints
 
-  # Play with the base model
-  python play.py --episodes 3
-
-  # Online training with custom parameters
-  python lora_train.py --episodes 20 --learning-rate 1e-5 --render
+  # Extended training
+  python lora_train.py --episodes 5 --update-frequency 20 --learning-rate 5e-6
 
 
-  
 
 
      ================================================================================
