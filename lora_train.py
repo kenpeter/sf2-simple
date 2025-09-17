@@ -53,7 +53,7 @@ def find_latest_checkpoint(output_dir: str = "./sf2_online_lora") -> str:
                 episode_nums.append((num, ep))
             except (IndexError, ValueError):
                 continue
-        
+
         if episode_nums:
             # Return the episode with highest number
             latest_episode = max(episode_nums, key=lambda x: x[0])[1]
@@ -68,7 +68,7 @@ def find_latest_checkpoint(output_dir: str = "./sf2_online_lora") -> str:
                 checkpoint_nums.append((num, cp))
             except (IndexError, ValueError):
                 continue
-        
+
         if checkpoint_nums:
             latest_checkpoint = max(checkpoint_nums, key=lambda x: x[0])[1]
             return latest_checkpoint
@@ -97,12 +97,12 @@ def list_checkpoints(output_dir: str = "./sf2_online_lora"):
     print(f"📁 Available checkpoints in {output_dir}:")
 
     checkpoint_info = []
-    
+
     # Process episode checkpoints
     for ep in episodes:
         try:
             num = int(os.path.basename(ep).split("_")[1])
-            
+
             # Try to load training state
             state_file = os.path.join(ep, "training_state.json")
             if os.path.exists(state_file):
@@ -110,7 +110,9 @@ def list_checkpoints(output_dir: str = "./sf2_online_lora"):
                     state = json.load(f)
                 loss = state.get("avg_recent_loss", "N/A")
                 updates = state.get("total_updates", "N/A")
-                info = f"(Loss: {loss:.4f}, Updates: {updates})" if loss != "N/A" else ""
+                info = (
+                    f"(Loss: {loss:.4f}, Updates: {updates})" if loss != "N/A" else ""
+                )
             else:
                 info = "(No training state)"
 
@@ -118,7 +120,7 @@ def list_checkpoints(output_dir: str = "./sf2_online_lora"):
         except (IndexError, ValueError):
             continue
 
-    # Process old checkpoint format  
+    # Process old checkpoint format
     for cp in checkpoints:
         try:
             num = int(os.path.basename(cp).split("_")[1])
@@ -206,7 +208,7 @@ class OnlineLoRATrainer:
 
     def __init__(
         self,
-        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
+        model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
         output_dir: str = "./sf2_online_lora",
         lora_rank: int = 4,  # Reduced for memory efficiency
         lora_alpha: int = 8,  # Reduced for memory efficiency
@@ -516,8 +518,10 @@ Return action number (0-43):"""
         if episode_num is not None:
             save_path = os.path.join(self.output_dir, f"episode_{episode_num}")
         else:
-            save_path = os.path.join(self.output_dir, f"checkpoint_{self.total_updates}")
-        
+            save_path = os.path.join(
+                self.output_dir, f"checkpoint_{self.total_updates}"
+            )
+
         os.makedirs(save_path, exist_ok=True)
 
         # Save the LoRA adapter
@@ -555,24 +559,39 @@ Return action number (0-43):"""
         }
 
 
+# the game env
 class OnlineStreetFighterEnv(gym.Env):
     """Street Fighter environment for online learning"""
 
+    # init
     def __init__(self):
+        # super init
         super().__init__()
+        # retro make game
+        # retro load state
+        # retro strict action
         game = retro.make(
             "StreetFighterIISpecialChampionEdition-Genesis",
             state="ken_bison_12.state",
             use_restricted_actions=retro.Actions.FILTERED,
         )
+
+        # combo
         self.game = StreetFighter2Discretizer(game)
+
+        # obs space box
         self.observation_space = spaces.Box(
             low=0, high=255, shape=(224, 320, 3), dtype=np.uint8
         )
+
+        # action space
         self.action_space = self.game.action_space
+
+        # hp
         self.agent_hp = 176
         self.enemy_hp = 176
 
+    # raw game frame
     def get_raw_frame(self):
         """Get raw RGB frame for vision model"""
         try:
@@ -814,7 +833,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct-AWQ",
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
         help="Base model path",
     )
     parser.add_argument(
