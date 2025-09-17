@@ -210,8 +210,8 @@ class OnlineLoRATrainer:
         self,
         model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
         output_dir: str = "./sf2_online_lora",
-        lora_rank: int = 4,  # Reduced for memory efficiency
-        lora_alpha: int = 8,  # Reduced for memory efficiency
+        lora_rank: int = 16,  # Higher rank for better learning capacity
+        lora_alpha: int = 32,  # Higher alpha for stronger adaptation
         lora_dropout: float = 0.1,
         experience_buffer_size: int = 100,  # Reduced buffer size
         learning_rate: float = 5e-5,
