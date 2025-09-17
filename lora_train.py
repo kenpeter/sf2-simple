@@ -275,18 +275,18 @@ class OnlineLoRATrainer:
 
             # Enable training mode and ensure gradients are enabled
             self.model.train()
-            
+
             # Re-enable LoRA adapters specifically
-            if hasattr(self.model, 'enable_adapters'):
+            if hasattr(self.model, "enable_adapters"):
                 try:
                     self.model.enable_adapters()
                 except ValueError:
                     # Adapter already enabled, continue
                     pass
-            
+
             # Ensure gradients are enabled for LoRA parameters
             for name, param in self.model.named_parameters():
-                if 'lora_' in name.lower() or 'adapter' in name.lower():
+                if "lora_" in name.lower() or "adapter" in name.lower():
                     param.requires_grad = True
 
             # Try to load training state
@@ -317,19 +317,19 @@ class OnlineLoRATrainer:
         # Performance tracking
         self.episode_rewards = []
         self.update_losses = []
-        
+
         # Action tracking for diversity
         self.recent_actions = []
         self.action_counts = {}  # Track action frequency
 
     def create_training_prompt(self, game_state: Dict) -> str:
         """Create training prompt from game state with action diversity tracking"""
-        
+
         # Get recent actions for diversity tracking only
         recent_actions_str = ""
         if len(self.recent_actions) > 0:
             recent_actions_str = f"\nRecent actions used: {self.recent_actions[-5:]}"
-        
+
         prompt = f"""Street Fighter 2 Game State:
 
 Current Situation:
@@ -346,13 +346,13 @@ Choose optimal action (0-43):"""
 
     def process_experience_for_training(self, experience: Dict) -> Dict:
         """Convert experience to training format"""
-        
+
         # Track recent actions for diversity
         action = experience["action"]
         self.recent_actions.append(action)
         if len(self.recent_actions) > 10:  # Keep last 10 actions
             self.recent_actions = self.recent_actions[-10:]
-            
+
         # Create prompt
         prompt = self.create_training_prompt(experience["game_state"])
 
@@ -370,7 +370,7 @@ Choose optimal action (0-43):"""
 
         # TEXT-ONLY training to avoid image token issues
         response_text = str(experience["action"])
-        
+
         # Create detailed text description instead of using image
         game_state = experience["game_state"]
         text_description = f"""Street Fighter 2 Game State:
@@ -381,7 +381,7 @@ Choose optimal action (0-43):"""
 - Enemy Position: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)})
 
 Optimal action: {response_text}"""
-        
+
         inputs = self.processor(
             text=text_description,
             return_tensors="pt",
@@ -648,9 +648,16 @@ class OnlineStreetFighterEnv(gym.Env):
             current_enemy_hp - self.enemy_hp
         )
         reward = delta_hp_diff / 176.0 - 0.0001
-        
+
         # Bonus for special moves (non-rule based, just incentive)
-        special_moves = [38, 39, 40, 41, 42, 43]  # Hadoken, Dragon Punch, Hurricane Kick
+        special_moves = [
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+        ]  # Hadoken, Dragon Punch, Hurricane Kick
         if action in special_moves:
             reward += 0.01  # Significant bonus for trying special moves
 
@@ -729,20 +736,13 @@ def run_online_training(
             self.action_cooldown = 0
 
         def get_action(self, obs, info, verbose=False):
+            # frame counter
             self.frame_counter += 1
-            
-            # Add exploration to break out of Action 2 loop
-            import random
-            if random.random() < 0.3:  # 30% exploration
-                # Try diverse actions, not just Action 2
-                action_pool = [0, 1, 3, 6, 9, 13, 17, 21, 26, 32, 38, 39, 40, 41, 42, 43]
-                action = random.choice(action_pool)
-                return action, f"Exploration: {action}"
-            
+
             # Use the actual trained LoRA model for inference
             game_state = info.copy()
-            
-            # Create text description for the model
+
+            # Create text description for the model with exploration encouragement
             text_description = f"""Street Fighter 2 Game State:
 - Agent HP: {game_state.get('agent_hp', 176)}
 - Enemy HP: {game_state.get('enemy_hp', 176)}
@@ -750,8 +750,8 @@ def run_online_training(
 - Agent Position: ({game_state.get('agent_x', 0)}, {game_state.get('agent_y', 0)})
 - Enemy Position: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)})
 
-Choose optimal action (0-43):"""
-            
+Explore different fighting strategies! Choose optimal action (0-43):"""
+
             try:
                 # Use the trained model for inference
                 inputs = self.trainer.processor(
@@ -761,33 +761,39 @@ Choose optimal action (0-43):"""
                     truncation=True,
                     max_length=256,
                 )
-                
+
                 # Move to device
                 inputs = {k: v.to("cuda") for k, v in inputs.items()}
-                
-                # Generate action with trained model
+
+                # Generate action with natural exploration via sampling
                 with torch.no_grad():
                     outputs = self.trainer.model.generate(
                         **inputs,
                         max_new_tokens=10,
-                        do_sample=False,
+                        do_sample=True,          # Enable sampling for exploration
+                        temperature=0.8,         # Add controlled randomness
+                        top_p=0.9,              # Nucleus sampling
+                        top_k=20,               # Consider top 20 tokens
                         pad_token_id=self.trainer.processor.tokenizer.pad_token_id,
                     )
-                
+
                 # Decode response
-                response = self.trainer.processor.decode(outputs[0], skip_special_tokens=True)
-                
+                response = self.trainer.processor.decode(
+                    outputs[0], skip_special_tokens=True
+                )
+
                 # Extract action number from response
                 import re
-                numbers = re.findall(r'\b(\d+)\b', response)
+
+                numbers = re.findall(r"\b(\d+)\b", response)
                 for num_str in numbers:
                     num = int(num_str)
                     if 0 <= num <= 43:
                         return num, f"LoRA model chose: {num}"
-                        
+
                 # Fallback if no valid action found
                 return 0, "LoRA fallback: NO_ACTION"
-                
+
             except Exception as e:
                 # Simple fallback for errors
                 return 0, f"Error: {e}"
