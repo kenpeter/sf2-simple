@@ -320,6 +320,7 @@ class OnlineLoRATrainer:
         
         # Action tracking for diversity
         self.recent_actions = []
+        self.action_counts = {}  # Track action frequency
 
     def create_training_prompt(self, game_state: Dict) -> str:
         """Create training prompt from game state with action diversity tracking"""
@@ -642,11 +643,16 @@ class OnlineStreetFighterEnv(gym.Env):
         current_agent_hp = info.get("agent_hp", self.agent_hp)
         current_enemy_hp = info.get("enemy_hp", self.enemy_hp)
 
-        # Calculate reward based on HP changes only (keep it simple)
+        # HP-based reward with special move encouragement
         delta_hp_diff = (current_agent_hp - self.agent_hp) - (
             current_enemy_hp - self.enemy_hp
         )
-        reward = delta_hp_diff / 176.0 - 0.0001  # Keep original reward
+        reward = delta_hp_diff / 176.0 - 0.0001
+        
+        # Bonus for special moves (non-rule based, just incentive)
+        special_moves = [38, 39, 40, 41, 42, 43]  # Hadoken, Dragon Punch, Hurricane Kick
+        if action in special_moves:
+            reward += 0.01  # Significant bonus for trying special moves
 
         self.agent_hp = current_agent_hp
         self.enemy_hp = current_enemy_hp
@@ -724,6 +730,14 @@ def run_online_training(
 
         def get_action(self, obs, info, verbose=False):
             self.frame_counter += 1
+            
+            # Add exploration to break out of Action 2 loop
+            import random
+            if random.random() < 0.3:  # 30% exploration
+                # Try diverse actions, not just Action 2
+                action_pool = [0, 1, 3, 6, 9, 13, 17, 21, 26, 32, 38, 39, 40, 41, 42, 43]
+                action = random.choice(action_pool)
+                return action, f"Exploration: {action}"
             
             # Use the actual trained LoRA model for inference
             game_state = info.copy()
