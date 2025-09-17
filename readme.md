@@ -107,14 +107,32 @@ TIMING SYSTEM:
 ```
 
 
-  # Fresh training (recommended)
-  python lora_train.py --episodes 2 --update-frequency 25
 
-  # Monitor progress
+
+
+
+  # Auto-resume from latest checkpoint
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python lora_train.py --episodes 100 --auto-resume --update-frequency 50
+  --save-frequency 10
+
+  Other Resume Options:
+
+  # Resume from specific checkpoint
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python lora_train.py --episodes 100 --resume-from ./sf2_online_lora/episode_10 --update-frequency 50 --save-frequency 10
+
+  # List all available checkpoints first
   python lora_train.py --list-checkpoints
 
-  # Extended training
-  python lora_train.py --episodes 5 --update-frequency 20 --learning-rate 5e-6
+  # Resume with different settings
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python lora_train.py --episodes 50 --auto-resume --update-frequency 25
+  --save-frequency 5
+
+  Current Checkpoints Available:
+
+  - ./sf2_online_lora/episode_1
+  - ./sf2_online_lora/episode_10
+
+
 
 
 

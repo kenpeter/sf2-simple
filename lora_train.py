@@ -626,11 +626,11 @@ class OnlineStreetFighterEnv(gym.Env):
         current_agent_hp = info.get("agent_hp", self.agent_hp)
         current_enemy_hp = info.get("enemy_hp", self.enemy_hp)
 
-        # Calculate reward based on HP changes
+        # Calculate reward based on HP changes only (keep it simple)
         delta_hp_diff = (current_agent_hp - self.agent_hp) - (
             current_enemy_hp - self.enemy_hp
         )
-        reward = delta_hp_diff / 176.0 - 0.0001
+        reward = delta_hp_diff / 176.0 - 0.0001  # Keep original reward
 
         self.agent_hp = current_agent_hp
         self.enemy_hp = current_enemy_hp
@@ -708,26 +708,59 @@ def run_online_training(
 
         def get_action(self, obs, info, verbose=False):
             self.frame_counter += 1
-            if self.action_cooldown > 0:
-                self.action_cooldown -= 1
-                return 0, "Cooldown"  # NO_ACTION during cooldown
+            
+            # Use the actual trained LoRA model for inference
+            game_state = info.copy()
+            
+            # Create text description for the model
+            text_description = f"""Street Fighter 2 Game State:
+- Agent HP: {game_state.get('agent_hp', 176)}
+- Enemy HP: {game_state.get('enemy_hp', 176)}
+- Distance: {abs(game_state.get('agent_x', 0) - game_state.get('enemy_x', 0))}px
+- Agent Position: ({game_state.get('agent_x', 0)}, {game_state.get('agent_y', 0)})
+- Enemy Position: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)})
 
-            # Simple rule-based action for memory efficiency
-            distance = info.get("distance", 100)
-            hp_diff = info.get("agent_hp", 176) - info.get("enemy_hp", 176)
-
-            if distance < 60:
-                action = 9 if hp_diff > 0 else 2  # Punch if winning, crouch if losing
-            elif distance < 120:
-                action = (
-                    21 if self.frame_counter % 20 < 10 else 6
-                )  # Kick or move forward
-            else:
-                action = 38 if distance > 150 else 6  # Hadoken or move forward
-
-            self.last_action = action
-            self.action_cooldown = 10  # Add cooldown
-            return action, f"Rule-based action {action}"
+Choose optimal action (0-43):"""
+            
+            try:
+                # Use the trained model for inference
+                inputs = self.trainer.processor(
+                    text=text_description,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=256,
+                )
+                
+                # Move to device
+                inputs = {k: v.to("cuda") for k, v in inputs.items()}
+                
+                # Generate action with trained model
+                with torch.no_grad():
+                    outputs = self.trainer.model.generate(
+                        **inputs,
+                        max_new_tokens=10,
+                        do_sample=False,
+                        pad_token_id=self.trainer.processor.tokenizer.pad_token_id,
+                    )
+                
+                # Decode response
+                response = self.trainer.processor.decode(outputs[0], skip_special_tokens=True)
+                
+                # Extract action number from response
+                import re
+                numbers = re.findall(r'\b(\d+)\b', response)
+                for num_str in numbers:
+                    num = int(num_str)
+                    if 0 <= num <= 43:
+                        return num, f"LoRA model chose: {num}"
+                        
+                # Fallback if no valid action found
+                return 0, "LoRA fallback: NO_ACTION"
+                
+            except Exception as e:
+                # Simple fallback for errors
+                return 0, f"Error: {e}"
 
         def reset(self):
             self.frame_counter = 0
