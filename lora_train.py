@@ -743,7 +743,7 @@ def run_online_training(
             game_state = info.copy()
 
             # Create text description for the model with exploration encouragement
-            text_description = f"""Street Fighter 2 Game State:
+            text_description = f"""Fighting Game State:
 - Agent HP: {game_state.get('agent_hp', 176)}
 - Enemy HP: {game_state.get('enemy_hp', 176)}
 - Distance: {abs(game_state.get('agent_x', 0) - game_state.get('enemy_x', 0))}px
@@ -782,17 +782,38 @@ Explore different fighting strategies! Choose optimal action (0-43):"""
                     outputs[0], skip_special_tokens=True
                 )
 
-                # Extract action number from response
+                # Extract action number from response using sophisticated parsing
                 import re
 
+                # Look for standalone numbers first (most direct answer)
+                standalone_number = re.search(r"^\s*(\d+)\s*$", response, re.MULTILINE)
+                if standalone_number:
+                    action = int(standalone_number.group(1))
+                    if 0 <= action <= 43:
+                        return action, f"LoRA standalone: {action}"
+
+                # Look for "Action: X" or "Action X" pattern
+                action_match = re.search(
+                    r"(?:Action:?\s*|^)(\d+)", response, re.IGNORECASE | re.MULTILINE
+                )
+                if action_match:
+                    action = int(action_match.group(1))
+                    if 0 <= action <= 43:
+                        return action, f"LoRA action pattern: {action}"
+
+                # Look for numbers but filter out context-specific ones
                 numbers = re.findall(r"\b(\d+)\b", response)
                 for num_str in numbers:
                     num = int(num_str)
+                    # Skip numbers likely from "Street Fighter 2" or other context
+                    if num == 2 and "Fighter 2" in response:
+                        continue
                     if 0 <= num <= 43:
-                        return num, f"LoRA model chose: {num}"
+                        return num, f"LoRA filtered: {num}"
 
-                # Fallback if no valid action found
-                return 0, "LoRA fallback: NO_ACTION"
+                # Enhanced fallback with random exploration
+                fallback_action = random.randint(0, 43)
+                return fallback_action, f"LoRA random fallback: {fallback_action}"
 
             except Exception as e:
                 # Simple fallback for errors
@@ -828,6 +849,10 @@ Explore different fighting strategies! Choose optimal action (0-43):"""
 
             # Get action from agent
             action, reasoning = agent.get_action(obs, info, verbose=False)
+            
+            # Log reasoning for debugging (only occasionally to avoid spam)
+            if total_steps % 100 == 0:
+                print(f"    Reasoning: {reasoning}")
 
             # Take step in environment
             obs, reward, done, truncated, next_info = env.step(action)
