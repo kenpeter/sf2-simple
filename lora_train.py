@@ -275,8 +275,18 @@ class OnlineLoRATrainer:
 
             # Enable training mode and ensure gradients are enabled
             self.model.train()
-            for param in self.model.parameters():
-                if param.requires_grad:
+            
+            # Re-enable LoRA adapters specifically
+            if hasattr(self.model, 'enable_adapters'):
+                try:
+                    self.model.enable_adapters()
+                except ValueError:
+                    # Adapter already enabled, continue
+                    pass
+            
+            # Ensure gradients are enabled for LoRA parameters
+            for name, param in self.model.named_parameters():
+                if 'lora_' in name.lower() or 'adapter' in name.lower():
                     param.requires_grad = True
 
             # Try to load training state
@@ -341,23 +351,26 @@ Return action number (0-43):"""
             {"role": "assistant", "content": str(experience["action"])},
         ]
 
-        # Apply chat template
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
+        # TEXT-ONLY training to avoid image token issues
+        response_text = str(experience["action"])
+        
+        # Create detailed text description instead of using image
+        game_state = experience["game_state"]
+        text_description = f"""Street Fighter 2 Game State:
+- Agent HP: {game_state.get('agent_hp', 176)}
+- Enemy HP: {game_state.get('enemy_hp', 176)}
+- Distance: {abs(game_state.get('agent_x', 0) - game_state.get('enemy_x', 0))}px
+- Agent Position: ({game_state.get('agent_x', 0)}, {game_state.get('agent_y', 0)})
+- Enemy Position: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)})
 
-        # Process inputs
-        image = experience["image"]
-        if hasattr(image, "convert"):
-            image = image.convert("RGB")
-
+Optimal action: {response_text}"""
+        
         inputs = self.processor(
-            text=[text],
-            images=[image],
+            text=text_description,
             return_tensors="pt",
-            padding="max_length",  # Force consistent length
+            padding="max_length",
             truncation=True,
-            max_length=256,  # Reduced for memory efficiency
+            max_length=256,
         )
 
         return {
