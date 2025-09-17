@@ -112,7 +112,7 @@ TIMING SYSTEM:
 
 
   # Auto-resume from latest checkpoint
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python lora_train.py --episodes 100 --auto-resume --update-frequency 50
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python lora_train.py --episodes 10 --auto-resume --update-frequency 50
   --save-frequency 10
 
   Other Resume Options:

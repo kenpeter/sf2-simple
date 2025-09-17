@@ -317,25 +317,41 @@ class OnlineLoRATrainer:
         # Performance tracking
         self.episode_rewards = []
         self.update_losses = []
+        
+        # Action tracking for diversity
+        self.recent_actions = []
 
     def create_training_prompt(self, game_state: Dict) -> str:
-        """Create training prompt from game state"""
-        prompt = f"""STREET FIGHTER 2 ONLINE TRAINING
+        """Create training prompt from game state with action diversity tracking"""
+        
+        # Get recent actions for diversity tracking only
+        recent_actions_str = ""
+        if len(self.recent_actions) > 0:
+            recent_actions_str = f"\nRecent actions used: {self.recent_actions[-5:]}"
+        
+        prompt = f"""Street Fighter 2 Game State:
 
-GAME STATE:
-- My HP: {game_state.get('agent_hp', 176)} | Enemy HP: {game_state.get('enemy_hp', 176)}
+Current Situation:
+- Agent HP: {game_state.get('agent_hp', 176)}
+- Enemy HP: {game_state.get('enemy_hp', 176)}
 - Distance: {game_state.get('distance', 100)}px
-- Position: ({game_state.get('agent_x', 0)}, {game_state.get('agent_y', 0)})
-- Enemy: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)})
+- Agent Position: ({game_state.get('agent_x', 0)}, {game_state.get('agent_y', 0)})
+- Enemy Position: ({game_state.get('enemy_x', 0)}, {game_state.get('enemy_y', 0)}){recent_actions_str}
 
-OBJECTIVE: Learn optimal action for current situation.
 Available actions: 0=NO_ACTION, 1=UP, 2=DOWN, 3=LEFT, 6=RIGHT, 9=LIGHT_PUNCH, 13=MEDIUM_PUNCH, 17=HEAVY_PUNCH, 21=LIGHT_KICK, 26=MEDIUM_KICK, 32=HEAVY_KICK, 38=HADOKEN_RIGHT, 39=DRAGON_PUNCH_RIGHT, 40=HURRICANE_KICK_RIGHT, 41=HADOKEN_LEFT, 42=DRAGON_PUNCH_LEFT, 43=HURRICANE_KICK_LEFT
 
-Return action number (0-43):"""
+Choose optimal action (0-43):"""
         return prompt
 
     def process_experience_for_training(self, experience: Dict) -> Dict:
         """Convert experience to training format"""
+        
+        # Track recent actions for diversity
+        action = experience["action"]
+        self.recent_actions.append(action)
+        if len(self.recent_actions) > 10:  # Keep last 10 actions
+            self.recent_actions = self.recent_actions[-10:]
+            
         # Create prompt
         prompt = self.create_training_prompt(experience["game_state"])
 
