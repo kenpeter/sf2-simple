@@ -278,7 +278,10 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         if os.path.exists(vision_proj_path):
             # Create projector first if it doesn't exist
             if not hasattr(self, 'vision_projector'):
-                dummy_image = torch.zeros(1, 3, 224, 224).to(self.device)
+                from PIL import Image
+                import numpy as np
+                dummy_frame = np.zeros((224, 224, 3), dtype=np.uint8)
+                dummy_image = Image.fromarray(dummy_frame)
                 _ = self.get_visual_features([dummy_image])  # This creates the projector
             
             self.vision_projector.load_state_dict(torch.load(vision_proj_path, map_location=self.device))
@@ -755,6 +758,19 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             
         print(f"🚀 Full model online training on {len(self.training_buffer)} samples...")
         
+        # Debug: Check action distribution in training data
+        actions = [sample['action'] for sample in self.training_buffer]
+        action_counts = {}
+        for action in actions:
+            action_counts[action] = action_counts.get(action, 0) + 1
+        print(f"🔧 Action distribution: {action_counts}")
+        
+        # Force debug for first training batch
+        show_debug = not hasattr(self, '_debug_shown')
+        if show_debug:
+            self._debug_shown = True
+            print("🔧 FORCING DEBUG OUTPUT FOR FIRST BATCH:")
+        
         # Set models to training mode
         self.action_head.train()
         if hasattr(self, 'vision_projector'):
@@ -762,7 +778,10 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         total_loss = 0
         correct = 0
         
+        sample_count = 0
         for sample in self.training_buffer:
+            sample_count += 1
+            
             # Prepare data
             frame = np.array(sample['frame'], dtype=np.uint8)
             if len(frame.shape) == 1:
@@ -782,19 +801,23 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             action_logits = self.action_head(visual_features)
             loss = self.criterion(action_logits, action_target)
             
-            # Debug info
-            if total_loss == 0:  # First sample
-                print(f"🔧 Debug - Action target: {action_target.item()}")
-                print(f"🔧 Debug - Action logits range: {action_logits.min().item():.4f} to {action_logits.max().item():.4f}")
+            # Debug info (always show for first few samples of each batch)
+            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
+                print(f"🔧 Debug - Sample {sample_count}: Target: {action_target.item()}")
+                print(f"🔧 Debug - Logits: min={action_logits.min().item():.4f}, max={action_logits.max().item():.4f}")
                 print(f"🔧 Debug - Loss: {loss.item():.6f}")
+                print(f"🔧 Debug - Visual features shape: {visual_features.shape}")
             
             # Backward pass
             loss.backward()
             
             # Check gradients
-            if total_loss == 0:  # First sample
+            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
                 grad_norm = sum(p.grad.norm().item() for p in self.action_head.parameters() if p.grad is not None)
                 print(f"🔧 Debug - Gradient norm: {grad_norm:.6f}")
+                if hasattr(self, 'vision_projector'):
+                    vision_grad_norm = sum(p.grad.norm().item() for p in self.vision_projector.parameters() if p.grad is not None)
+                    print(f"🔧 Debug - Vision projector grad norm: {vision_grad_norm:.6f}")
             
             self.optimizer.step()
             
@@ -804,8 +827,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             correct += (predicted == action_target).sum().item()
             
             # Debug predictions
-            if total_loss <= loss.item():  # First sample
-                print(f"🔧 Debug - Predicted: {predicted.item()}, Target: {action_target.item()}")
+            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
+                print(f"🔧 Debug - Predicted: {predicted.item()}, Target: {action_target.item()}, Match: {predicted.item() == action_target.item()}")
+                print("---")
         
         accuracy = 100 * correct / len(self.training_buffer)
         avg_loss = total_loss / len(self.training_buffer)
