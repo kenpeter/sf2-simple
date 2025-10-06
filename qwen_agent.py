@@ -734,6 +734,10 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             
         # Convert observation to training format
         if hasattr(observation, 'flatten'):
+            # Debug the observation shape
+            if not hasattr(self, '_obs_debug_shown'):
+                self._obs_debug_shown = True
+                print(f"🔧 Observation debug: shape={observation.shape}, dtype={observation.dtype}")
             frame = observation.flatten().tolist()
         else:
             frame = observation
@@ -771,6 +775,14 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             self._debug_shown = True
             print("🔧 FORCING DEBUG OUTPUT FOR FIRST BATCH:")
         
+        # ALWAYS show first sample for debugging (just basic info, not full frame)
+        if self.training_buffer:
+            sample = self.training_buffer[0]
+            frame_len = len(sample['frame']) if 'frame' in sample else 0
+            print(f"🔧 First sample debug: action={sample.get('action', 'N/A')}, frame_length={frame_len}")
+        else:
+            print(f"🔧 First sample debug: NO SAMPLES")
+        
         # Set models to training mode
         self.action_head.train()
         if hasattr(self, 'vision_projector'):
@@ -779,21 +791,33 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         correct = 0
         
         sample_count = 0
+        processed_samples = 0
         for sample in self.training_buffer:
             sample_count += 1
+            
+            if sample_count <= 3:
+                print(f"🔧 Processing sample {sample_count}/{len(self.training_buffer)}")
             
             # Prepare data
             frame = np.array(sample['frame'], dtype=np.uint8)
             if len(frame.shape) == 1:
-                # Try to reshape to expected dimensions
-                if len(frame) == 224 * 320 * 3:
+                # Try to reshape to actual retro dimensions (200, 256, 3)
+                if len(frame) == 200 * 256 * 3:
+                    frame = frame.reshape((200, 256, 3))
+                elif len(frame) == 224 * 320 * 3:
                     frame = frame.reshape((224, 320, 3))
                 else:
                     # Skip malformed frames
+                    if sample_count <= 3:
+                        print(f"🔧 SKIPPING malformed frame with length {len(frame)}, expected {200*256*3} or {224*320*3}")
                     continue
-                    
+            
+            processed_samples += 1        
             image = Image.fromarray(frame)
             action_target = torch.tensor([sample['action']], dtype=torch.long, device=self.device)
+            
+            if sample_count <= 3:
+                print(f"🔧 Sample {sample_count} - Action target: {action_target.item()}")
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -831,9 +855,13 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 print(f"🔧 Debug - Predicted: {predicted.item()}, Target: {action_target.item()}, Match: {predicted.item() == action_target.item()}")
                 print("---")
         
-        accuracy = 100 * correct / len(self.training_buffer)
-        avg_loss = total_loss / len(self.training_buffer)
-        print(f"📊 Full model batch: Loss {avg_loss:.4f}, Accuracy {accuracy:.1f}%")
+        if processed_samples > 0:
+            accuracy = 100 * correct / processed_samples
+            avg_loss = total_loss / processed_samples
+        else:
+            accuracy = 0
+            avg_loss = 0
+        print(f"📊 Full model batch: Loss {avg_loss:.4f}, Accuracy {accuracy:.1f}% (processed {processed_samples}/{len(self.training_buffer)} samples)")
         
         # Set models back to eval mode
         self.action_head.eval()
