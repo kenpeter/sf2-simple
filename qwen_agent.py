@@ -371,23 +371,29 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             hidden_size = getattr(self.model.config, 'hidden_size', 1536)
             return torch.randn(batch_size, hidden_size, device=self.device)
     
-    def predict_action_direct(self, observation):
-        """Direct action prediction using head-only model"""
+    def predict_action_direct(self, observation, epsilon=0.2):
+        """Direct action prediction using head-only model with epsilon-greedy exploration"""
         if not hasattr(self, 'action_head'):
             raise ValueError("Action head not initialized")
-        
+
         # Convert observation to image
         image = self.capture_game_frame(observation)
-        
+
         # Extract visual features
         visual_features = self.get_visual_features([image])
-        
+
+        # Epsilon-greedy exploration
+        if np.random.random() < epsilon:
+            # Random exploration
+            action = np.random.randint(0, len(self.action_meanings))
+            return action, f"Exploration: random action {action}"
+
         # Predict action using trained head
         with torch.no_grad():
             action_logits = self.action_head(visual_features)
             action = torch.argmax(action_logits, dim=-1).item()
-        
-        return action, f"Head-only prediction: {action}"
+
+        return action, f"Exploitation: predicted action {action}"
 
     def extract_game_features(
         self, info: Dict
@@ -547,17 +553,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             # Use direct action prediction (no prompts)
             action, response = self.predict_action_direct(image)
 
-            # Prevent repeating the same attack too many times (causes blocking)
-            if action == self.last_action:
-                self.action_repeat_count += 1
-                if self.action_repeat_count > 3:  # If repeating more than 3 times
-                    # Encourage variety by suggesting no action
-                    old_action = action
-                    action = 0  # NO_ACTION to break pattern
-                    print(f"🔄 BREAKING REPEAT: {old_action} → {action} (NO_ACTION)")
-                    self.action_repeat_count = 0
-            else:
-                self.action_repeat_count = 0
+            # Let model learn naturally - no action breaking
+            # Model should discover effective actions through health-based rewards only
 
             # Set cooldown based on action recovery frames
             recovery_frames = self.action_frames.get(action, 10)
@@ -574,9 +571,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             action = self.last_action
             response = self.last_reasoning
         else:
-            # We're in cooldown - must wait, use NO_ACTION
-            action = 0  # NO_ACTION during recovery
-            response = f"RECOVERY FRAMES: {self.action_cooldown} remaining from {self.action_meanings[self.last_executed_action]}"
+            # During cooldown, still allow action selection (let model decide)
+            action = self.last_action
+            response = self.last_reasoning
 
         # Update action history
         action_name = self.action_meanings[action]
@@ -805,22 +802,33 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                     # Skip malformed frames
                     continue
             
-            processed_samples += 1        
+            processed_samples += 1
             image = Image.fromarray(frame)
             action_target = torch.tensor([sample['action']], dtype=torch.long, device=self.device)
-            
+            reward = sample['reward']  # Get the reward for this action
+
             # Forward pass
             self.optimizer.zero_grad()
             visual_features = self.get_visual_features([image])
             action_logits = self.action_head(visual_features)
-            loss = self.criterion(action_logits, action_target)
-            
+
+            # Policy gradient loss: -log_prob * reward
+            # Use log_softmax for numerical stability
+            log_probs = torch.nn.functional.log_softmax(action_logits, dim=-1)
+            selected_log_prob = log_probs[0, action_target.item()]
+
+            # REINFORCE: maximize reward by minimizing -log_prob * reward
+            # Positive reward -> encourage action, Negative reward -> discourage action
+            policy_loss = -selected_log_prob * reward
+
+            loss = policy_loss
+
             # Debug info (only show for first batch)
             if show_debug and sample_count <= 2:  # Only first 2 samples of first batch
-                print(f"🔧 Sample {sample_count}: Target: {action_target.item()}")
+                print(f"🔧 Sample {sample_count}: Action: {action_target.item()}, Reward: {reward:.3f}")
                 print(f"🔧 Logits: min={action_logits.min().item():.4f}, max={action_logits.max().item():.4f}")
-                print(f"🔧 Loss: {loss.item():.6f}")
-            
+                print(f"🔧 Log prob: {selected_log_prob.item():.6f}, Policy loss: {loss.item():.6f}")
+
             # Backward pass
             loss.backward()
             
@@ -830,24 +838,19 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 print(f"🔧 Gradient norm: {grad_norm:.6f}")
             
             self.optimizer.step()
-            
+
             # Stats
             total_loss += loss.item()
-            _, predicted = torch.max(action_logits, 1)
-            correct += (predicted == action_target).sum().item()
-            
+
             # Debug predictions (only for first batch)
             if show_debug and sample_count <= 2:
-                print(f"🔧 Predicted: {predicted.item()}, Target: {action_target.item()}")
                 print("---")
-        
+
         if processed_samples > 0:
-            accuracy = 100 * correct / processed_samples
             avg_loss = total_loss / processed_samples
         else:
-            accuracy = 0
             avg_loss = 0
-        print(f"📊 Training Results: Loss={avg_loss:.6f}, Accuracy={accuracy:.1f}%, Samples={processed_samples}/{len(self.training_buffer)}")
+        print(f"📊 Training Results: Avg Policy Loss={avg_loss:.6f}, Samples={processed_samples}/{len(self.training_buffer)}")
         
         # Set models back to eval mode
         self.action_head.eval()
@@ -1055,30 +1058,32 @@ if __name__ == "__main__":
             # Initialize health tracking for reward calculation
             prev_agent_hp = 176  # Starting HP
             prev_enemy_hp = 176  # Starting HP
-            
+            first_step = True  # Track first step to avoid false round end detection
+
             while step < max_steps:
                 # Render game UI
                 env.render()
-                
+
                 # Extract real game info from environment
                 try:
-                    # Try to get real game state from retro environment
-                    game_state = env.unwrapped.data
+                    # Get real game state from retro environment using lookup_value
+                    game_data = env.unwrapped.data
                     info = {
-                        'agent_hp': game_state.get('health', 150),
-                        'enemy_hp': game_state.get('enemy_health', 120),
-                        'agent_x': game_state.get('x', 100),
-                        'agent_y': game_state.get('y', 200),
-                        'enemy_x': game_state.get('enemy_x', 200),
-                        'enemy_y': game_state.get('enemy_y', 200),
-                        'score': game_state.get('score', 0),
-                        'round_countdown': game_state.get('timer', 99)
+                        'agent_hp': int(game_data.lookup_value('agent_hp')),
+                        'enemy_hp': int(game_data.lookup_value('enemy_hp')),
+                        'agent_x': int(game_data.lookup_value('agent_x')),
+                        'agent_y': int(game_data.lookup_value('agent_y')),
+                        'enemy_x': int(game_data.lookup_value('enemy_x')),
+                        'enemy_y': int(game_data.lookup_value('enemy_y')),
+                        'score': int(game_data.lookup_value('score')),
+                        'round_countdown': int(game_data.lookup_value('round_countdown'))
                     }
-                except (AttributeError, KeyError):
+                except (AttributeError, KeyError, TypeError) as e:
                     # Fallback if real data unavailable
+                    print(f"⚠️ Error reading game state: {e}")
                     info = {
                         'agent_hp': 150,
-                        'enemy_hp': 120, 
+                        'enemy_hp': 120,
                         'agent_x': 100,
                         'agent_y': 200,
                         'enemy_x': 200,
@@ -1086,10 +1091,10 @@ if __name__ == "__main__":
                         'score': 0,
                         'round_countdown': 99
                     }
-                
+
                 # Get action from agent
                 action, reasoning = agent.get_action(obs, info, verbose=False)
-                
+
                 # Take step
                 result = env.step(action)
                 if len(result) == 5:
@@ -1097,47 +1102,78 @@ if __name__ == "__main__":
                 else:
                     obs, env_reward, done, truncated = result
                     info = {}
-                
+
                 # Calculate custom reward based on health advantage
                 try:
-                    # Try to get real game state from retro environment
-                    game_state = env.unwrapped.data
-                    current_agent_hp = game_state.get('health', prev_agent_hp)
-                    current_enemy_hp = game_state.get('enemy_health', prev_enemy_hp)
-                except (AttributeError, KeyError):
+                    # Get real game state from retro environment using lookup_value
+                    game_data = env.unwrapped.data
+                    current_agent_hp = int(game_data.lookup_value('agent_hp'))
+                    current_enemy_hp = int(game_data.lookup_value('enemy_hp'))
+                except (AttributeError, KeyError, TypeError):
                     # Fallback if real data unavailable
                     current_agent_hp = prev_agent_hp
                     current_enemy_hp = prev_enemy_hp
-                
-                # Health advantage reward (normalized to [-1, +1])
+
+                # Health-based reward (amplified for stronger learning signal)
                 agent_hp_change = current_agent_hp - prev_agent_hp
                 enemy_hp_change = current_enemy_hp - prev_enemy_hp
-                health_advantage = (agent_hp_change - enemy_hp_change) / 176.0  # Normalize by max HP
-                
-                # Clamp to [-1, +1] range
-                reward = max(-1.0, min(1.0, health_advantage))
-                
-                # Add win/loss reward at fight end
-                if done:
+
+                # Amplify HP changes to make rewards more impactful
+                # Hitting enemy = positive, getting hit = negative
+                damage_to_enemy = -enemy_hp_change  # Negative HP change = positive damage
+                damage_to_agent = -agent_hp_change  # Negative HP change = positive damage taken
+
+                # Reward = damage dealt - damage taken, scaled up 10x for stronger signal
+                reward = (damage_to_enemy - damage_to_agent) * 0.1
+
+                # Clamp to [-10, +10] range for safety
+                reward = max(-10.0, min(10.0, reward))
+
+                # Check for single round completion (either player's HP reaches 0)
+                # Skip check on first step to avoid false detection at game start
+                round_ended = False
+                if not first_step:
+                    round_ended = current_agent_hp <= 0 or current_enemy_hp <= 0
+
+                # Add win/loss reward at round end
+                if round_ended:
                     if current_agent_hp > current_enemy_hp:
                         reward += 1.0  # Win bonus
-                        print(f"🏆 VICTORY! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
+                        print(f"🏆 ROUND WON! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
                     else:
                         reward -= 1.0  # Loss penalty
-                        print(f"💀 DEFEAT! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
-                
+                        print(f"💀 ROUND LOST! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
+
                 total_reward += reward
-                
+
+                # Debug HP tracking every 500 steps
+                if step % 500 == 0:
+                    print(f"📊 Step {step}: Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}, Reward: {reward:.3f}")
+
                 # Update previous HP for next iteration
                 prev_agent_hp = current_agent_hp
                 prev_enemy_hp = current_enemy_hp
-                
+
                 # Add sample for online learning (always active)
                 agent.add_training_sample(obs, action, reward)
-                
-                if done or step >= max_steps:
+
+                # Clear first_step flag after first iteration
+                first_step = False
+
+                # Terminate immediately after single round completion
+                if round_ended:
+                    print(f"⚔️ Single round completed at step {step}")
+                    # Force environment restart
+                    done = True
                     break
-                    
+
+                if done or step >= max_steps:
+                    if done:
+                        print(f"🛑 Game ended naturally at step {step}")
+                    else:
+                        print(f"⏰ Game ended due to max steps ({max_steps}) at step {step}")
+                    break
+
                 step += 1
             
             # Train on entire fight data at end of episode
