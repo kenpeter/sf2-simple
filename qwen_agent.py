@@ -10,7 +10,7 @@ import torch
 
 # Import HuggingFace transformers for vision models
 from transformers import (
-    Qwen2_5_VLForConditionalGeneration,
+    Qwen2VLForConditionalGeneration,
     AutoProcessor,
 )
 from peft import PeftModel  # Import PEFT for LoRA adapter loading
@@ -42,7 +42,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             fresh_start: If True, copy fresh model from cache to current dir
         """
         # Setup model paths
-        self.cache_model_path = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct"
+        self.cache_model_path = "/home/kenpeter/.cache/huggingface/hub/Qwen2-VL-2B-Instruct"
         self.local_model_path = "./qwen_model"
         
         # Setup model path based on fresh_start
@@ -60,7 +60,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 model_path = self.local_model_path
 
         # Initialize Qwen model
-        print(f"🤖 Loading Qwen 3B model from: {model_path}")
+        print(f"🤖 Loading Qwen 2B model from: {model_path}")
 
         # device cuda
         self.device = (
@@ -87,11 +87,11 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
 
         # Load vision model from cache with INT8 quantization
         print(
-            "📁 Step 2/2: Loading Qwen2.5-VL model from cache..."
+            "📁 Step 2/2: Loading Qwen2-VL model from cache..."
         )  # Print loading status for model
 
-        # Load 3B model with fp16 for GPU efficiency
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        # Load 2B model with fp16 for GPU efficiency
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_path,
             device_map="cuda:0",  # GPU for inference
             torch_dtype=torch.float16,  # fp16 for efficiency
@@ -99,7 +99,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             trust_remote_code=True,
         )
         print(
-            f"✅ Qwen 3B model loaded successfully on {self.device}"
+            f"✅ Qwen 2B model loaded successfully on {self.device}"
         )  # Print successful loading message
 
         #
@@ -214,9 +214,17 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             self.load_components()
 
     def model_exists_locally(self):
-        """Check if model exists in current directory"""
+        """Check if model exists in current directory with all required files"""
         import os
-        return os.path.exists(self.local_model_path)
+        if not os.path.exists(self.local_model_path):
+            return False
+        
+        # Check for essential files
+        required_files = ['config.json', 'tokenizer_config.json']
+        for file in required_files:
+            if not os.path.exists(os.path.join(self.local_model_path, file)):
+                return False
+        return True
     
     def setup_fresh_model(self):
         """Copy fresh model from cache to current directory"""
@@ -289,7 +297,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             param.requires_grad = True
         
         # Add trainable action head
-        hidden_size = getattr(self.model.config, 'hidden_size', 1536)  # Default to 1536 for 3B model
+        hidden_size = getattr(self.model.config, 'hidden_size', 1280)  # Qwen2-VL-2B uses 1280
         self.action_head = nn.Sequential(
             nn.Linear(hidden_size, 1024),
             nn.ReLU(),
@@ -337,7 +345,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             flattened = batch.view(batch_size, -1)  # Flatten to [batch, 224*224*3]
             
             # Project to hidden size
-            hidden_size = getattr(self.model.config, 'hidden_size', 1536)
+            hidden_size = getattr(self.model.config, 'hidden_size', 1280)  # Qwen2-VL-2B uses 1280
             if not hasattr(self, 'vision_projector'):
                 # Create simple projection layer
                 import torch.nn as nn
@@ -774,14 +782,30 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             action_logits = self.action_head(visual_features)
             loss = self.criterion(action_logits, action_target)
             
+            # Debug info
+            if total_loss == 0:  # First sample
+                print(f"🔧 Debug - Action target: {action_target.item()}")
+                print(f"🔧 Debug - Action logits range: {action_logits.min().item():.4f} to {action_logits.max().item():.4f}")
+                print(f"🔧 Debug - Loss: {loss.item():.6f}")
+            
             # Backward pass
             loss.backward()
+            
+            # Check gradients
+            if total_loss == 0:  # First sample
+                grad_norm = sum(p.grad.norm().item() for p in self.action_head.parameters() if p.grad is not None)
+                print(f"🔧 Debug - Gradient norm: {grad_norm:.6f}")
+            
             self.optimizer.step()
             
             # Stats
             total_loss += loss.item()
             _, predicted = torch.max(action_logits, 1)
             correct += (predicted == action_target).sum().item()
+            
+            # Debug predictions
+            if total_loss <= loss.item():  # First sample
+                print(f"🔧 Debug - Predicted: {predicted.item()}, Target: {action_target.item()}")
         
         accuracy = 100 * correct / len(self.training_buffer)
         avg_loss = total_loss / len(self.training_buffer)
