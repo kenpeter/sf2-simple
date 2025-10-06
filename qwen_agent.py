@@ -204,7 +204,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         self.optimizer = None
         self.criterion = None
         self.training_buffer = []
-        self.buffer_size = 50  # Train every 50 samples
+        self.buffer_size = float('inf')  # Collect entire fight, train at end
         
         # Auto-enable online learning
         self.enable_online_learning()
@@ -717,15 +717,15 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         print("🔥 Enabling full model online learning...")
         self.online_learning = True
         
-        # Setup optimizer for all trainable components
-        param_groups = [self.action_head.parameters()]
+        # Setup optimizer for ALL model parameters (full fine-tuning)
+        param_groups = [self.model.parameters(), self.action_head.parameters()]
         if hasattr(self, 'vision_projector'):
             param_groups.append(self.vision_projector.parameters())
         all_params = itertools.chain(*param_groups)
-        self.optimizer = torch.optim.AdamW(all_params, lr=learning_rate)
+        self.optimizer = torch.optim.AdamW(all_params, lr=1e-5)  # Lower learning rate for full model
         self.criterion = nn.CrossEntropyLoss()
         
-        print(f"✅ Full model online learning enabled with lr={learning_rate}")
+        print(f"✅ Full model online learning enabled with lr=1e-5")
     
     def add_training_sample(self, observation, action, reward):
         """Add sample to training buffer for online learning"""
@@ -760,28 +760,26 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         if not self.online_learning or len(self.training_buffer) == 0:
             return
             
-        print(f"🚀 Full model online training on {len(self.training_buffer)} samples...")
+        print(f"🚀 Full model training on {len(self.training_buffer)} samples from entire fight...")
         
         # Debug: Check action distribution in training data
         actions = [sample['action'] for sample in self.training_buffer]
         action_counts = {}
         for action in actions:
             action_counts[action] = action_counts.get(action, 0) + 1
-        print(f"🔧 Action distribution: {action_counts}")
+        if len(self.training_buffer) <= 20:  # Only show for small batches
+            print(f"🔧 Action distribution: {action_counts}")
         
-        # Force debug for first training batch
+        # Force debug for first training batch only
         show_debug = not hasattr(self, '_debug_shown')
         if show_debug:
             self._debug_shown = True
-            print("🔧 FORCING DEBUG OUTPUT FOR FIRST BATCH:")
-        
-        # ALWAYS show first sample for debugging (just basic info, not full frame)
-        if self.training_buffer:
-            sample = self.training_buffer[0]
-            frame_len = len(sample['frame']) if 'frame' in sample else 0
-            print(f"🔧 First sample debug: action={sample.get('action', 'N/A')}, frame_length={frame_len}")
-        else:
-            print(f"🔧 First sample debug: NO SAMPLES")
+            print("🔧 FIRST BATCH DEBUG ENABLED")
+            # ONLY show first sample debug for the very first batch
+            if self.training_buffer:
+                sample = self.training_buffer[0]
+                frame_len = len(sample['frame']) if 'frame' in sample else 0
+                print(f"🔧 First sample: action={sample.get('action', 'N/A')}, frame_length={frame_len}")
         
         # Set models to training mode
         self.action_head.train()
@@ -795,9 +793,6 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         for sample in self.training_buffer:
             sample_count += 1
             
-            if sample_count <= 3:
-                print(f"🔧 Processing sample {sample_count}/{len(self.training_buffer)}")
-            
             # Prepare data
             frame = np.array(sample['frame'], dtype=np.uint8)
             if len(frame.shape) == 1:
@@ -808,16 +803,11 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                     frame = frame.reshape((224, 320, 3))
                 else:
                     # Skip malformed frames
-                    if sample_count <= 3:
-                        print(f"🔧 SKIPPING malformed frame with length {len(frame)}, expected {200*256*3} or {224*320*3}")
                     continue
             
             processed_samples += 1        
             image = Image.fromarray(frame)
             action_target = torch.tensor([sample['action']], dtype=torch.long, device=self.device)
-            
-            if sample_count <= 3:
-                print(f"🔧 Sample {sample_count} - Action target: {action_target.item()}")
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -825,23 +815,19 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             action_logits = self.action_head(visual_features)
             loss = self.criterion(action_logits, action_target)
             
-            # Debug info (always show for first few samples of each batch)
-            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
-                print(f"🔧 Debug - Sample {sample_count}: Target: {action_target.item()}")
-                print(f"🔧 Debug - Logits: min={action_logits.min().item():.4f}, max={action_logits.max().item():.4f}")
-                print(f"🔧 Debug - Loss: {loss.item():.6f}")
-                print(f"🔧 Debug - Visual features shape: {visual_features.shape}")
+            # Debug info (only show for first batch)
+            if show_debug and sample_count <= 2:  # Only first 2 samples of first batch
+                print(f"🔧 Sample {sample_count}: Target: {action_target.item()}")
+                print(f"🔧 Logits: min={action_logits.min().item():.4f}, max={action_logits.max().item():.4f}")
+                print(f"🔧 Loss: {loss.item():.6f}")
             
             # Backward pass
             loss.backward()
             
-            # Check gradients
-            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
+            # Check gradients (only for first batch)
+            if show_debug and sample_count <= 2:
                 grad_norm = sum(p.grad.norm().item() for p in self.action_head.parameters() if p.grad is not None)
-                print(f"🔧 Debug - Gradient norm: {grad_norm:.6f}")
-                if hasattr(self, 'vision_projector'):
-                    vision_grad_norm = sum(p.grad.norm().item() for p in self.vision_projector.parameters() if p.grad is not None)
-                    print(f"🔧 Debug - Vision projector grad norm: {vision_grad_norm:.6f}")
+                print(f"🔧 Gradient norm: {grad_norm:.6f}")
             
             self.optimizer.step()
             
@@ -850,9 +836,9 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             _, predicted = torch.max(action_logits, 1)
             correct += (predicted == action_target).sum().item()
             
-            # Debug predictions
-            if sample_count <= 3 or show_debug:  # Show debug for first 3 samples or forced debug
-                print(f"🔧 Debug - Predicted: {predicted.item()}, Target: {action_target.item()}, Match: {predicted.item() == action_target.item()}")
+            # Debug predictions (only for first batch)
+            if show_debug and sample_count <= 2:
+                print(f"🔧 Predicted: {predicted.item()}, Target: {action_target.item()}")
                 print("---")
         
         if processed_samples > 0:
@@ -861,7 +847,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         else:
             accuracy = 0
             avg_loss = 0
-        print(f"📊 Full model batch: Loss {avg_loss:.4f}, Accuracy {accuracy:.1f}% (processed {processed_samples}/{len(self.training_buffer)} samples)")
+        print(f"📊 Training Results: Loss={avg_loss:.6f}, Accuracy={accuracy:.1f}%, Samples={processed_samples}/{len(self.training_buffer)}")
         
         # Set models back to eval mode
         self.action_head.eval()
@@ -870,6 +856,20 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         
         # Auto-save full model after each online training batch
         self.save_model()
+    
+    def train_on_episode(self):
+        """Train on entire episode buffer at end of fight"""
+        if not self.online_learning or len(self.training_buffer) == 0:
+            return
+            
+        print(f"\n🎯 END-OF-FIGHT TRAINING: {len(self.training_buffer)} samples from entire fight...")
+        
+        # Train on the entire episode
+        self._train_online_batch()
+        
+        # Clear buffer for next fight
+        self.training_buffer = []
+        print("✅ Fight training completed, buffer cleared for next fight\n")
 
 
 # Demo functions removed - use play.py for gameplay
@@ -923,7 +923,7 @@ if __name__ == "__main__":
             
             agent.reset()
             step = 0
-            max_steps = 1000
+            max_steps = 3000
             
             while step < max_steps:
                 # Render game UI
@@ -1049,8 +1049,12 @@ if __name__ == "__main__":
             
             agent.reset()
             step = 0
-            max_steps = 1000
+            max_steps = 3000
             total_reward = 0
+            
+            # Initialize health tracking for reward calculation
+            prev_agent_hp = 176  # Starting HP
+            prev_enemy_hp = 176  # Starting HP
             
             while step < max_steps:
                 # Render game UI
@@ -1089,11 +1093,44 @@ if __name__ == "__main__":
                 # Take step
                 result = env.step(action)
                 if len(result) == 5:
-                    obs, reward, done, truncated, _ = result
+                    obs, env_reward, done, truncated, info = result
                 else:
-                    obs, reward, done, truncated = result
+                    obs, env_reward, done, truncated = result
+                    info = {}
+                
+                # Calculate custom reward based on health advantage
+                try:
+                    # Try to get real game state from retro environment
+                    game_state = env.unwrapped.data
+                    current_agent_hp = game_state.get('health', prev_agent_hp)
+                    current_enemy_hp = game_state.get('enemy_health', prev_enemy_hp)
+                except (AttributeError, KeyError):
+                    # Fallback if real data unavailable
+                    current_agent_hp = prev_agent_hp
+                    current_enemy_hp = prev_enemy_hp
+                
+                # Health advantage reward (normalized to [-1, +1])
+                agent_hp_change = current_agent_hp - prev_agent_hp
+                enemy_hp_change = current_enemy_hp - prev_enemy_hp
+                health_advantage = (agent_hp_change - enemy_hp_change) / 176.0  # Normalize by max HP
+                
+                # Clamp to [-1, +1] range
+                reward = max(-1.0, min(1.0, health_advantage))
+                
+                # Add win/loss reward at fight end
+                if done:
+                    if current_agent_hp > current_enemy_hp:
+                        reward += 1.0  # Win bonus
+                        print(f"🏆 VICTORY! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
+                    else:
+                        reward -= 1.0  # Loss penalty
+                        print(f"💀 DEFEAT! Agent HP: {current_agent_hp}, Enemy HP: {current_enemy_hp}")
                 
                 total_reward += reward
+                
+                # Update previous HP for next iteration
+                prev_agent_hp = current_agent_hp
+                prev_enemy_hp = current_enemy_hp
                 
                 # Add sample for online learning (always active)
                 agent.add_training_sample(obs, action, reward)
@@ -1102,6 +1139,9 @@ if __name__ == "__main__":
                     break
                     
                 step += 1
+            
+            # Train on entire fight data at end of episode
+            agent.train_on_episode()
             
             print(f"✅ Episode {episode + 1} completed: {step} steps, reward: {total_reward:.2f}")
         
