@@ -10,7 +10,7 @@ import torch
 
 # Import HuggingFace transformers for vision models
 from transformers import (
-    Qwen2VLForConditionalGeneration,
+    AutoModelForVision2Seq,
     AutoProcessor,
 )
 from peft import PeftModel  # Import PEFT for LoRA adapter loading
@@ -26,7 +26,7 @@ from typing import Dict, Tuple  # Import typing hints for better code documentat
 
 class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
     """
-    Qwen-powered agent for Street Fighter 2
+    SmolVLM-powered agent for Street Fighter 2
     Uses existing wrapper.py environment without modifications
     """
 
@@ -36,14 +36,14 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
         fresh_start: bool = False,  # If True, copy from cache to current dir
     ):  # Constructor method for agent initialization
         """
-        Initialize the Qwen agent
+        Initialize the SmolVLM agent
 
         Args:
             fresh_start: If True, copy fresh model from cache to current dir
         """
         # Setup model paths
-        self.cache_model_path = "/home/kenpeter/.cache/huggingface/hub/Qwen2-VL-2B-Instruct"
-        self.local_model_path = "./qwen_model"
+        self.cache_model_path = "/home/kenpeter/.cache/huggingface/hub/SmolVLM-500M-Instruct"
+        self.local_model_path = "./model"
         
         # Setup model path based on fresh_start
         if fresh_start:
@@ -59,8 +59,8 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
                 self.setup_fresh_model()
                 model_path = self.local_model_path
 
-        # Initialize Qwen model
-        print(f"🤖 Loading Qwen 2B model from: {model_path}")
+        # Initialize SmolVLM model
+        print(f"🤖 Loading SmolVLM 500M model from: {model_path}")
 
         # device cuda
         self.device = (
@@ -87,11 +87,11 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
 
         # Load vision model from cache with INT8 quantization
         print(
-            "📁 Step 2/2: Loading Qwen2-VL model from cache..."
+            "📁 Step 2/2: Loading SmolVLM model from cache..."
         )  # Print loading status for model
 
-        # Load 2B model with fp16 for GPU efficiency
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+        # Load 500M model with fp16 for GPU efficiency
+        self.model = AutoModelForVision2Seq.from_pretrained(
             model_path,
             device_map="cuda:0",  # GPU for inference
             torch_dtype=torch.float16,  # fp16 for efficiency
@@ -99,7 +99,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             trust_remote_code=True,
         )
         print(
-            f"✅ Qwen 2B model loaded successfully on {self.device}"
+            f"✅ SmolVLM 500M model loaded successfully on {self.device}"
         )  # Print successful loading message
 
         #
@@ -297,7 +297,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             param.requires_grad = True
         
         # Add trainable action head
-        hidden_size = getattr(self.model.config, 'hidden_size', 1280)  # Qwen2-VL-2B uses 1280
+        hidden_size = getattr(self.model.config, 'hidden_size', 960)  # SmolVLM-500M uses 960
         self.action_head = nn.Sequential(
             nn.Linear(hidden_size, 1024),
             nn.ReLU(),
@@ -345,7 +345,7 @@ class QwenStreetFighterAgent:  # Define main agent class for Street Fighter 2 AI
             flattened = batch.view(batch_size, -1)  # Flatten to [batch, 224*224*3]
             
             # Project to hidden size
-            hidden_size = getattr(self.model.config, 'hidden_size', 1280)  # Qwen2-VL-2B uses 1280
+            hidden_size = getattr(self.model.config, 'hidden_size', 960)  # SmolVLM-500M uses 960
             if not hasattr(self, 'vision_projector'):
                 # Create simple projection layer
                 import torch.nn as nn
