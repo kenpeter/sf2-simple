@@ -77,7 +77,7 @@ class StreetFighter(gym.Env):
 
 
 def play_street_fighter(
-    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+    model_path: str = "/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
     episodes: int = 3,
     render: bool = True,
     verbose: bool = True,
@@ -171,7 +171,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-7B-Instruct-AWQ",
+        default="/home/kenpeter/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct",
         help="Qwen2.5-VL model path",
     )
     parser.add_argument(
