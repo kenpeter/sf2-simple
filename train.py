@@ -169,7 +169,10 @@ def main():
 
     # Training parameters
     parser.add_argument(
-        "--total_episodes", type=int, default=2000, help="Total training episodes"
+        "--episodes_per_env",
+        type=int,
+        default=1000,
+        help="Training episodes per environment",
     )
     parser.add_argument(
         "--avg_episode_length",
@@ -197,7 +200,10 @@ def main():
         help="Number of parallel environments using SubprocVecEnv",
     )
     parser.add_argument(
-        "--frame_stack", type=int, default=4, help="Number of frames to stack (4 is standard for Atari)"
+        "--frame_stack",
+        type=int,
+        default=4,
+        help="Number of frames to stack (4 is standard for Atari)",
     )
 
     # Callback parameters
@@ -221,16 +227,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Calculate total timesteps from episodes
+    # Calculate total episodes and timesteps
+    args.total_episodes = args.episodes_per_env * args.n_envs
     args.total_timesteps = args.total_episodes * args.avg_episode_length
-    episodes_per_env = args.total_episodes / args.n_envs
 
     print(f"Configuration: {vars(args)}")
 
     print(f"\n📊 Training Statistics:")
-    print(f"   Total episodes: {args.total_episodes:,}")
+    print(f"   Episodes per environment: {args.episodes_per_env:,}")
     print(f"   Parallel environments: {args.n_envs} (SubprocVecEnv)")
-    print(f"   Episodes per environment: ~{int(episodes_per_env)}")
+    print(f"   Total episodes (all envs): {args.total_episodes:,}")
     print(f"   Average episode length: {args.avg_episode_length} steps")
     print(f"   Total timesteps: {args.total_timesteps:,}")
     print(f"   Frame stack: {args.frame_stack}")
