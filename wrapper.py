@@ -38,11 +38,12 @@ class StreetFighter(gym.Env):
 
         # Create the retro environment
         try:
-            # retro make game env
+            # retro make game env (headless - no rendering)
             game = retro.make(
                 "StreetFighterIISpecialChampionEdition-Genesis",
                 state="ken_bison_12.state",
                 use_restricted_actions=retro.Actions.FILTERED,
+                render_mode=None,  # Disable UI rendering
             )
             # Wrap with discretizer for special moves
             self.game = StreetFighter2Discretizer(game)
