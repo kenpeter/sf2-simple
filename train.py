@@ -49,27 +49,8 @@ class TrainAndLoggingCallback(BaseCallback):
                         self.matches_won += 1
 
         if self.n_calls % self.check_freq == 0:
-            if self.resume_model_name:
-                # Extract the previous number from resume model name and add current steps
-                import re
-
-                match = re.search(r"_(\d+)$", self.resume_model_name)
-                if match:
-                    previous_steps = int(match.group(1))
-                    total_steps = previous_steps + self.n_calls
-                    base_name = re.sub(r"_\d+$", "", self.resume_model_name)
-                    model_path = os.path.join(
-                        self.save_path, "{}_{}".format(base_name, total_steps)
-                    )
-                else:
-                    model_path = os.path.join(
-                        self.save_path,
-                        "{}_{}".format(self.resume_model_name, self.n_calls),
-                    )
-            else:
-                model_path = os.path.join(
-                    self.save_path, "best_model_{}".format(self.n_calls)
-                )
+            # Always overwrite the same checkpoint file
+            model_path = os.path.join(self.save_path, "checkpoint")
             self.model.save(model_path)
 
             # Calculate and display win rate
@@ -172,10 +153,10 @@ def train_model(args):
     # the func learn will call this callback inside
     model.learn(total_timesteps=args.total_timesteps, callback=callback)
 
-    # Save final model
-    final_model_path = os.path.join(args.save_dir, "final_model")
+    # Save final model (overwrite checkpoint)
+    final_model_path = os.path.join(args.save_dir, "checkpoint")
     model.save(final_model_path)
-    print(f"Final model saved to: {final_model_path}")
+    print(f"✅ Final model saved to: {final_model_path}")
 
     return model
 
