@@ -5,9 +5,8 @@ Simple PPO training using Stable Baselines3
 """
 
 import os
-import optuna
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 from wrapper import StreetFighter
@@ -84,33 +83,37 @@ class TrainAndLoggingCallback(BaseCallback):
         return True
 
 
-def make_env():
+def make_env(rank=0):
     """
-    Create environment with frame stacking
+    Create a single environment instance (for parallel training)
     """
-    # env street figher
-    env = StreetFighter()
-    # monitor
-    env = Monitor(env)
-    # vec env
-    env = DummyVecEnv([lambda: env])
-    # frame stack 4
-    env = VecFrameStack(env, 1024, channels_order="last")
-    # return env
+
+    def _init():
+        env = StreetFighter()
+        env = Monitor(env)
+        return env
+
+    return _init
+
+
+def make_vec_env(n_envs=4, frame_stack=1024, use_subprocess=True):
+    """
+    Create vectorized environment with multiple parallel environments
+    Args:
+        n_envs: Number of parallel environments (default: 4)
+        frame_stack: Number of frames to stack (default: 1024)
+        use_subprocess: Use SubprocVecEnv for better CPU parallelization (default: True)
+    """
+    # Create multiple environments in parallel
+    # SubprocVecEnv runs each env in a separate process for true parallelization
+    if use_subprocess and n_envs > 1:
+        env = SubprocVecEnv([make_env(i) for i in range(n_envs)], start_method="fork")
+    else:
+        env = DummyVecEnv([make_env(i) for i in range(n_envs)])
+
+    # Frame stack
+    env = VecFrameStack(env, frame_stack, channels_order="last")
     return env
-
-
-def optimize_ppo(trial):
-    """
-    Optuna optimization function for PPO hyperparameters
-    """
-    return {
-        "n_steps": trial.suggest_int("n_steps", 2048, 8192),
-        "gamma": trial.suggest_float("gamma", 0.8, 0.9999, log=True),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),
-        "clip_range": trial.suggest_float("clip_range", 0.1, 0.4),
-        "gae_lambda": trial.suggest_float("gae_lambda", 0.8, 0.99),
-    }
 
 
 def train_model(args):
@@ -119,9 +122,10 @@ def train_model(args):
     """
     print("🚀 Starting PPO training...")
 
-    # Create environment
-    env = make_env()
-    print(f"Environment created with observation space: {env.observation_space}")
+    # Create vectorized environment with multiple parallel environments
+    env = make_vec_env(n_envs=args.n_envs, frame_stack=args.frame_stack)
+    print(f"Created {args.n_envs} parallel environments")
+    print(f"Environment observation space: {env.observation_space}")
     print(f"Action space: {env.action_space}")
 
     # Model parameters
@@ -176,102 +180,21 @@ def train_model(args):
     return model
 
 
-def test_model(args):
-    """
-    Test a trained model
-    """
-    print("🧪 Testing trained model...")
-
-    # Create environment
-    env = make_env()
-
-    # Load model
-    model = PPO.load(args.model_path)
-    print(f"Model loaded from: {args.model_path}")
-
-    # Test for specified episodes
-    for episode in range(args.test_episodes):
-        obs = env.reset()
-        total_reward = 0
-        done = False
-
-        while not done:
-            action, _ = model.predict(obs)
-            obs, reward, done, info = env.step(action)
-            total_reward += reward
-
-            if args.render:
-                env.render()
-
-        print(f"Episode {episode + 1}: Total Reward = {total_reward}")
-
-    env.close()
-
-
-def optimize_hyperparameters(args):
-    """
-    Optimize hyperparameters using Optuna
-    """
-    if optuna is None:
-        print("❌ Optuna not installed. Install with: pip install optuna")
-        return None
-
-    print("🔧 Starting hyperparameter optimization...")
-
-    def objective(trial):
-        # Get hyperparameters
-        # auto param
-        params = optimize_ppo(trial)
-
-        # Create environment
-        env = make_env()
-
-        # Create model with trial parameters
-        # pass dynamic param to ppo
-        model = PPO("CnnPolicy", env, **params, verbose=0)
-
-        # Train for a shorter period for optimization
-        model.learn(total_timesteps=args.optim_timesteps)
-
-        # Evaluate the model
-        obs = env.reset()
-        total_reward = 0
-        for _ in range(100):  # Short evaluation
-            action, _ = model.predict(obs)
-            obs, reward, done, info = env.step(action)
-            total_reward += reward
-            if done:
-                obs = env.reset()
-
-        env.close()
-        return total_reward
-
-    # Create study and optimize
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=args.n_trials)
-
-    print("Best hyperparameters:", study.best_params)
-    return study.best_params
-
-
 def main():
     """
     Main function
     """
     parser = argparse.ArgumentParser(description="Street Fighter RL Training")
 
-    # Training mode
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="train",
-        choices=["train", "test", "optimize"],
-        help="Mode: train, test, or optimize",
-    )
-
     # Training parameters
     parser.add_argument(
-        "--total_timesteps", type=int, default=1000000, help="Total training timesteps"
+        "--total_episodes", type=int, default=2000, help="Total training episodes"
+    )
+    parser.add_argument(
+        "--avg_episode_length",
+        type=int,
+        default=500,
+        help="Average episode length (for timestep calculation)",
     )
     parser.add_argument(
         "--n_steps", type=int, default=2048, help="Number of steps per update"
@@ -285,6 +208,17 @@ def main():
     )
     parser.add_argument("--gae_lambda", type=float, default=0.95, help="GAE lambda")
 
+    # Environment parameters
+    parser.add_argument(
+        "--n_envs",
+        type=int,
+        default=64,
+        help="Number of parallel environments using SubprocVecEnv",
+    )
+    parser.add_argument(
+        "--frame_stack", type=int, default=4, help="Number of frames to stack (4 is standard for Atari)"
+    )
+
     # Callback parameters
     parser.add_argument(
         "--save_freq", type=int, default=10000, help="Save model every N steps"
@@ -294,29 +228,6 @@ def main():
     )
     parser.add_argument(
         "--log_dir", type=str, default="logs", help="Directory for tensorboard logs"
-    )
-
-    # Testing parameters
-    parser.add_argument(
-        "--model_path",
-        type=str,
-        default="train/final_model.zip",
-        help="Path to trained model for testing",
-    )
-    parser.add_argument(
-        "--test_episodes", type=int, default=5, help="Number of episodes to test"
-    )
-    parser.add_argument("--render", action="store_true", help="Render during testing")
-
-    # Optimization parameters
-    parser.add_argument(
-        "--n_trials", type=int, default=10, help="Number of optimization trials"
-    )
-    parser.add_argument(
-        "--optim_timesteps",
-        type=int,
-        default=50000,
-        help="Timesteps per optimization trial",
     )
 
     # Resume training
@@ -329,16 +240,23 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"Mode: {args.mode}")
+    # Calculate total timesteps from episodes
+    args.total_timesteps = args.total_episodes * args.avg_episode_length
+    episodes_per_env = args.total_episodes / args.n_envs
+
     print(f"Configuration: {vars(args)}")
 
-    if args.mode == "train":
-        train_model(args)
-    elif args.mode == "test":
-        test_model(args)
-    elif args.mode == "optimize":
-        best_params = optimize_hyperparameters(args)
-        print("Optimization complete. Best parameters:", best_params)
+    print(f"\n📊 Training Statistics:")
+    print(f"   Total episodes: {args.total_episodes:,}")
+    print(f"   Parallel environments: {args.n_envs} (SubprocVecEnv)")
+    print(f"   Episodes per environment: ~{int(episodes_per_env)}")
+    print(f"   Average episode length: {args.avg_episode_length} steps")
+    print(f"   Total timesteps: {args.total_timesteps:,}")
+    print(f"   Frame stack: {args.frame_stack}")
+    print(f"\n💡 Using SubprocVecEnv: Each environment runs in a separate process")
+    print(f"   {args.n_envs} parallel Genesis emulators for maximum CPU utilization\n")
+
+    train_model(args)
 
     print("🏁 Complete!")
 
