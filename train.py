@@ -22,6 +22,7 @@ import argparse
 import ray
 from ray import tune
 from ray.tune.registry import register_env
+from ray.air.config import RunConfig, CheckpointConfig
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.wrappers.atari_wrappers import FrameStack
 from wrapper import StreetFighter
@@ -91,9 +92,9 @@ def main():
     parser.add_argument(
         "--num-envs-per-worker",
         type=int,
-        default=8,
-        help="Environments per worker. TOTAL ENVS = num_workers × num_envs_per_worker. "
-             "With 16 workers × 8 envs = 128 total parallel environments!"
+        default=1,
+        help="Environments per worker. Note: Retro emulator only supports 1 env per worker. "
+             "Use more workers instead to increase parallelism."
     )
     parser.add_argument(
         "--num-gpus",
@@ -119,18 +120,19 @@ def main():
     )
     parser.add_argument(
         "--rollout-fragment-length",
-        type=int,
-        default=256,
-        help="Timesteps each worker collects before sending to learner. Default: 256"
+        type=str,
+        default="auto",
+        help="Timesteps each worker collects before sending to learner. Default: auto"
     )
 
     # === PPO HYPERPARAMETERS ===
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate (lower for stability)")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lambda", type=float, default=0.95, dest="lambda_", help="GAE lambda")
     parser.add_argument("--clip-param", type=float, default=0.2, help="PPO clip parameter")
     parser.add_argument("--entropy-coeff", type=float, default=0.01, help="Entropy coefficient")
     parser.add_argument("--num-sgd-iter", type=int, default=10, help="SGD epochs per update")
+    parser.add_argument("--grad-clip", type=float, default=0.5, help="Gradient clipping")
 
     # === ENVIRONMENT ===
     parser.add_argument("--frame-stack", type=int, default=4, help="Frames to stack")
@@ -177,8 +179,8 @@ def main():
 
     # Initialize Ray
     print("🔧 Initializing Ray...")
-    ray.init(ignore_reinit_error=True, include_dashboard=True)
-    print(f"✅ Ray initialized - Dashboard: http://127.0.0.1:8265")
+    ray.init(ignore_reinit_error=True, include_dashboard=False)
+    print(f"✅ Ray initialized")
     print(f"   Available resources: {ray.available_resources()}\n")
 
     # Register environment
@@ -187,6 +189,10 @@ def main():
     # Configure PPO
     config = (
         PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
         .environment(
             env="StreetFighter-v0",
             env_config={"frame_stack": args.frame_stack},
@@ -200,54 +206,48 @@ def main():
             entropy_coeff=args.entropy_coeff,
             vf_loss_coeff=1.0,
             train_batch_size=args.train_batch_size,
-            sgd_minibatch_size=args.sgd_minibatch_size,
-            num_sgd_iter=args.num_sgd_iter,
-            # CNN model for image observations
-            model={
-                "conv_filters": [
-                    [32, [8, 8], 4],   # 32 filters, 8x8 kernel, stride 4
-                    [64, [4, 4], 2],   # 64 filters, 4x4 kernel, stride 2
-                    [64, [3, 3], 1],   # 64 filters, 3x3 kernel, stride 1
-                ],
-                "fcnet_hiddens": [512],
-                "fcnet_activation": "relu",
-            },
+            minibatch_size=args.sgd_minibatch_size,
+            num_epochs=args.num_sgd_iter,
         )
-        .rollouts(
-            num_rollout_workers=args.num_workers,
-            num_envs_per_worker=args.num_envs_per_worker,
+        .env_runners(
+            num_env_runners=args.num_workers,
+            num_envs_per_env_runner=1,  # Retro only supports 1
+            num_cpus_per_env_runner=1,
             rollout_fragment_length=args.rollout_fragment_length,
         )
         .resources(
             num_gpus=args.num_gpus,
-            num_cpus_per_worker=1,
         )
     )
 
     # Run training
     print("🚀 Starting training...\n")
 
-    results = tune.run(
+    # Create tuner with new API
+    tuner = tune.Tuner(
         "PPO",
-        config=config.to_dict(),
-        stop={"timesteps_total": args.stop_timesteps},
-        checkpoint_freq=args.checkpoint_freq,
-        checkpoint_at_end=True,
-        local_dir=os.path.expanduser(args.checkpoint_dir),
-        restore=args.resume,
-        verbose=1,
-        callbacks=[WinRateCallback()],
+        param_space=config.to_dict(),
+        run_config=RunConfig(
+            stop={"timesteps_total": args.stop_timesteps},
+            checkpoint_config=CheckpointConfig(
+                checkpoint_frequency=args.checkpoint_freq,
+                checkpoint_at_end=True,
+            ),
+            storage_path=os.path.expanduser(args.checkpoint_dir),
+            callbacks=[WinRateCallback()],
+            verbose=1,
+        ),
     )
+
+    results = tuner.fit()
 
     print("\n" + "="*80)
     print("🏁 TRAINING COMPLETE!")
     print("="*80)
 
-    # Get best checkpoint
-    best_checkpoint = results.get_best_checkpoint(
-        results.trials[0], mode="max", metric="episode_reward_mean"
-    )
-    print(f"\n✅ Best checkpoint: {best_checkpoint}")
+    # Get best result
+    best_result = results.get_best_result(metric="episode_reward_mean", mode="max")
+    print(f"\n✅ Best checkpoint: {best_result.checkpoint}")
 
     ray.shutdown()
 

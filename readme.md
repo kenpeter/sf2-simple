@@ -10,3 +10,4 @@ __win rate at 100%, 5/5__
 
 
 
+python train.py --num-gpus 1 --num-workers 30 --num-envs-per-worker 16
