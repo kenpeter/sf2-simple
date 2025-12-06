@@ -82,8 +82,9 @@ class StreetFighter(gym.Env):
         obs = self.preprocess(obs)
 
         # Get current health values from the game info
-        current_agent_hp = info.get("agent_hp", self.agent_hp)
-        current_enemy_hp = info.get("enemy_hp", self.enemy_hp)
+        # Retro uses 'health' and 'enemy_health' as variable names
+        current_agent_hp = info.get("health", self.agent_hp)
+        current_enemy_hp = info.get("enemy_health", self.enemy_hp)
 
         # Calculate health change (agent_hp_change - enemy_hp_change)
         # we want to create health advantage compared your opponent
@@ -110,6 +111,10 @@ class StreetFighter(gym.Env):
                 reward -= 1.0  # Large loss penalty
                 info["agent_won"] = False
 
+        # Add HP values to info for logging/debugging
+        info["agent_hp"] = self.agent_hp
+        info["enemy_hp"] = self.enemy_hp
+
         return obs, reward, done, truncated, info
 
     def reset(self, **kwargs):
@@ -128,8 +133,9 @@ class StreetFighter(gym.Env):
         obs = self.preprocess(obs)
 
         # Initialize health values from the game info dictionary
-        self.agent_hp = info.get("agent_hp", 176)
-        self.enemy_hp = info.get("enemy_hp", 176)
+        # Retro uses 'health' and 'enemy_health' as variable names
+        self.agent_hp = info.get("health", 176)
+        self.enemy_hp = info.get("enemy_health", 176)
 
         return obs, info
 
