@@ -5,10 +5,22 @@ Load and visualize a trained model playing Street Fighter
 """
 
 import argparse
+import ray
+from ray import tune
+from ray.tune.registry import register_env
 from ray.rllib.algorithms.ppo import PPO
 from ray.rllib.env.wrappers.atari_wrappers import FrameStack
 from wrapper import StreetFighter
 import retro
+
+
+def env_creator(env_config):
+    """Create Street Fighter environment for RLlib"""
+    env = StreetFighter()
+    frame_stack = env_config.get("frame_stack", 4)
+    if frame_stack > 1:
+        env = FrameStack(env, frame_stack)
+    return env
 
 
 def replay_model(checkpoint_path, num_episodes=5, render=True, frame_stack=4):
@@ -22,6 +34,11 @@ def replay_model(checkpoint_path, num_episodes=5, render=True, frame_stack=4):
         frame_stack: Number of frames to stack (must match training, default: 4)
     """
     print(f"🎮 Loading model from: {checkpoint_path}")
+
+    # Initialize Ray and register environment
+    ray.init(ignore_reinit_error=True, include_dashboard=False)
+    register_env("StreetFighter-v0", env_creator)
+    print("✅ Environment registered")
 
     if render:
         print("🎮 Rendering enabled - you'll see the game!")
@@ -98,6 +115,8 @@ def replay_model(checkpoint_path, num_episodes=5, render=True, frame_stack=4):
         env.close()
 
     print(f"\n🏁 Replay complete! Wins: {wins}/{num_episodes} ({wins/num_episodes*100:.1f}%)")
+
+    ray.shutdown()
 
 
 def main():

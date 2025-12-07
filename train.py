@@ -208,6 +208,7 @@ def main():
             train_batch_size=args.train_batch_size,
             minibatch_size=args.sgd_minibatch_size,
             num_epochs=args.num_sgd_iter,
+            grad_clip=args.grad_clip,
         )
         .env_runners(
             num_env_runners=args.num_workers,
