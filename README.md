@@ -10,11 +10,17 @@ Trained a deep RL agent to defeat M. Bison in Street Fighter 2 with **100% win r
 
 **Win Rate: 100% (5/5 matches)**
 
-### Demo
-![Ken vs Bison AI Battle](https://raw.githubusercontent.com/kenpeter/sf2-simple/refs/heads/sf2-simple/win.gif)
+### Demo (GIF)
+![Ken vs Bison AI Battle](win.gif)
+
+### Demo (Video - WebM)
+<video width="516" height="570" controls>
+  <source src="win.webm" type="video/webm">
+  Your browser does not support the video tag.
+</video>
 
 ### Victory Screenshot
-<img width="516" height="570" alt="AI Agent Winning Match" src="https://raw.githubusercontent.com/kenpeter/sf2-simple/refs/heads/sf2-simple/win.png" />
+<img width="516" height="570" alt="AI Agent Winning Match" src="win.png" />
 
 ---
 
