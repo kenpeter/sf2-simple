@@ -28,12 +28,12 @@ Trained a deep RL agent to defeat M. Bison in Street Fighter 2 with **100% win r
 
 ## Technical Achievements
 
-✅ **Achieved 100% win rate** against hard-coded opponent (M. Bison) through self-play training
-✅ **Implemented PPO** (Proximal Policy Optimization) with custom reward shaping
-✅ **Parallel training** with 64 simultaneous game environments for 4x faster convergence
-✅ **Vision-based learning** from raw pixels (84x84 grayscale frames)
-✅ **GPU-accelerated training** using CUDA and PyTorch
-✅ **Custom action discretizer** enabling complex combo moves (hadouken, shoryuken)
+- ✅ **Achieved 100% win rate** against hard-coded opponent (M. Bison) through self-play training
+- ✅ **Implemented PPO** (Proximal Policy Optimization) with custom reward shaping
+- ✅ **Parallel training** with 64 simultaneous game environments for 4x faster convergence
+- ✅ **Vision-based learning** from raw pixels (84x84 grayscale frames)
+- ✅ **GPU-accelerated training** using CUDA and PyTorch
+- ✅ **Custom action discretizer** enabling complex combo moves (hadouken, shoryuken)
 
 ---
 
@@ -268,24 +268,24 @@ sf2-simple/
 ## Why This Project Demonstrates ML Engineering Skills
 
 ### Reinforcement Learning Expertise
-✅ **Algorithm implementation**: PPO with custom reward shaping
-✅ **Hyperparameter tuning**: Learning rate, clip range, GAE lambda optimization
-✅ **Curriculum learning**: Progressive difficulty through self-play
+- ✅ **Algorithm implementation**: PPO with custom reward shaping
+- ✅ **Hyperparameter tuning**: Learning rate, clip range, GAE lambda optimization
+- ✅ **Curriculum learning**: Progressive difficulty through self-play
 
 ### Systems Engineering
-✅ **Parallel processing**: 64-process training pipeline for efficiency
-✅ **GPU optimization**: CUDA acceleration for CNN policy network
-✅ **Memory management**: Efficient frame stacking and replay buffer handling
+- ✅ **Parallel processing**: 64-process training pipeline for efficiency
+- ✅ **GPU optimization**: CUDA acceleration for CNN policy network
+- ✅ **Memory management**: Efficient frame stacking and replay buffer handling
 
 ### Computer Vision
-✅ **Image preprocessing**: Grayscale conversion, resizing, normalization
-✅ **Temporal modeling**: Frame stacking for motion understanding
-✅ **Spatial feature extraction**: CNN architecture for visual input
+- ✅ **Image preprocessing**: Grayscale conversion, resizing, normalization
+- ✅ **Temporal modeling**: Frame stacking for motion understanding
+- ✅ **Spatial feature extraction**: CNN architecture for visual input
 
 ### Problem Solving
-✅ **Sparse rewards**: Shaped reward function to guide learning
-✅ **Action discretization**: Complex combo moves from discrete action space
-✅ **Sample efficiency**: Parallel environments for faster convergence
+- ✅ **Sparse rewards**: Shaped reward function to guide learning
+- ✅ **Action discretization**: Complex combo moves from discrete action space
+- ✅ **Sample efficiency**: Parallel environments for faster convergence
 
 ---
 
