@@ -1,4 +1,4 @@
-![Street Fighter 2 Battle](/Users/kenpeter/Desktop/s4.webp)
+![Street Fighter 2 Battle](s4.webp)
 
 # Street Fighter 2 AI Agent (100% Win Rate)
 
