@@ -1,3 +1,5 @@
+![Street Fighter 2 Battle](/Users/kenpeter/Desktop/s4.webp)
+
 # Street Fighter 2 AI Agent (100% Win Rate)
 
 > **Reinforcement Learning agent that masters fighting game strategies using PPO**
