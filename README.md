@@ -1,6 +1,6 @@
-![Street Fighter 2 Battle](s4.webp)
-
 # Street Fighter 2 AI Agent (100% Win Rate)
+
+![Street Fighter 2 Battle](s4.webp)
 
 > **Reinforcement Learning agent that masters fighting game strategies using PPO**
 
