@@ -265,30 +265,6 @@ sf2-simple/
 
 ---
 
-## Why This Project Demonstrates ML Engineering Skills
-
-### Reinforcement Learning Expertise
-- ✅ **Algorithm implementation**: PPO with custom reward shaping
-- ✅ **Hyperparameter tuning**: Learning rate, clip range, GAE lambda optimization
-- ✅ **Curriculum learning**: Progressive difficulty through self-play
-
-### Systems Engineering
-- ✅ **Parallel processing**: 64-process training pipeline for efficiency
-- ✅ **GPU optimization**: CUDA acceleration for CNN policy network
-- ✅ **Memory management**: Efficient frame stacking and replay buffer handling
-
-### Computer Vision
-- ✅ **Image preprocessing**: Grayscale conversion, resizing, normalization
-- ✅ **Temporal modeling**: Frame stacking for motion understanding
-- ✅ **Spatial feature extraction**: CNN architecture for visual input
-
-### Problem Solving
-- ✅ **Sparse rewards**: Shaped reward function to guide learning
-- ✅ **Action discretization**: Complex combo moves from discrete action space
-- ✅ **Sample efficiency**: Parallel environments for faster convergence
-
----
-
 ## Results Analysis
 
 **What the agent learned**:
