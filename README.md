@@ -17,7 +17,7 @@ Trained a deep RL agent to defeat M. Bison in Street Fighter 2 with **100% win r
 
 ### Demo (Video - WebM)
 <video width="516" height="570" controls>
-  <source src="win.webm" type="video/webm">
+  <source src="https://huggingface.co/kenpeter123/sf2-simple/resolve/main/win.webm" type="video/webm">
   Your browser does not support the video tag.
 </video>
 
@@ -229,15 +229,17 @@ Training time: ~12 hours on NVIDIA GPU
 pip install -r requirements.txt
 
 # Import Street Fighter ROM (required)
-python -m retro.import /path/to/StreetFighterII.md
+python -m retro.import rom.md
 ```
+
+The Genesis ROM ships in this GitHub repo as `rom.md` and is not mirrored to the Hugging Face copy. No trained checkpoint is published, so the `train/checkpoint.zip` paths below are placeholders for the output of your own training run.
 
 ### Training
 ```bash
 # Train from scratch (64 parallel environments)
 python train.py --n_envs 64 --episodes_per_env 1000
 
-# Resume from checkpoint
+# Resume from a checkpoint you produced
 python train.py --resume train/checkpoint.zip
 ```
 
